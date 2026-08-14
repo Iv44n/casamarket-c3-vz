@@ -1,5 +1,9 @@
 import { createServerFn } from '@tanstack/react-start'
 import {
+  deriveIncidentAnalytics,
+  INCIDENT_SOURCE_REPORTS
+} from '#/lib/incident-analytics'
+import {
   fetchExtractionStatus,
   fetchMassiveExtractionStatus,
   fetchReportRows,
@@ -9,6 +13,7 @@ import {
 import type {
   AttentionsAnalytics,
   DirectionAnalytics,
+  IncidentAnalytics,
   ReportRow,
   ReportSummary
 } from './schemas'
@@ -94,6 +99,15 @@ export const getAttentionsAnalytics = createServerFn({ method: 'GET' }).handler(
       incoming: deriveDirectionAnalytics(attentionRows),
       outgoing: deriveDirectionAnalytics(outboundRows)
     }
+  }
+)
+
+export const getIncidentAnalytics = createServerFn({ method: 'GET' }).handler(
+  async (): Promise<IncidentAnalytics> => {
+    const rowSets = await Promise.all(
+      INCIDENT_SOURCE_REPORTS.map(reportName => fetchReportRows(reportName))
+    )
+    return deriveIncidentAnalytics(rowSets)
   }
 )
 

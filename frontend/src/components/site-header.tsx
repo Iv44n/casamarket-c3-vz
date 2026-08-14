@@ -5,6 +5,7 @@ import { cn } from '#/lib/utils'
 const NAV_ITEMS = [
   { to: '/reports', label: 'Reportes' },
   { to: '/atenciones', label: 'Atenciones' },
+  { to: '/incidencias', label: 'Incidencias' },
   { to: '/status', label: 'Extraction status' }
 ] as const
 export function SiteHeader() {

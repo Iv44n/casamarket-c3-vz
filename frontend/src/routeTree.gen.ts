@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AtencionesRouteImport } from './routes/atenciones'
+import { Route as IncidenciasRouteImport } from './routes/incidencias'
 import { Route as StatusRouteImport } from './routes/status'
 import { Route as ReportsIndexRouteImport } from './routes/reports/index'
 import { Route as ReportsReportNameRouteImport } from './routes/reports/$reportName'
@@ -23,6 +24,11 @@ const IndexRoute = IndexRouteImport.update({
 const AtencionesRoute = AtencionesRouteImport.update({
   id: '/atenciones',
   path: '/atenciones',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const IncidenciasRoute = IncidenciasRouteImport.update({
+  id: '/incidencias',
+  path: '/incidencias',
   getParentRoute: () => rootRouteImport,
 } as any)
 const StatusRoute = StatusRouteImport.update({
@@ -44,6 +50,7 @@ const ReportsReportNameRoute = ReportsReportNameRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/atenciones': typeof AtencionesRoute
+  '/incidencias': typeof IncidenciasRoute
   '/status': typeof StatusRoute
   '/reports/$reportName': typeof ReportsReportNameRoute
   '/reports/': typeof ReportsIndexRoute
@@ -51,6 +58,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/atenciones': typeof AtencionesRoute
+  '/incidencias': typeof IncidenciasRoute
   '/status': typeof StatusRoute
   '/reports/$reportName': typeof ReportsReportNameRoute
   '/reports': typeof ReportsIndexRoute
@@ -59,6 +67,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/atenciones': typeof AtencionesRoute
+  '/incidencias': typeof IncidenciasRoute
   '/status': typeof StatusRoute
   '/reports/$reportName': typeof ReportsReportNameRoute
   '/reports/': typeof ReportsIndexRoute
@@ -66,13 +75,25 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/atenciones' | '/status' | '/reports/$reportName' | '/reports/'
+    | '/'
+    | '/atenciones'
+    | '/incidencias'
+    | '/status'
+    | '/reports/$reportName'
+    | '/reports/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/atenciones' | '/status' | '/reports/$reportName' | '/reports'
+  to:
+    | '/'
+    | '/atenciones'
+    | '/incidencias'
+    | '/status'
+    | '/reports/$reportName'
+    | '/reports'
   id:
     | '__root__'
     | '/'
     | '/atenciones'
+    | '/incidencias'
     | '/status'
     | '/reports/$reportName'
     | '/reports/'
@@ -81,6 +102,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AtencionesRoute: typeof AtencionesRoute
+  IncidenciasRoute: typeof IncidenciasRoute
   StatusRoute: typeof StatusRoute
   ReportsReportNameRoute: typeof ReportsReportNameRoute
   ReportsIndexRoute: typeof ReportsIndexRoute
@@ -100,6 +122,13 @@ declare module '@tanstack/react-router' {
       path: '/atenciones'
       fullPath: '/atenciones'
       preLoaderRoute: typeof AtencionesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/incidencias': {
+      id: '/incidencias'
+      path: '/incidencias'
+      fullPath: '/incidencias'
+      preLoaderRoute: typeof IncidenciasRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/status': {
@@ -129,6 +158,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AtencionesRoute: AtencionesRoute,
+  IncidenciasRoute: IncidenciasRoute,
   StatusRoute: StatusRoute,
   ReportsReportNameRoute: ReportsReportNameRoute,
   ReportsIndexRoute: ReportsIndexRoute,
