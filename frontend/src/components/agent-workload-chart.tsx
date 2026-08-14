@@ -1,9 +1,8 @@
+import type { BarItem } from '@mui/x-charts/BarChart'
 import { BarChart } from '@mui/x-charts/BarChart'
 import { ChartThemeProvider } from '#/components/mui-chart-theme'
 import { type AgentBarDatum, estadoColor } from '#/lib/attentions-analytics'
 
-const ROW_HEIGHT_PX = 40
-const MIN_CHART_HEIGHT_PX = 200
 const MAX_AGENT_LABEL_CHARS = 22
 const AGENT_AXIS_WIDTH_PX = 170
 const STACK_ID = 'atenciones'
@@ -42,10 +41,11 @@ export function AgentWorkloadChart({ agents }: { agents: AgentBarDatum[] }) {
     label: estado,
     color: estadoColor(estado),
     stack: STACK_ID,
-    valueFormatter: (value: number | null) => `${value ?? 0} ${estado}`
+    valueFormatter: (value: number | null) => `${value ?? 0} ${estado}`,
+    barLabel: (item: BarItem) => (item.value ? String(item.value) : null)
   }))
   return (
-    <div role="img" aria-label={ariaLabel}>
+    <div role="img" aria-label={ariaLabel} className="h-full w-full">
       <ChartThemeProvider>
         <BarChart
           dataset={dataset}
@@ -59,14 +59,22 @@ export function AgentWorkloadChart({ agents }: { agents: AgentBarDatum[] }) {
               width: AGENT_AXIS_WIDTH_PX
             }
           ]}
-          xAxis={[{}]}
+          xAxis={[
+            {
+              disableLine: true,
+              disableTicks: true,
+              tickLabelInterval: () => false
+            }
+          ]}
           series={series}
-          height={Math.max(
-            agents.length * ROW_HEIGHT_PX + 60,
-            MIN_CHART_HEIGHT_PX
-          )}
           borderRadius={4}
-          grid={{ vertical: true }}
+          sx={{
+            '& .MuiBarChart-label': {
+              fill: '#0a0a0a !important',
+              fontWeight: 700,
+              fontSize: 12
+            }
+          }}
         />
       </ChartThemeProvider>
     </div>

@@ -64,7 +64,7 @@ export function StatusDonutChart({
     .map(({ label, value }) => `${label} ${value}`)
     .join(', ')}`
   return (
-    <div role="img" aria-label={ariaLabel}>
+    <div role="img" aria-label={ariaLabel} className="h-full w-full">
       <ChartThemeProvider>
         <PieChart
           series={[
@@ -81,7 +81,6 @@ export function StatusDonutChart({
                 `${item.value} (${Math.round((item.value / total) * 100)}%)`
             }
           ]}
-          height={240}
           onHighlightChange={item =>
             setHighlightedIndex(item?.dataIndex ?? null)
           }

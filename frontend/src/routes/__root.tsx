@@ -1,11 +1,17 @@
 import { TanStackDevtools } from '@tanstack/react-devtools'
-import { createRootRoute, HeadContent, Scripts } from '@tanstack/react-router'
+import {
+  createRootRoute,
+  HeadContent,
+  Scripts,
+  useRouterState
+} from '@tanstack/react-router'
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
 import { AutoRefreshProvider } from '#/components/auto-refresh-provider'
 import { SiteHeader } from '#/components/site-header'
 import { ThemeProvider } from '#/components/theme-provider'
 import Toaster from '#/components/toaster'
 import { TooltipProvider } from '#/components/ui/tooltip'
+import { cn } from '#/lib/utils'
 import appCss from '../styles.css?url'
 export const Route = createRootRoute({
   head: () => ({
@@ -31,6 +37,8 @@ export const Route = createRootRoute({
   shellComponent: RootDocument
 })
 function RootDocument({ children }: { children: React.ReactNode }) {
+  const pathname = useRouterState({ select: state => state.location.pathname })
+  const isWallboard = pathname === '/atenciones'
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -41,7 +49,15 @@ function RootDocument({ children }: { children: React.ReactNode }) {
           <AutoRefreshProvider>
             <TooltipProvider>
               <SiteHeader />
-              <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>
+              <main
+                className={cn(
+                  isWallboard
+                    ? 'h-[calc(100dvh-3.5rem)] overflow-hidden px-6 py-4'
+                    : 'mx-auto max-w-5xl px-4 py-8'
+                )}
+              >
+                {children}
+              </main>
             </TooltipProvider>
             <Toaster />
           </AutoRefreshProvider>

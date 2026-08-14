@@ -20,6 +20,7 @@ import {
   buildStatusChartData,
   describeAvailability
 } from '#/lib/attentions-analytics'
+import { cn } from '#/lib/utils'
 import { getAttentionsAnalytics } from '#/server/reports.functions'
 import {
   ATTENTION_FILTERS,
@@ -49,8 +50,8 @@ function AtencionesPage() {
     direction
   )
   return (
-    <div>
-      <div className="flex flex-wrap items-start justify-between gap-4">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Atenciones</h1>
           <p className="mt-2 text-sm text-muted-foreground">
@@ -97,9 +98,9 @@ function AtencionesPage() {
           </CardContent>
         </Card>
       ) : (
-        <>
+        <div className="flex min-h-0 flex-1 flex-col">
           {advisoryMessage && (
-            <p className="mt-4 text-sm text-muted-foreground">
+            <p className="mt-4 shrink-0 text-sm text-muted-foreground">
               {advisoryMessage} Dispara un refresh desde{' '}
               <Link to="/status" className="text-primary underline">
                 /status
@@ -108,50 +109,69 @@ function AtencionesPage() {
             </p>
           )}
 
-          <section aria-labelledby="distribucion-por-estado" className="mt-8">
-            <h2 id="distribucion-por-estado" className="text-lg font-semibold">
-              Distribucion por estado
-            </h2>
+          <div
+            className={cn(
+              'grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-2',
+              advisoryMessage ? 'mt-4' : 'mt-8'
+            )}
+          >
+            <section
+              aria-labelledby="distribucion-por-estado"
+              className="flex min-h-0 flex-col"
+            >
+              <h2
+                id="distribucion-por-estado"
+                className="shrink-0 text-lg font-semibold"
+              >
+                Distribucion por estado
+              </h2>
 
-            <Card className="mt-4">
-              <CardHeader>
-                <CardTitle>Estado de atenciones</CardTitle>
-                <CardDescription>{total} atenciones</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {slices.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    Sin registros.
-                  </p>
-                ) : (
-                  <StatusDonutChart total={total} slices={slices} />
-                )}
-              </CardContent>
-            </Card>
-          </section>
+              <Card className="mt-4 flex min-h-0 flex-1 flex-col">
+                <CardHeader className="shrink-0">
+                  <CardTitle>Estado de atenciones</CardTitle>
+                  <CardDescription>{total} atenciones</CardDescription>
+                </CardHeader>
+                <CardContent className="min-h-0 flex-1">
+                  {slices.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Sin registros.
+                    </p>
+                  ) : (
+                    <StatusDonutChart total={total} slices={slices} />
+                  )}
+                </CardContent>
+              </Card>
+            </section>
 
-          <section aria-labelledby="atenciones-por-agente" className="mt-8">
-            <h2 id="atenciones-por-agente" className="text-lg font-semibold">
-              Atenciones por agente
-            </h2>
+            <section
+              aria-labelledby="atenciones-por-agente"
+              className="flex min-h-0 flex-col"
+            >
+              <h2
+                id="atenciones-por-agente"
+                className="shrink-0 text-lg font-semibold"
+              >
+                Atenciones por agente
+              </h2>
 
-            <Card className="mt-4">
-              <CardHeader>
-                <CardTitle>Top 10 agentes</CardTitle>
-                <CardDescription>Carga de trabajo diaria</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {agents.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    Sin registros.
-                  </p>
-                ) : (
-                  <AgentWorkloadChart agents={agents} />
-                )}
-              </CardContent>
-            </Card>
-          </section>
-        </>
+              <Card className="mt-4 flex min-h-0 flex-1 flex-col">
+                <CardHeader className="shrink-0">
+                  <CardTitle>Top 10 agentes</CardTitle>
+                  <CardDescription>Carga de trabajo diaria</CardDescription>
+                </CardHeader>
+                <CardContent className="min-h-0 flex-1">
+                  {agents.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Sin registros.
+                    </p>
+                  ) : (
+                    <AgentWorkloadChart agents={agents} />
+                  )}
+                </CardContent>
+              </Card>
+            </section>
+          </div>
+        </div>
       )}
     </div>
   )

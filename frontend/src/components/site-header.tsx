@@ -1,5 +1,6 @@
-import { Link } from '@tanstack/react-router'
+import { Link, useRouterState } from '@tanstack/react-router'
 import { ModeToggle } from '#/components/mode-toggle'
+import { cn } from '#/lib/utils'
 
 const NAV_ITEMS = [
   { to: '/reports', label: 'Reportes' },
@@ -7,9 +8,16 @@ const NAV_ITEMS = [
   { to: '/status', label: 'Extraction status' }
 ] as const
 export function SiteHeader() {
+  const pathname = useRouterState({ select: state => state.location.pathname })
+  const isWallboard = pathname === '/atenciones'
   return (
     <header className="border-b">
-      <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
+      <div
+        className={cn(
+          'flex h-14 items-center justify-between px-4',
+          isWallboard ? 'w-full px-6' : 'mx-auto max-w-5xl'
+        )}
+      >
         <Link to="/" className="font-semibold">
           C3 Panel
         </Link>
