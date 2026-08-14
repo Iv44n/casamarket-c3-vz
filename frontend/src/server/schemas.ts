@@ -43,9 +43,14 @@ export const attentionsSearchSchema = z.object({
       z.literal('all')
     ])
     .default(10),
-  estados: z.array(z.string()).default([])
+  // Which "estado" values to include in the charts. 'all' means no filter --
+  // the set of valid estados comes from the backend data itself, so it can't
+  // be validated against a fixed enum here. Once the user unchecks anything,
+  // this becomes an explicit list (which may be empty, meaning "show none").
+  estados: z.union([z.literal('all'), z.array(z.string())]).default('all')
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
+export type EstadosFilter = AttentionsSearch['estados']
 export const DIRECTION_REPORT_NAME: Record<AttentionDirection, ReportName> = {
   incoming: 'attention',
   outgoing: 'outboundattention'

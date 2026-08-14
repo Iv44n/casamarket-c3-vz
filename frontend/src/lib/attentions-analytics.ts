@@ -3,7 +3,8 @@ import {
   type AttentionDirection,
   type AttentionFilter,
   type AttentionsAnalytics,
-  DIRECTION_REPORT_NAME
+  DIRECTION_REPORT_NAME,
+  type EstadosFilter
 } from '#/server/schemas'
 export const ESTADO_COLOR: Record<string, string> = {
   Cerrada: 'var(--color-chart-2)',
@@ -24,8 +25,8 @@ export function getAvailableEstados(analytics: AttentionsAnalytics): string[] {
   }
   return [...estados].sort((a, b) => a.localeCompare(b))
 }
-function estadoAllowed(estado: string, estadosFilter: string[]): boolean {
-  return estadosFilter.length === 0 || estadosFilter.includes(estado)
+function estadoAllowed(estado: string, estadosFilter: EstadosFilter): boolean {
+  return estadosFilter === 'all' || estadosFilter.includes(estado)
 }
 export type StatusChartSlice = {
   id: string
@@ -36,7 +37,7 @@ export type StatusChartSlice = {
 export function buildStatusChartData(
   analytics: AttentionsAnalytics,
   filter: AttentionFilter,
-  estadosFilter: string[]
+  estadosFilter: EstadosFilter
 ): {
   total: number
   slices: StatusChartSlice[]
@@ -108,7 +109,7 @@ export function buildAgentRanking(
   analytics: AttentionsAnalytics,
   filter: AttentionFilter,
   limit: AgentLimit,
-  estadosFilter: string[]
+  estadosFilter: EstadosFilter
 ): AgentBarDatum[] {
   const directions =
     filter === 'incoming'

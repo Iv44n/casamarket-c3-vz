@@ -1,6 +1,8 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
+import { ChevronDownIcon } from 'lucide-react'
 import { AgentWorkloadChart } from '#/components/agent-workload-chart'
 import { StatusDonutChart } from '#/components/status-donut-chart'
+import { Button } from '#/components/ui/button'
 import {
   Card,
   CardContent,
@@ -8,6 +10,13 @@ import {
   CardHeader,
   CardTitle
 } from '#/components/ui/card'
+import { Checkbox } from '#/components/ui/checkbox'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger
+} from '#/components/ui/dropdown-menu'
+import { Label } from '#/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -28,7 +37,8 @@ import {
   type AgentLimit,
   ATTENTION_FILTERS,
   type AttentionFilter,
-  attentionsSearchSchema
+  attentionsSearchSchema,
+  type EstadosFilter
 } from '#/server/schemas'
 
 const FILTER_LABEL: Record<AttentionFilter, string> = {
@@ -39,14 +49,17 @@ const FILTER_LABEL: Record<AttentionFilter, string> = {
 function formatAgentLimit(limit: AgentLimit) {
   return limit === 'all' ? 'Todos' : `Top ${limit}`
 }
-function formatEstadosFilter(selected: string[]) {
-  if (selected.length === 0) {
+function formatEstadosFilter(filter: EstadosFilter, available: string[]) {
+  if (filter === 'all' || filter.length === available.length) {
     return 'Todos'
   }
-  if (selected.length === 1) {
-    return selected[0]
+  if (filter.length === 0) {
+    return 'Ninguno'
   }
-  return `${selected.length} estados`
+  if (filter.length === 1) {
+    return filter[0]
+  }
+  return `${filter.length} estados`
 }
 export const Route = createFileRoute('/atenciones')({
   ssr: 'data-only',
@@ -65,6 +78,19 @@ function AtencionesPage() {
     analytics,
     direction
   )
+  function isEstadoChecked(estado: string) {
+    return estados === 'all' || estados.includes(estado)
+  }
+  function toggleEstado(estado: string) {
+    const current = estados === 'all' ? availableEstados : estados
+    const next = current.includes(estado)
+      ? current.filter(e => e !== estado)
+      : [...current, estado]
+    navigate({
+      search: prev => ({ ...prev, estados: next }),
+      replace: true
+    })
+  }
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-start justify-between gap-4">
@@ -77,32 +103,33 @@ function AtencionesPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Select
-            multiple
-            value={estados}
-            onValueChange={value =>
-              navigate({
-                search: prev => ({
-                  ...prev,
-                  estados: value
-                }),
-                replace: true
-              })
-            }
-          >
-            <SelectTrigger className="w-40">
-              <SelectValue>
-                {(value: string[]) => formatEstadosFilter(value)}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="outline"
+                  className="w-40 justify-between font-normal"
+                />
+              }
+            >
+              {formatEstadosFilter(estados, availableEstados)}
+              <ChevronDownIcon className="size-4 text-muted-foreground" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
               {availableEstados.map(estado => (
-                <SelectItem key={estado} value={estado}>
+                <Label
+                  key={estado}
+                  className="cursor-default rounded-xl px-3 py-2 font-normal hover:bg-accent"
+                >
+                  <Checkbox
+                    checked={isEstadoChecked(estado)}
+                    onCheckedChange={() => toggleEstado(estado)}
+                  />
                   {estado}
-                </SelectItem>
+                </Label>
               ))}
-            </SelectContent>
-          </Select>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           <Select
             value={String(agentLimit)}
