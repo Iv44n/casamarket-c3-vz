@@ -3,6 +3,11 @@ import { PieChart } from '@mui/x-charts/PieChart'
 import { useMemo, useState } from 'react'
 import { ChartThemeProvider } from '#/components/mui-chart-theme'
 import { estadoColor, type StatusChartSlice } from '#/lib/attentions-analytics'
+import {
+  CHART_ARC_LABEL_FONT_SIZE,
+  CHART_BIG_NUMBER_FONT_SIZE,
+  CHART_LEGEND_FONT_SIZE
+} from '#/lib/chart-typography'
 import { tintChartColor } from '#/lib/utils'
 
 const DIRECTION_LABEL: Record<'incoming' | 'outgoing', string> = {
@@ -11,6 +16,7 @@ const DIRECTION_LABEL: Record<'incoming' | 'outgoing', string> = {
 }
 const MIN_LABEL_PCT = 8
 const MIN_LABEL_ANGLE_DEG = 360 * (MIN_LABEL_PCT / 100)
+const DONUT_HEIGHT_PX = 300
 function PieCenterLabel({ text }: { text: string }) {
   const { left, top, width, height } = useDrawingArea()
   if (!text) {
@@ -22,7 +28,7 @@ function PieCenterLabel({ text }: { text: string }) {
       y={top + height / 2}
       textAnchor="middle"
       dominantBaseline="central"
-      fontSize={22}
+      fontSize={CHART_BIG_NUMBER_FONT_SIZE}
       fontWeight={700}
       fill="var(--color-foreground)"
     >
@@ -64,9 +70,10 @@ export function StatusDonutChart({
     .map(({ label, value }) => `${label} ${value}`)
     .join(', ')}`
   return (
-    <div role="img" aria-label={ariaLabel} className="h-full w-full">
+    <div role="img" aria-label={ariaLabel} className="w-full">
       <ChartThemeProvider>
         <PieChart
+          height={DONUT_HEIGHT_PX}
           series={[
             {
               data,
@@ -96,7 +103,10 @@ export function StatusDonutChart({
             '& .MuiPieChart-arcLabel': {
               fill: '#0a0a0a !important',
               fontWeight: 700,
-              fontSize: 13
+              fontSize: CHART_ARC_LABEL_FONT_SIZE
+            },
+            '& .MuiChartsLegend-label': {
+              fontSize: CHART_LEGEND_FONT_SIZE
             }
           }}
         >

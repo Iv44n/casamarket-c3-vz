@@ -53,10 +53,17 @@ function deriveDirectionAnalytics(
   rows: ReportRow[] | null
 ): DirectionAnalytics {
   if (rows === null) {
-    return { available: false, total: 0, statusCounts: [], agentCounts: [] }
+    return {
+      available: false,
+      total: 0,
+      statusCounts: [],
+      agentCounts: [],
+      campaignCounts: []
+    }
   }
   const statusCounts = new Map<string, number>()
   const agentEstadoCounts = new Map<string, Map<string, number>>()
+  const campaignEstadoCounts = new Map<string, Map<string, number>>()
 
   for (const row of rows) {
     const estado = row.Estado
@@ -66,9 +73,17 @@ function deriveDirectionAnalytics(
     const agente = row.Agente
     const agenteKey =
       typeof agente === 'string' && agente.trim() !== '' ? agente : 'Sin agente'
-    const estadoCounts = agentEstadoCounts.get(agenteKey) ?? new Map()
-    estadoCounts.set(estadoKey, (estadoCounts.get(estadoKey) ?? 0) + 1)
-    agentEstadoCounts.set(agenteKey, estadoCounts)
+    const agentCounts = agentEstadoCounts.get(agenteKey) ?? new Map()
+    agentCounts.set(estadoKey, (agentCounts.get(estadoKey) ?? 0) + 1)
+    agentEstadoCounts.set(agenteKey, agentCounts)
+    const campana = row.Campaña
+    const campanaKey =
+      typeof campana === 'string' && campana.trim() !== ''
+        ? campana
+        : 'Sin campaña'
+    const campaignCounts = campaignEstadoCounts.get(campanaKey) ?? new Map()
+    campaignCounts.set(estadoKey, (campaignCounts.get(estadoKey) ?? 0) + 1)
+    campaignEstadoCounts.set(campanaKey, campaignCounts)
   }
 
   return {
@@ -81,6 +96,15 @@ function deriveDirectionAnalytics(
       .flatMap(([agente, estadoCounts]) =>
         [...estadoCounts.entries()].map(([estado, count]) => ({
           agente,
+          estado,
+          count
+        }))
+      )
+      .sort((a, b) => b.count - a.count),
+    campaignCounts: [...campaignEstadoCounts.entries()]
+      .flatMap(([campana, estadoCounts]) =>
+        [...estadoCounts.entries()].map(([estado, count]) => ({
+          campana,
           estado,
           count
         }))

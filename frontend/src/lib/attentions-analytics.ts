@@ -137,6 +137,41 @@ export function buildAgentRanking(
     .sort((a, b) => b.total - a.total || a.agente.localeCompare(b.agente))
     .slice(0, limit === 'all' ? undefined : limit)
 }
+export type CampaignBarDatum = {
+  campana: string
+  total: number
+  estadoCounts: Record<string, number>
+}
+export function buildCampaignRanking(
+  analytics: AttentionsAnalytics,
+  filter: AttentionFilter,
+  estadosFilter: EstadosFilter
+): CampaignBarDatum[] {
+  const directions =
+    filter === 'incoming'
+      ? [analytics.incoming]
+      : filter === 'outgoing'
+        ? [analytics.outgoing]
+        : [analytics.incoming, analytics.outgoing]
+  const merged = new Map<string, Map<string, number>>()
+  for (const direction of directions) {
+    for (const { campana, estado, count } of direction.campaignCounts) {
+      if (!estadoAllowed(estado, estadosFilter)) {
+        continue
+      }
+      const estadoCounts = merged.get(campana) ?? new Map<string, number>()
+      estadoCounts.set(estado, (estadoCounts.get(estado) ?? 0) + count)
+      merged.set(campana, estadoCounts)
+    }
+  }
+  return [...merged.entries()]
+    .map(([campana, estadoCounts]) => ({
+      campana,
+      total: [...estadoCounts.values()].reduce((sum, count) => sum + count, 0),
+      estadoCounts: Object.fromEntries(estadoCounts)
+    }))
+    .sort((a, b) => b.total - a.total || a.campana.localeCompare(b.campana))
+}
 export function describeAvailability(
   analytics: AttentionsAnalytics,
   filter: AttentionFilter

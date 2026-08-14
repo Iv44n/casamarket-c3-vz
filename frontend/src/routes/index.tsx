@@ -1,10 +1,5 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
-import {
-  ActivityIcon,
-  BarChartHorizontalIcon,
-  TableIcon,
-  TagIcon
-} from 'lucide-react'
+import { ActivityIcon, BarChartHorizontalIcon, TableIcon } from 'lucide-react'
 import {
   Card,
   CardDescription,
@@ -23,13 +18,7 @@ const SECTIONS = [
     to: '/atenciones' as const,
     icon: BarChartHorizontalIcon,
     title: 'Atenciones',
-    description: 'Distribucion por estado de atenciones entrantes y salientes.'
-  },
-  {
-    to: '/incidencias' as const,
-    icon: TagIcon,
-    title: 'Incidencias',
-    description: 'Clasificacion de incidencias por origen, tipo y ambito.'
+    description: 'Distribucion por estado, agente, tipo de caso e incidencias.'
   },
   {
     to: '/status' as const,

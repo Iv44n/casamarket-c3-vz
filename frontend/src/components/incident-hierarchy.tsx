@@ -1,5 +1,9 @@
 import { useState } from 'react'
 import {
+  CHART_AXIS_LABEL_FONT_SIZE,
+  CHART_BIG_NUMBER_FONT_SIZE
+} from '#/lib/chart-typography'
+import {
   DIMENSION_CHAIN,
   groupIncidentsBy,
   INCIDENT_CATEGORY_COLOR,
@@ -28,14 +32,21 @@ function HierarchyRow({
   const barWidth = Math.max(MIN_BAR_PX, (entry.count / maxCount) * MAX_BAR_PX)
   const rowContent = (
     <>
-      <span className="truncate text-sm text-foreground" title={entry.label}>
+      <span
+        className="truncate text-foreground"
+        style={{ fontSize: CHART_AXIS_LABEL_FONT_SIZE }}
+        title={entry.label}
+      >
         {entry.label}
       </span>
       <span
         className="h-[17px] shrink-0 rounded-[5px]"
         style={{ width: barWidth, background: color }}
       />
-      <span className="w-6 shrink-0 text-left text-xs font-medium text-muted-foreground">
+      <span
+        className="w-6 shrink-0 text-left font-medium text-muted-foreground"
+        style={{ fontSize: CHART_AXIS_LABEL_FONT_SIZE }}
+      >
         {entry.count}
       </span>
     </>
@@ -101,7 +112,10 @@ function HierarchyLevel({
           />
         ))}
       </div>
-      <div className="w-9 shrink-0 text-center text-2xl font-bold text-foreground">
+      <div
+        className="w-9 shrink-0 text-center font-bold text-foreground"
+        style={{ fontSize: CHART_BIG_NUMBER_FONT_SIZE }}
+      >
         {records.length}
       </div>
     </div>

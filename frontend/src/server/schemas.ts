@@ -29,6 +29,12 @@ export type AttentionFilter = (typeof ATTENTION_FILTERS)[number]
 export type AttentionDirection = Exclude<AttentionFilter, 'all'>
 export const AGENT_LIMIT_OPTIONS = [5, 10, 15, 20, 25, 'all'] as const
 export type AgentLimit = (typeof AGENT_LIMIT_OPTIONS)[number]
+// Ambito first: it's the richest dimension to drill into (ambito -> origen ->
+// tipo), see DIMENSION_CHAIN in lib/incident-analytics.ts.
+export const INCIDENT_CATEGORIES = ['ambito', 'origen', 'tipo'] as const
+export type IncidentCategory = (typeof INCIDENT_CATEGORIES)[number]
+export const ATENCIONES_VIEWS = ['resumen', 'incidencias'] as const
+export type AtencionesView = (typeof ATENCIONES_VIEWS)[number]
 export const attentionsSearchSchema = z.object({
   direction: z.enum(ATTENTION_FILTERS).default('all'),
   // Kept in sync by hand with AGENT_LIMIT_OPTIONS -- z.union needs a literal
@@ -47,7 +53,11 @@ export const attentionsSearchSchema = z.object({
   // the set of valid estados comes from the backend data itself, so it can't
   // be validated against a fixed enum here. Once the user unchecks anything,
   // this becomes an explicit list (which may be empty, meaning "show none").
-  estados: z.union([z.literal('all'), z.array(z.string())]).default('all')
+  estados: z.union([z.literal('all'), z.array(z.string())]).default('all'),
+  // Which of the page's two tabs is showing.
+  view: z.enum(ATENCIONES_VIEWS).default('resumen'),
+  // Active dimension tab within the "incidencias" view.
+  category: z.enum(INCIDENT_CATEGORIES).default('ambito')
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
 export type EstadosFilter = AttentionsSearch['estados']
@@ -67,13 +77,18 @@ export type DirectionAnalytics = {
     estado: string
     count: number
   }[]
+  // "Campaña" in the raw C3 export -- the case's business type (Soporte,
+  // Implementacion, Activaciones, etc), not a marketing campaign.
+  campaignCounts: {
+    campana: string
+    estado: string
+    count: number
+  }[]
 }
 export type AttentionsAnalytics = {
   incoming: DirectionAnalytics
   outgoing: DirectionAnalytics
 }
-export const INCIDENT_CATEGORIES = ['ambito', 'origen', 'tipo'] as const
-export type IncidentCategory = (typeof INCIDENT_CATEGORIES)[number]
 export type IncidentRecord = {
   origen: string
   tipo: string

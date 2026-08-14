@@ -6,10 +6,16 @@ import {
   useRouterState
 } from '@tanstack/react-router'
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
+import { AppSidebar } from '#/components/app-sidebar'
 import { AutoRefreshProvider } from '#/components/auto-refresh-provider'
-import { SiteHeader } from '#/components/site-header'
 import { ThemeProvider } from '#/components/theme-provider'
 import Toaster from '#/components/toaster'
+import { Separator } from '#/components/ui/separator'
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger
+} from '#/components/ui/sidebar'
 import { TooltipProvider } from '#/components/ui/tooltip'
 import { cn } from '#/lib/utils'
 import appCss from '../styles.css?url'
@@ -48,16 +54,27 @@ function RootDocument({ children }: { children: React.ReactNode }) {
         <ThemeProvider defaultTheme="system" storageKey="theme">
           <AutoRefreshProvider>
             <TooltipProvider>
-              <SiteHeader />
-              <main
-                className={cn(
-                  isWallboard
-                    ? 'h-[calc(100dvh-3.5rem)] overflow-hidden px-6 py-4'
-                    : 'mx-auto max-w-5xl px-4 py-8'
-                )}
-              >
-                {children}
-              </main>
+              <SidebarProvider>
+                <AppSidebar />
+                <SidebarInset>
+                  <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
+                    <SidebarTrigger />
+                    <Separator orientation="vertical" className="h-4" />
+                  </header>
+                  <div className="flex min-h-0 flex-1 flex-col">
+                    <div
+                      className={cn(
+                        'flex flex-1 flex-col',
+                        isWallboard
+                          ? 'min-h-[calc(100dvh-3.5rem)] px-6 py-4'
+                          : 'mx-auto w-full max-w-5xl px-4 py-8'
+                      )}
+                    >
+                      {children}
+                    </div>
+                  </div>
+                </SidebarInset>
+              </SidebarProvider>
             </TooltipProvider>
             <Toaster />
           </AutoRefreshProvider>

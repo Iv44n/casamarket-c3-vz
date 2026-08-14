@@ -1,7 +1,7 @@
 import type { BarItem } from '@mui/x-charts/BarChart'
 import { BarChart } from '@mui/x-charts/BarChart'
 import { ChartThemeProvider } from '#/components/mui-chart-theme'
-import { type AgentBarDatum, estadoColor } from '#/lib/attentions-analytics'
+import { type CampaignBarDatum, estadoColor } from '#/lib/attentions-analytics'
 import {
   CHART_AXIS_LABEL_FONT_SIZE,
   CHART_LEGEND_FONT_SIZE,
@@ -10,25 +10,29 @@ import {
   CHART_VALUE_LABEL_FONT_SIZE
 } from '#/lib/chart-typography'
 
-const MAX_AGENT_LABEL_CHARS = 22
-const AGENT_AXIS_WIDTH_PX = 170
-const STACK_ID = 'atenciones'
-function truncateAgentLabel(name: string) {
-  return name.length > MAX_AGENT_LABEL_CHARS
-    ? `${name.slice(0, MAX_AGENT_LABEL_CHARS - 1)}…`
+const MAX_CAMPAIGN_LABEL_CHARS = 26
+const CAMPAIGN_AXIS_WIDTH_PX = 170
+const STACK_ID = 'atenciones-por-tipo'
+function truncateCampaignLabel(name: string) {
+  return name.length > MAX_CAMPAIGN_LABEL_CHARS
+    ? `${name.slice(0, MAX_CAMPAIGN_LABEL_CHARS - 1)}…`
     : name
 }
-export function AgentWorkloadChart({ agents }: { agents: AgentBarDatum[] }) {
-  const ariaLabel = `Atenciones por agente: ${agents
-    .map(({ agente, total, estadoCounts }) => {
+export function CampaignWorkloadChart({
+  campaigns
+}: {
+  campaigns: CampaignBarDatum[]
+}) {
+  const ariaLabel = `Atenciones por tipo de caso: ${campaigns
+    .map(({ campana, total, estadoCounts }) => {
       const breakdown = Object.entries(estadoCounts)
         .map(([estado, count]) => `${estado} ${count}`)
         .join(', ')
-      return `${agente} ${total} (${breakdown})`
+      return `${campana} ${total} (${breakdown})`
     })
     .join('; ')}`
   const estadoTotals = new Map<string, number>()
-  for (const { estadoCounts } of agents) {
+  for (const { estadoCounts } of campaigns) {
     for (const [estado, count] of Object.entries(estadoCounts)) {
       estadoTotals.set(estado, (estadoTotals.get(estado) ?? 0) + count)
     }
@@ -36,8 +40,8 @@ export function AgentWorkloadChart({ agents }: { agents: AgentBarDatum[] }) {
   const estados = [...estadoTotals.keys()].sort(
     (a, b) => (estadoTotals.get(b) ?? 0) - (estadoTotals.get(a) ?? 0)
   )
-  const dataset = agents.map(({ agente, estadoCounts }) => {
-    const row: Record<string, number | string> = { agente }
+  const dataset = campaigns.map(({ campana, estadoCounts }) => {
+    const row: Record<string, number | string> = { campana }
     for (const estado of estados) {
       row[estado] = estadoCounts[estado] ?? 0
     }
@@ -52,7 +56,7 @@ export function AgentWorkloadChart({ agents }: { agents: AgentBarDatum[] }) {
     barLabel: (item: BarItem) => (item.value ? String(item.value) : null)
   }))
   const height = Math.max(
-    agents.length * CHART_ROW_HEIGHT_PX + 40,
+    campaigns.length * CHART_ROW_HEIGHT_PX + 40,
     CHART_MIN_HEIGHT_PX
   )
   return (
@@ -65,10 +69,10 @@ export function AgentWorkloadChart({ agents }: { agents: AgentBarDatum[] }) {
           yAxis={[
             {
               scaleType: 'band',
-              dataKey: 'agente',
-              valueFormatter: value => truncateAgentLabel(String(value)),
+              dataKey: 'campana',
+              valueFormatter: value => truncateCampaignLabel(String(value)),
               tickLabelStyle: { fontSize: CHART_AXIS_LABEL_FONT_SIZE },
-              width: AGENT_AXIS_WIDTH_PX
+              width: CAMPAIGN_AXIS_WIDTH_PX
             }
           ]}
           xAxis={[
