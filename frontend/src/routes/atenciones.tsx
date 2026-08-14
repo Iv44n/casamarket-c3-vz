@@ -1,5 +1,8 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
-import { ChevronDownIcon } from 'lucide-react'
+import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
+import { useServerFn } from '@tanstack/react-start'
+import { ChevronDownIcon, RefreshCwIcon } from 'lucide-react'
+import { useState } from 'react'
+import { toast } from 'sonner'
 import { AgentWorkloadChart } from '#/components/agent-workload-chart'
 import { StatusDonutChart } from '#/components/status-donut-chart'
 import { Button } from '#/components/ui/button'
@@ -31,7 +34,10 @@ import {
   getAvailableEstados
 } from '#/lib/attentions-analytics'
 import { cn } from '#/lib/utils'
-import { getAttentionsAnalytics } from '#/server/reports.functions'
+import {
+  getAttentionsAnalytics,
+  triggerRefresh
+} from '#/server/reports.functions'
 import {
   AGENT_LIMIT_OPTIONS,
   type AgentLimit,
@@ -71,6 +77,9 @@ function AtencionesPage() {
   const analytics = Route.useLoaderData()
   const { direction, agentLimit, estados } = Route.useSearch()
   const navigate = Route.useNavigate()
+  const router = useRouter()
+  const refresh = useServerFn(triggerRefresh)
+  const [pending, setPending] = useState(false)
   const availableEstados = getAvailableEstados(analytics)
   const { total, slices } = buildStatusChartData(analytics, direction, estados)
   const agents = buildAgentRanking(analytics, direction, agentLimit, estados)
@@ -78,6 +87,18 @@ function AtencionesPage() {
     analytics,
     direction
   )
+  async function handleRefresh() {
+    setPending(true)
+    try {
+      await refresh()
+      await router.invalidate()
+      toast.success('Extraccion completada')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setPending(false)
+    }
+  }
   function isEstadoChecked(estado: string) {
     return estados === 'all' || estados.includes(estado)
   }
@@ -103,6 +124,14 @@ function AtencionesPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <Button onClick={handleRefresh} disabled={pending} variant="outline">
+            <RefreshCwIcon
+              data-icon="inline-start"
+              className={cn(pending && 'animate-spin')}
+            />
+            {pending ? 'Corriendo...' : 'Refresh ahora'}
+          </Button>
+
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
