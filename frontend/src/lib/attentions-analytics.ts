@@ -14,6 +14,19 @@ export const ESTADO_FALLBACK_COLOR = 'var(--color-muted-foreground)'
 export function estadoColor(estado: string): string {
   return ESTADO_COLOR[estado] ?? ESTADO_FALLBACK_COLOR
 }
+export function getAvailableEstados(analytics: AttentionsAnalytics): string[] {
+  const estados = new Set<string>()
+  for (const { estado } of analytics.incoming.statusCounts) {
+    estados.add(estado)
+  }
+  for (const { estado } of analytics.outgoing.statusCounts) {
+    estados.add(estado)
+  }
+  return [...estados].sort((a, b) => a.localeCompare(b))
+}
+function estadoAllowed(estado: string, estadosFilter: string[]): boolean {
+  return estadosFilter.length === 0 || estadosFilter.includes(estado)
+}
 export type StatusChartSlice = {
   id: string
   estado: string
@@ -22,13 +35,16 @@ export type StatusChartSlice = {
 }
 export function buildStatusChartData(
   analytics: AttentionsAnalytics,
-  filter: AttentionFilter
+  filter: AttentionFilter,
+  estadosFilter: string[]
 ): {
   total: number
   slices: StatusChartSlice[]
 } {
   if (filter !== 'all') {
-    const { statusCounts } = analytics[filter]
+    const statusCounts = analytics[filter].statusCounts.filter(({ estado }) =>
+      estadoAllowed(estado, estadosFilter)
+    )
     return {
       total: statusCounts.reduce((sum, { count }) => sum + count, 0),
       slices: statusCounts.map(({ estado, count }) => ({
@@ -40,10 +56,14 @@ export function buildStatusChartData(
     }
   }
   const incomingByEstado = new Map(
-    analytics.incoming.statusCounts.map(({ estado, count }) => [estado, count])
+    analytics.incoming.statusCounts
+      .filter(({ estado }) => estadoAllowed(estado, estadosFilter))
+      .map(({ estado, count }) => [estado, count])
   )
   const outgoingByEstado = new Map(
-    analytics.outgoing.statusCounts.map(({ estado, count }) => [estado, count])
+    analytics.outgoing.statusCounts
+      .filter(({ estado }) => estadoAllowed(estado, estadosFilter))
+      .map(({ estado, count }) => [estado, count])
   )
   const estados = [
     ...new Set([...incomingByEstado.keys(), ...outgoingByEstado.keys()])
@@ -87,7 +107,8 @@ export type AgentBarDatum = {
 export function buildAgentRanking(
   analytics: AttentionsAnalytics,
   filter: AttentionFilter,
-  limit: AgentLimit
+  limit: AgentLimit,
+  estadosFilter: string[]
 ): AgentBarDatum[] {
   const directions =
     filter === 'incoming'
@@ -98,6 +119,9 @@ export function buildAgentRanking(
   const merged = new Map<string, Map<string, number>>()
   for (const direction of directions) {
     for (const { agente, estado, count } of direction.agentCounts) {
+      if (!estadoAllowed(estado, estadosFilter)) {
+        continue
+      }
       const estadoCounts = merged.get(agente) ?? new Map<string, number>()
       estadoCounts.set(estado, (estadoCounts.get(estado) ?? 0) + count)
       merged.set(agente, estadoCounts)

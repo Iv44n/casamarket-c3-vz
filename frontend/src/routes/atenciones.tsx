@@ -18,7 +18,8 @@ import {
 import {
   buildAgentRanking,
   buildStatusChartData,
-  describeAvailability
+  describeAvailability,
+  getAvailableEstados
 } from '#/lib/attentions-analytics'
 import { cn } from '#/lib/utils'
 import { getAttentionsAnalytics } from '#/server/reports.functions'
@@ -38,6 +39,15 @@ const FILTER_LABEL: Record<AttentionFilter, string> = {
 function formatAgentLimit(limit: AgentLimit) {
   return limit === 'all' ? 'Todos' : `Top ${limit}`
 }
+function formatEstadosFilter(selected: string[]) {
+  if (selected.length === 0) {
+    return 'Todos'
+  }
+  if (selected.length === 1) {
+    return selected[0]
+  }
+  return `${selected.length} estados`
+}
 export const Route = createFileRoute('/atenciones')({
   ssr: 'data-only',
   validateSearch: attentionsSearchSchema,
@@ -46,10 +56,11 @@ export const Route = createFileRoute('/atenciones')({
 })
 function AtencionesPage() {
   const analytics = Route.useLoaderData()
-  const { direction, agentLimit } = Route.useSearch()
+  const { direction, agentLimit, estados } = Route.useSearch()
   const navigate = Route.useNavigate()
-  const { total, slices } = buildStatusChartData(analytics, direction)
-  const agents = buildAgentRanking(analytics, direction, agentLimit)
+  const availableEstados = getAvailableEstados(analytics)
+  const { total, slices } = buildStatusChartData(analytics, direction, estados)
+  const agents = buildAgentRanking(analytics, direction, agentLimit, estados)
   const { blockedMessage, advisoryMessage } = describeAvailability(
     analytics,
     direction
@@ -66,6 +77,33 @@ function AtencionesPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <Select
+            multiple
+            value={estados}
+            onValueChange={value =>
+              navigate({
+                search: prev => ({
+                  ...prev,
+                  estados: value
+                }),
+                replace: true
+              })
+            }
+          >
+            <SelectTrigger className="w-40">
+              <SelectValue>
+                {(value: string[]) => formatEstadosFilter(value)}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {availableEstados.map(estado => (
+                <SelectItem key={estado} value={estado}>
+                  {estado}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
           <Select
             value={String(agentLimit)}
             onValueChange={value =>

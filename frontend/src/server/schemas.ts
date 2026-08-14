@@ -42,7 +42,8 @@ export const attentionsSearchSchema = z.object({
       z.literal(25),
       z.literal('all')
     ])
-    .default(10)
+    .default(10),
+  estados: z.array(z.string()).default([])
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
 export const DIRECTION_REPORT_NAME: Record<AttentionDirection, ReportName> = {

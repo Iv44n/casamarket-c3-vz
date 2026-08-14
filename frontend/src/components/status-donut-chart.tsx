@@ -74,7 +74,8 @@ export function StatusDonutChart({
               outerRadius: '86%',
               paddingAngle: 2,
               cornerRadius: 3,
-              arcLabel: item => `${Math.round((item.value / total) * 100)}%`,
+              arcLabel: item =>
+                `${item.value} (${Math.round((item.value / total) * 100)}%)`,
               arcLabelMinAngle: MIN_LABEL_ANGLE_DEG,
               arcLabelRadius: '80%',
               valueFormatter: item =>
