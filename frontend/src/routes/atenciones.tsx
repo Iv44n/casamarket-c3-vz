@@ -23,6 +23,8 @@ import {
 import { cn } from '#/lib/utils'
 import { getAttentionsAnalytics } from '#/server/reports.functions'
 import {
+  AGENT_LIMIT_OPTIONS,
+  type AgentLimit,
   ATTENTION_FILTERS,
   type AttentionFilter,
   attentionsSearchSchema
@@ -33,6 +35,9 @@ const FILTER_LABEL: Record<AttentionFilter, string> = {
   incoming: 'Entrantes',
   outgoing: 'Salientes'
 }
+function formatAgentLimit(limit: AgentLimit) {
+  return limit === 'all' ? 'Todos' : `Top ${limit}`
+}
 export const Route = createFileRoute('/atenciones')({
   ssr: 'data-only',
   validateSearch: attentionsSearchSchema,
@@ -41,10 +46,10 @@ export const Route = createFileRoute('/atenciones')({
 })
 function AtencionesPage() {
   const analytics = Route.useLoaderData()
-  const { direction } = Route.useSearch()
+  const { direction, agentLimit } = Route.useSearch()
   const navigate = Route.useNavigate()
   const { total, slices } = buildStatusChartData(analytics, direction)
-  const agents = buildAgentRanking(analytics, direction)
+  const agents = buildAgentRanking(analytics, direction, agentLimit)
   const { blockedMessage, advisoryMessage } = describeAvailability(
     analytics,
     direction
@@ -60,31 +65,60 @@ function AtencionesPage() {
           </p>
         </div>
 
-        <Select
-          value={direction}
-          onValueChange={value =>
-            navigate({
-              search: prev => ({
-                ...prev,
-                direction: value as AttentionFilter
-              }),
-              replace: true
-            })
-          }
-        >
-          <SelectTrigger className="w-36">
-            <SelectValue>
-              {(value: AttentionFilter) => FILTER_LABEL[value]}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {ATTENTION_FILTERS.map(filter => (
-              <SelectItem key={filter} value={filter}>
-                {FILTER_LABEL[filter]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-2">
+          <Select
+            value={String(agentLimit)}
+            onValueChange={value =>
+              navigate({
+                search: prev => ({
+                  ...prev,
+                  agentLimit:
+                    value === 'all' ? 'all' : (Number(value) as AgentLimit)
+                }),
+                replace: true
+              })
+            }
+          >
+            <SelectTrigger className="w-32">
+              <SelectValue>
+                {(value: string) => formatAgentLimit(value as AgentLimit)}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {AGENT_LIMIT_OPTIONS.map(limit => (
+                <SelectItem key={limit} value={String(limit)}>
+                  {formatAgentLimit(limit)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select
+            value={direction}
+            onValueChange={value =>
+              navigate({
+                search: prev => ({
+                  ...prev,
+                  direction: value as AttentionFilter
+                }),
+                replace: true
+              })
+            }
+          >
+            <SelectTrigger className="w-36">
+              <SelectValue>
+                {(value: AttentionFilter) => FILTER_LABEL[value]}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {ATTENTION_FILTERS.map(filter => (
+                <SelectItem key={filter} value={filter}>
+                  {FILTER_LABEL[filter]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {blockedMessage ? (
@@ -156,7 +190,11 @@ function AtencionesPage() {
 
               <Card className="mt-4 flex min-h-0 flex-1 flex-col">
                 <CardHeader className="shrink-0">
-                  <CardTitle>Top 10 agentes</CardTitle>
+                  <CardTitle>
+                    {agentLimit === 'all'
+                      ? 'Todos los agentes'
+                      : `Top ${agentLimit} agentes`}
+                  </CardTitle>
                   <CardDescription>Carga de trabajo diaria</CardDescription>
                 </CardHeader>
                 <CardContent className="min-h-0 flex-1">

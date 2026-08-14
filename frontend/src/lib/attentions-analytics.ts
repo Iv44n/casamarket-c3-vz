@@ -1,4 +1,5 @@
 import {
+  type AgentLimit,
   type AttentionDirection,
   type AttentionFilter,
   type AttentionsAnalytics,
@@ -13,7 +14,6 @@ export const ESTADO_FALLBACK_COLOR = 'var(--color-muted-foreground)'
 export function estadoColor(estado: string): string {
   return ESTADO_COLOR[estado] ?? ESTADO_FALLBACK_COLOR
 }
-export const TOP_AGENTS_LIMIT = 10
 export type StatusChartSlice = {
   id: string
   estado: string
@@ -86,7 +86,8 @@ export type AgentBarDatum = {
 }
 export function buildAgentRanking(
   analytics: AttentionsAnalytics,
-  filter: AttentionFilter
+  filter: AttentionFilter,
+  limit: AgentLimit
 ): AgentBarDatum[] {
   const directions =
     filter === 'incoming'
@@ -109,7 +110,7 @@ export function buildAgentRanking(
       estadoCounts: Object.fromEntries(estadoCounts)
     }))
     .sort((a, b) => b.total - a.total || a.agente.localeCompare(b.agente))
-    .slice(0, TOP_AGENTS_LIMIT)
+    .slice(0, limit === 'all' ? undefined : limit)
 }
 export function describeAvailability(
   analytics: AttentionsAnalytics,

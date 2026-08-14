@@ -27,8 +27,22 @@ export type ReportSummary = {
 export const ATTENTION_FILTERS = ['all', 'incoming', 'outgoing'] as const
 export type AttentionFilter = (typeof ATTENTION_FILTERS)[number]
 export type AttentionDirection = Exclude<AttentionFilter, 'all'>
+export const AGENT_LIMIT_OPTIONS = [5, 10, 15, 20, 25, 'all'] as const
+export type AgentLimit = (typeof AGENT_LIMIT_OPTIONS)[number]
 export const attentionsSearchSchema = z.object({
-  direction: z.enum(ATTENTION_FILTERS).default('all')
+  direction: z.enum(ATTENTION_FILTERS).default('all'),
+  // Kept in sync by hand with AGENT_LIMIT_OPTIONS -- z.union needs a literal
+  // per option, it can't be built from that array's mixed number/string type.
+  agentLimit: z
+    .union([
+      z.literal(5),
+      z.literal(10),
+      z.literal(15),
+      z.literal(20),
+      z.literal(25),
+      z.literal('all')
+    ])
+    .default(10)
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
 export const DIRECTION_REPORT_NAME: Record<AttentionDirection, ReportName> = {
