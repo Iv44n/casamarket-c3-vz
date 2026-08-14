@@ -1,9 +1,12 @@
+import os
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from dotenv import dotenv_values
+
+_CREDENTIAL_KEYS = ("C3_USERNAME", "C3_PASSWORD", "C3_BASE_URL")
 
 BASE_URL = "https://casamarket.c3.pe"
 LOGIN_PATH = "/user/login"
@@ -38,7 +41,8 @@ class Credentials:
 
 def load_credentials(env_path: Path | None = None) -> Credentials:
     path = env_path or PROJECT_ROOT / ".env"
-    values = dotenv_values(path)
+    values = dict(dotenv_values(path))
+    values.update({k: v for k, v in os.environ.items() if k in _CREDENTIAL_KEYS})
 
     username = values.get("C3_USERNAME")
     password = values.get("C3_PASSWORD")
@@ -50,8 +54,9 @@ def load_credentials(env_path: Path | None = None) -> Credentials:
     ]
     if faltantes:
         raise RuntimeError(
-            f"Faltan variables en {path}: {', '.join(faltantes)}. "
-            f"Copia .env.example a .env y completa los valores."
+            f"Faltan variables ({', '.join(faltantes)}): defini C3_USERNAME/C3_PASSWORD como "
+            f"variables de entorno del proceso, o copia .env.example a {path} y completa los "
+            f"valores."
         )
 
     base_url = values.get("C3_BASE_URL") or BASE_URL

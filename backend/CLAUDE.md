@@ -326,14 +326,20 @@ doesn't "fix" them back in without knowing why:
   of unused surface area for a PII-serving internal tool with no auth yet; `uv run uvicorn
   app.main:app --reload` does everything this project needs without it.
 - **`pydantic-settings` `BaseSettings`** (the "Settings and Environment Variables" tutorial's
-  recommended config pattern): `config.py`'s `load_credentials()` reads `.env` via
-  `dotenv_values()` on purpose and **never** falls back to the process's real environment variables
-  -- see the comment on `load_credentials()`. `pydantic-settings.BaseSettings` reads process env
-  vars by default (with `.env` as a secondary source), which is the opposite guarantee. Adopting it
-  as-is would silently change what happens when `.env` is missing/incomplete but the shell happens
-  to have `C3_USERNAME`/`C3_PASSWORD` set. Could still be done with a customized
-  `settings_customise_sources` to keep the `.env`-only guarantee, but that's added complexity for a
-  config object with three fields -- not worth it unless this grows more settings.
+  recommended config pattern): still not adopted, but the reasoning that used to be here is now
+  outdated and worth correcting rather than leaving stale -- `config.py`'s `load_credentials()`
+  originally read `.env` via `dotenv_values()` only and never fell back to the process's real
+  environment variables, on purpose, to avoid a developer's shell having stale `C3_USERNAME`/
+  `C3_PASSWORD` exports silently masking a missing/incomplete `.env`. That guarantee turned out to
+  be the wrong tradeoff once this got deployed on Render (see "Docker (production, deployed on
+  Render)" below): Render's normal dashboard "Environment Variables" only set process env vars, so
+  under the old behavior they were silently ignored -- confirmed live on 2026-08-14 when they didn't
+  take effect on container start. `load_credentials()` now merges `os.environ` on top of whatever
+  `dotenv_values()` read from the file (`_CREDENTIAL_KEYS`, process env wins over the file for any
+  key present in both -- mirrors `python-dotenv`'s own `load_dotenv()` default of not overriding
+  already-set real env vars), so local dev keeps working off `.env` exactly as before while Render's
+  plain env vars now work too, no Secret Files needed. Still not `pydantic-settings.BaseSettings`
+  itself, though -- three fields with one small merge doesn't justify that dependency.
 
 `recon/` holds artifacts from the discovery passes (raw HTML dumps, `hallazgos.md`,
 `rutas_reportes.md` mapping every report-like menu route and whether it exposes an export button,
@@ -343,13 +349,17 @@ not something regenerated automatically. `c3/reports.py` still has the discovery
 is the analytics/dashboard plan this data is meant to eventually feed (Fase 1/2/3) -- read it before
 adding new `/data` shapes, so new endpoints line up with that plan instead of drifting from it.
 
-## Docker (production)
+## Docker (production, deployed on Render)
 
 `Dockerfile` (multi-stage: `builder` resolves the locked venv, `runtime` copies just that + `app/`
-onto a clean base -- no compiler toolchain or uv binary ships), `.dockerignore`, and
-`docker-compose.yml` at this directory's root. Built and smoke-tested live (`docker build` +
-`docker run` against the real image, confirmed `GET /extraction/status`/`GET
-/extraction/massive/status` respond and the container reports `healthy`) on 2026-08-14.
+onto a clean base -- no compiler toolchain or uv binary ships) and `.dockerignore` at this
+directory's root. Deployment target is Render's native Docker support (a Render service builds this
+`Dockerfile` directly and runs the resulting container) -- **no `docker-compose.yml`**: one existed
+briefly for local orchestration, but Render doesn't read compose files at all (it only builds the
+Dockerfile and runs the image), so it was dead weight and got removed. Built and smoke-tested live
+(`docker build` + `docker run` against the real image, confirmed `GET /extraction/status`/`GET
+/extraction/massive/status` respond, the container reports `healthy`, and both the default port and
+a Render-style overridden `$PORT` work with a clean `exec`-based SIGTERM shutdown) on 2026-08-14.
 
 - **Base image**: `python:3.14-slim-bookworm` for both stages, with the standalone `uv`/`uvx`
   binaries copied in from `ghcr.io/astral-sh/uv:latest` (`COPY --from=ghcr.io/astral-sh/uv:latest
@@ -367,31 +377,48 @@ onto a clean base -- no compiler toolchain or uv binary ships), `.dockerignore`,
   `CMD`. This API serves parsed customer PII with no auth of its own yet (see the security note
   near the top of this file) -- least-privilege inside the container doesn't fix that gap, but it's
   still worth having regardless.
-- **`downloads/`/`state/` are declared `VOLUME`s**, not baked into any layer -- they're this app's
-  only runtime writes (the latest `.xlsx` per report, and `state/massive_attentions.json`, see the
-  "Path gotcha" and "Async massive export" notes above). `docker-compose.yml` backs them with named
-  volumes so a redeploy (new container, same image) doesn't lose either.
-- **Credentials need a real mounted file, not compose's `environment:`/`env_file:`**: `config.py`'s
-  `load_credentials()` reads a literal `.env` *file* at `PROJECT_ROOT/.env` via
-  `dotenv_values()`, and (per this file's "pydantic-settings" note above) deliberately never falls
-  back to the process's actual environment variables. Compose's `environment:`/`env_file:` keys only
-  set process env vars, so on their own they'd silently do nothing here -- `docker-compose.yml`
-  instead bind-mounts the host's real `backend/.env` straight to `/app/.env:ro` inside the
-  container. Keep managing that file exactly as `## Setup` above already describes (copied from
-  `.env.example`, gitignored, never committed); nothing about Docker changes that workflow, it just
-  also gets read by the container now.
+- **Listens on `$PORT`, not a hardcoded port**: Render (like most PaaS container hosts) injects its
+  own `$PORT` at runtime and expects the process to bind to *that*, which won't necessarily be 8000
+  -- `EXPOSE 8000`/`ENV PORT=8000` in the Dockerfile are just the local-`docker run` default. `CMD` is
+  deliberately shell-form (`CMD exec uvicorn ... --port "$PORT"`), not a plain JSON-array `CMD`,
+  specifically so `$PORT` gets expanded at container start rather than passed to uvicorn literally
+  unexpanded (a JSON-array `CMD` never invokes a shell, so it can't do that substitution) -- and the
+  leading `exec` matters just as much: without it, the shell itself stays PID 1 and swallows SIGTERM
+  instead of forwarding it to uvicorn, which is exactly the "JSONArgsRecommended" warning `docker
+  build` prints for this line (a generic, can't-tell-you-used-`exec` lint, not a real issue here --
+  confirmed live with `docker top` that uvicorn itself is PID 1, and `docker stop` shuts it down
+  cleanly in ~0.5s instead of hanging out to the SIGKILL timeout).
+- **`downloads/`/`state/` are declared `VOLUME`s in the Dockerfile, but that alone does NOT give
+  persistence on Render** -- they're this app's only runtime writes (the latest `.xlsx` per report,
+  and `state/massive_attentions.json`, see the "Path gotcha" and "Async massive export" notes above),
+  and Render's filesystem is ephemeral by default: anything written there is gone on the next deploy
+  or restart unless a Render **persistent Disk** is explicitly attached and mounted at `/app/downloads`
+  and `/app/state`. `VOLUME` here is honored by plain `docker run`/local Docker (an anonymous volume
+  survives container recreation with the same image), but don't assume it does anything on Render
+  without also configuring that Disk there.
+- **Credentials: Render's normal "Environment Variables" dashboard section works** -- set
+  `C3_USERNAME`/`C3_PASSWORD` (and optionally `C3_BASE_URL`) there like any other Render service.
+  This wasn't always true: `config.py`'s `load_credentials()` used to read only a literal `.env`
+  *file* and ignore process env vars entirely, which meant Render's plain env vars silently did
+  nothing (confirmed live on 2026-08-14) and the only working option was Render's **Secret Files**
+  feature pointed at `/app/.env`. `load_credentials()` was changed the same day to also read
+  `os.environ` (see the "pydantic-settings" note above for the merge order) specifically so the
+  ordinary env-var path works -- Secret Files still work too if preferred, but aren't required
+  anymore.
 - **Healthcheck hits `GET /extraction/status` with plain `urllib`** (no curl/wget installed in the
   image on purpose, keeps it minimal) -- that route always returns 200 (a real summary, or
   `{"status": "no_runs_yet"}` before the first run) with no side effects, so it's a safe, cheap
-  target even on a freshly started container that hasn't extracted anything yet.
+  target even on a freshly started container that hasn't extracted anything yet. Reads `$PORT` too,
+  same reasoning as `CMD`.
 - **Exactly one process, always** -- no `--reload` (dev-only) and deliberately no
   `--workers`/multiple replicas either. `extraction/state.py`'s last-run caches and the refresh
   `threading.Lock` are plain in-memory process state (see "The server" above); a second worker
   process or container replica would get its own independent copy of both, so two refreshes could
   overlap (the exact corruption the lock exists to prevent) and `GET /extraction/status` could
   answer from whichever instance happened to handle that particular request. Don't scale this
-  service horizontally without moving that state somewhere shared (Redis, a DB row) first.
+  service horizontally (Render's autoscaling / multiple instances included) without moving that state
+  somewhere shared (Redis, a DB row) first.
 - **Still no auth, still wide-open CORS** (see the security note near the top of this file) -- this
-  Docker work doesn't change that. Don't publish port 8000 to anything beyond a trusted
-  local/internal network, or put a reverse proxy + auth layer in front, before deploying this
-  further than that.
+  Docker work doesn't change that, and deploying to a public Render URL makes it reachable from the
+  entire internet instead of just a local/internal network. Put a reverse proxy + auth layer in front
+  (or otherwise restrict who can reach it) before/soon after this goes live on Render.
