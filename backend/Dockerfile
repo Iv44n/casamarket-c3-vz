@@ -69,14 +69,19 @@ VOLUME ["/app/downloads", "/app/state"]
 
 USER app
 
+# Not a fixed port: Render (and most PaaS container hosts) inject their own
+# $PORT at runtime and require the process to bind to THAT, not whatever
+# EXPOSE says -- EXPOSE here is just the local-docker-run default/doc value.
 EXPOSE 8000
+ENV PORT=8000
 
 # GET /extraction/status always returns 200 (a real summary, or
 # {"status": "no_runs_yet"}) even before any extraction has run -- cheap,
 # side-effect-free, good healthcheck target. Plain urllib instead of curl/wget
-# so the image doesn't need either installed.
+# so the image doesn't need either installed. Reads $PORT too, same reason
+# as CMD below.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/extraction/status', timeout=3)" || exit 1
+    CMD python -c "import os, urllib.request as u; u.urlopen(f'http://127.0.0.1:{os.environ[\"PORT\"]}/extraction/status', timeout=3)" || exit 1
 
 # No --reload (that's dev-only), and deliberately no --workers >1 either:
 # extraction/state.py's last-run cache and the refresh lock are plain
@@ -87,4 +92,11 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 # handle that request. Scale this service by running one container, not by
 # adding workers/replicas, unless that in-memory state moves somewhere
 # shared first.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+#
+# Shell form wrapping `exec` (not a plain JSON-array CMD) on purpose: needs
+# a shell to expand $PORT at container start (a JSON-array CMD never invokes
+# a shell, so "$PORT" would be passed to uvicorn literally, unexpanded), but
+# a bare shell-form CMD leaves the shell itself as PID 1 and swallows
+# SIGTERM instead of forwarding it to uvicorn -- `exec` replaces the shell
+# process with uvicorn so it becomes PID 1 directly and shuts down cleanly.
+CMD exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
