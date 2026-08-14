@@ -1,0 +1,27 @@
+# Dev-only / host-specific -- never part of the image.
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# Secrets and runtime data -- mounted in at `docker run`/compose time
+# instead (see Dockerfile's VOLUME note and docker-compose.yml), never
+# baked into the image.
+.env
+downloads/
+state/
+
+# Discovery artifacts (raw HTML dumps, reverse-engineering notes) -- used by
+# c3/reports.py's inspect_report()/inspect_all() dev tooling, not by
+# anything the server touches while serving requests. Keeps the image
+# focused on what actually runs in production.
+recon/
+
+# Not needed to run the server.
+tests/
+.git/
+.gitignore
+ANALYTICS_PLAN.md
+CLAUDE.md
+*.md
+!README.md

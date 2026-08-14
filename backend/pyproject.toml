@@ -1,0 +1,31 @@
+[project]
+name = "c3-backend"
+version = "0.1.0"
+description = "C3 platform backend: FastAPI server for Casa Market's Contact Center Cloud data extraction"
+readme = "README.md"
+authors = [
+    { name = "Iv44n", email = "ivandev2oo6@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "beautifulsoup4>=4.15.0",
+    "httpx>=0.28.1",
+    "lxml>=6.1.1",
+    "python-dotenv>=1.2.2",
+    "openpyxl>=3.1.5",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.10.0",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+# La raiz de backend/ (donde vive app/) debe estar en sys.path para que los
+# tests puedan hacer `from app import config` -- pytest no la agrega solo
+# porque tests/ no tiene __init__.py.
+pythonpath = ["."]
+testpaths = ["tests"]
