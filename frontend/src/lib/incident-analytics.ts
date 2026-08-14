@@ -1,10 +1,10 @@
 import type {
   IncidentAnalytics,
   IncidentCategory,
+  IncidentRecord,
   ReportName,
   ReportRow
 } from '#/server/schemas'
-import { INCIDENT_CATEGORIES } from '#/server/schemas'
 
 // The only reports whose C3 export ("Incluir formulario") carries the
 // incident-classification columns -- see backend/recon/hallazgos.md and the
@@ -25,6 +25,11 @@ export const INCIDENT_CATEGORY_COLOR: Record<IncidentCategory, string> = {
   tipo: 'var(--color-chart-2)',
   ambito: 'var(--color-chart-3)'
 }
+export const DIMENSION_CHAIN: Record<IncidentCategory, IncidentCategory[]> = {
+  ambito: ['ambito', 'origen', 'tipo'],
+  origen: ['origen', 'tipo'],
+  tipo: ['tipo']
+}
 const INCIDENT_FIELD: Record<IncidentCategory, string> = {
   origen: 'Origen de incidencia',
   tipo: 'Tipo de incidencia',
@@ -39,29 +44,45 @@ function isEmptyIncidentValue(value: unknown): boolean {
     EMPTY_INCIDENT_VALUES.has(value.trim().toLowerCase())
   )
 }
+function normalizeIncidentField(value: unknown, fallback: string): string {
+  return isEmptyIncidentValue(value) ? fallback : String(value).trim()
+}
 export function deriveIncidentAnalytics(
   rowSets: (ReportRow[] | null)[]
 ): IncidentAnalytics {
   const available = rowSets.some(rows => rows !== null)
   const rows = rowSets.flatMap(rows => rows ?? [])
-  const total = rows.filter(
-    row => !isEmptyIncidentValue(row[INCIDENT_FIELD.origen])
-  ).length
-  const counts = {} as IncidentAnalytics['counts']
-  for (const category of INCIDENT_CATEGORIES) {
-    const field = INCIDENT_FIELD[category]
-    const tally = new Map<string, number>()
-    for (const row of rows) {
-      const raw = row[field]
-      if (isEmptyIncidentValue(raw)) {
-        continue
-      }
-      const value = String(raw).trim()
-      tally.set(value, (tally.get(value) ?? 0) + 1)
+  const records: IncidentRecord[] = []
+  for (const row of rows) {
+    const origenRaw = row[INCIDENT_FIELD.origen]
+    if (isEmptyIncidentValue(origenRaw)) {
+      continue
     }
-    counts[category] = [...tally.entries()]
-      .map(([value, count]) => ({ value, count }))
-      .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value))
+    records.push({
+      origen: String(origenRaw).trim(),
+      tipo: normalizeIncidentField(row[INCIDENT_FIELD.tipo], 'Sin tipo'),
+      ambito: normalizeIncidentField(row[INCIDENT_FIELD.ambito], 'Sin ambito')
+    })
   }
-  return { available, total, counts }
+  return { available, total: records.length, records }
+}
+export type IncidentGroup = {
+  label: string
+  count: number
+  items: IncidentRecord[]
+}
+export function groupIncidentsBy(
+  records: IncidentRecord[],
+  key: IncidentCategory
+): IncidentGroup[] {
+  const groups = new Map<string, IncidentRecord[]>()
+  for (const record of records) {
+    const label = record[key]
+    const items = groups.get(label) ?? []
+    items.push(record)
+    groups.set(label, items)
+  }
+  return [...groups.entries()]
+    .map(([label, items]) => ({ label, count: items.length, items }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
 }

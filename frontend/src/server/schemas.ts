@@ -72,13 +72,17 @@ export type AttentionsAnalytics = {
   incoming: DirectionAnalytics
   outgoing: DirectionAnalytics
 }
-export const INCIDENT_CATEGORIES = ['origen', 'tipo', 'ambito'] as const
+export const INCIDENT_CATEGORIES = ['ambito', 'origen', 'tipo'] as const
 export type IncidentCategory = (typeof INCIDENT_CATEGORIES)[number]
-export type IncidentCategoryCount = { value: string; count: number }
+export type IncidentRecord = {
+  origen: string
+  tipo: string
+  ambito: string
+}
 export type IncidentAnalytics = {
   available: boolean
   total: number
-  counts: Record<IncidentCategory, IncidentCategoryCount[]>
+  records: IncidentRecord[]
 }
 export type JobSummary = {
   name: string

@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { z } from 'zod'
-import { IncidentCategoryChart } from '#/components/incident-category-chart'
-import { Card, CardContent, CardHeader, CardTitle } from '#/components/ui/card'
+import { IncidentHierarchy } from '#/components/incident-hierarchy'
+import { Card, CardContent } from '#/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 import {
   INCIDENT_CATEGORY_COLOR,
@@ -11,7 +11,7 @@ import { getIncidentAnalytics } from '#/server/reports.functions'
 import { INCIDENT_CATEGORIES, type IncidentCategory } from '#/server/schemas'
 
 const incidenciasSearchSchema = z.object({
-  category: z.enum(INCIDENT_CATEGORIES).default('origen')
+  category: z.enum(INCIDENT_CATEGORIES).default('ambito')
 })
 export const Route = createFileRoute('/incidencias')({
   ssr: 'data-only',
@@ -38,7 +38,7 @@ function IncidenciasPage() {
       </h1>
       <p className="mt-2 text-sm text-muted-foreground">
         {analytics.total} incidencias registradas en atenciones y llamadas
-        salientes.
+        salientes -- haz clic en una barra para ver su desglose.
       </p>
 
       {!analytics.available ? (
@@ -52,14 +52,14 @@ function IncidenciasPage() {
             .
           </CardContent>
         </Card>
+      ) : analytics.total === 0 ? (
+        <Card className="mt-8">
+          <CardContent className="text-sm text-muted-foreground">
+            No hay incidencias registradas todavia.
+          </CardContent>
+        </Card>
       ) : (
         <Card className="mt-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-1.5">
-              <CategorySwatch category={category} />
-              {INCIDENT_CATEGORY_LABEL[category]} de incidencia
-            </CardTitle>
-          </CardHeader>
           <CardContent>
             <Tabs
               value={category}
@@ -83,16 +83,10 @@ function IncidenciasPage() {
               </TabsList>
               {INCIDENT_CATEGORIES.map(cat => (
                 <TabsContent key={cat} value={cat}>
-                  {analytics.counts[cat].length === 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                      Sin registros.
-                    </p>
-                  ) : (
-                    <IncidentCategoryChart
-                      data={analytics.counts[cat]}
-                      color={INCIDENT_CATEGORY_COLOR[cat]}
-                    />
-                  )}
+                  <IncidentHierarchy
+                    records={analytics.records}
+                    dimension={cat}
+                  />
                 </TabsContent>
               ))}
             </Tabs>
