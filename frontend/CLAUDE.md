@@ -299,6 +299,62 @@ clicks for it. If a future need ever wants the massive cycle to advance on its o
 own separate (and much longer) interval in `AutoRefreshProvider` rather than folding it back into the
 existing one.
 
+**`/atenciones`'s per-day filter reads history, not the latest snapshot** (`routes/atenciones.tsx`,
+`lib/date-filter.ts`): the `date` search param (`'YYYY-MM-DD' | 'all'`) is a `loaderDeps`, so changing
+it re-runs the loader, which calls `getAttentionsAnalytics`/`getIncidentAnalytics` with that date.
+Those two `createServerFn`s fetch from the backend's `GET /data/{report_name}/history` (every
+downloaded day's file for that report, concatenated -- see `backend/CLAUDE.md`'s
+`parse_report_history` note), then `filterRowsByDate` (`lib/date-filter.ts`) keeps only the rows whose
+own date column (`"Fecha registro"` for attentions, `"Fecha"` for calls -- differs per report, see
+`INCIDENT_DATE_FIELD` in `lib/incident-analytics.ts`) matches the selected day. `'all'` is a no-op
+(no filtering). This is why picking a past day can show real data at all: the regular refresh (and
+the backend's C3 export request) only ever covers "today" -- the day-range comes from *which
+already-downloaded files* get read, not from asking C3 for a wider window.
+
+**Defaults to today, not `'all'`** (`server/schemas.ts`'s `attentionsSearchSchema`): a fresh visit to
+`/atenciones` should show today's atenciones, not every historical day merged together -- `'all'` is
+still reachable via the clear ("Quitar filtro de fecha") button, just not the landing state.
+`dateFilterValue.default(todayIsoDate)` -- a zod default can be a thunk, called on every parse -- and
+`todayIsoDate()` computes "today" from `Intl.DateTimeFormat` pinned to `America/Lima`, **not** the
+executing machine's local clock: this can run server-side during SSR, where "local" would be whatever
+timezone the Node process happens to be in, not the browser's. Mirrors why the backend's `config.hoy()`
+does the same pinning (`backend/app/config.py`) -- both exist so a naive local-clock "today" can't
+drift by a day near midnight relative to the other.
+
+**The "Refresh ahora" button on `/atenciones` is context-aware, tied to that same `date` filter**:
+`handleRefresh` checks `isPastDaySelected` (`date !== 'all' && date !== todayIsoDate()`) -- false (the
+default-today or explicit-all case) calls the regular `triggerRefresh` (today only, same as
+`/status`'s button); true (an actual past day picked) calls `triggerBackfill({ data: { date } })`
+instead, i.e. re-fetches *that* day from C3 rather than today. `'all'` and "today" are treated the same
+here on purpose: a backfill *of* today would do the same C3 request as a regular refresh anyway, so
+there's no reason to route through the backfill call, or to have the button read `` `Backfill
+${today}` `` on a plain page load. This was a deliberate fix, not the original design -- clicking
+refresh with a past day selected used to silently still only refresh today, doing nothing useful for
+the selected day (`triggerRefresh` has no concept of "which day", see the note below). The button's
+label reflects which action will actually run (`"Refresh ahora"` vs `` `Backfill ${date}` ``) so this
+isn't a hidden behavior switch.
+
+**Backfilling one past day is a separate, manual-only mutation, same posture as the massive
+cycle** -- `triggerBackfill`/`getBackfillStatus` (`server/reports.functions.ts`) proxy to the
+backend's dedicated `POST /extraction/backfill` / `GET /extraction/backfill/status`
+(`backend/CLAUDE.md`'s "Backfilling a past day" note has the full why, including that contacts is
+deliberately excluded -- its export has no date range at all). Surfaced two ways: `status.tsx`'s
+`BackfillCard` (a date input + its own "Backfill" button, independent of any other page's state) and,
+as of the note above, `/atenciones`'s "Refresh ahora" button when a specific day is selected there.
+Both eventually call the same server function -- there's no separate "atenciones backfill" codepath,
+just a different caller choosing when to invoke it.
+
+**Downloaded files are listable and deletable from `/status`** (`status.tsx`'s
+`DownloadedFilesCard`, `getDownloadedFiles`/`deleteFile` in `server/reports.functions.ts`): proxies to
+the backend's `GET /extraction/files` / `DELETE /extraction/files/{filename}`
+(`backend/CLAUDE.md`'s `routers/files.py` note). Exists because nothing ever prunes old daily
+snapshots on its own (see the per-day filter note above -- they accumulate forever, on purpose, since
+`/atenciones`'s history read depends on them staying around) -- this is the manual way to see what's
+piled up and remove a specific day/report's file, e.g. one that turned out empty or wrong before
+re-running a backfill for it. Deleting asks `window.confirm()` first (a real, irreversible disk
+delete) rather than installing a dedicated dialog component for a single confirm -- deliberately
+minimal, not an oversight.
+
 **Client-side auto-refresh** (`components/auto-refresh-provider.tsx`,
 `lib/auto-refresh-settings.ts`) -- **this is what replaced the backend's scheduler**. The backend
 used to run an internal APScheduler daily cron (see `backend/CLAUDE.md`'s "no scheduler here" note);

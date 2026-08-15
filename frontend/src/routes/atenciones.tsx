@@ -46,6 +46,7 @@ import { cn } from '#/lib/utils'
 import {
   getAttentionsAnalytics,
   getIncidentAnalytics,
+  triggerBackfill,
   triggerRefresh
 } from '#/server/reports.functions'
 import {
@@ -57,7 +58,8 @@ import {
   attentionsSearchSchema,
   type EstadosFilter,
   INCIDENT_CATEGORIES,
-  type IncidentCategory
+  type IncidentCategory,
+  todayIsoDate
 } from '#/server/schemas'
 
 const FILTER_LABEL: Record<AttentionFilter, string> = {
@@ -109,6 +111,7 @@ function AtencionesPage() {
   const navigate = Route.useNavigate()
   const router = useRouter()
   const refresh = useServerFn(triggerRefresh)
+  const backfill = useServerFn(triggerBackfill)
   const [pending, setPending] = useState(false)
   const availableEstados = getAvailableEstados(analytics)
   const { total, slices } = buildStatusChartData(analytics, direction, estados)
@@ -118,12 +121,21 @@ function AtencionesPage() {
     analytics,
     direction
   )
+  // 'all' and "today" both mean the regular refresh already covers it (it
+  // only ever fetches today anyway) -- only an actual past day needs the
+  // backfill path instead, to bring back a day the regular refresh can't.
+  const isPastDaySelected = date !== 'all' && date !== todayIsoDate()
   async function handleRefresh() {
     setPending(true)
     try {
-      await refresh()
+      if (isPastDaySelected) {
+        await backfill({ data: { date } })
+        toast.success(`Backfill de ${date} completado.`)
+      } else {
+        await refresh()
+        toast.success('Extraccion completada')
+      }
       await router.invalidate()
-      toast.success('Extraccion completada')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
     } finally {
@@ -198,7 +210,11 @@ function AtencionesPage() {
                   data-icon="inline-start"
                   className={cn(pending && 'animate-spin')}
                 />
-                {pending ? 'Corriendo...' : 'Refresh ahora'}
+                {pending
+                  ? 'Corriendo...'
+                  : isPastDaySelected
+                    ? `Backfill ${date}`
+                    : 'Refresh ahora'}
               </Button>
 
               <DropdownMenu>

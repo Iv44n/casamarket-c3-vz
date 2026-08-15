@@ -42,6 +42,23 @@ export type DateFilter = z.infer<typeof dateFilterValue>
 export const dateFilterSchema = z.object({
   date: dateFilterValue.default('all')
 })
+// "Today" in America/Lima specifically -- not the executing machine's local
+// time, which (unlike the browser) could be anything once this runs
+// server-side during SSR. Mirrors the backend's config.hoy() (see
+// backend/app/config.py), which uses the same zone for the same reason: the
+// server responds in GMT, so a naive local-clock "today" can drift by a day
+// near midnight.
+export function todayIsoDate(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Lima',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(new Date())
+  const part = (type: 'year' | 'month' | 'day') =>
+    parts.find(p => p.type === type)?.value ?? ''
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
 // Unlike dateFilterSchema above, backfill always targets one concrete day --
 // there's no 'all' concept for "re-fetch every day from C3".
 export const backfillRequestSchema = z.object({
@@ -76,7 +93,10 @@ export const attentionsSearchSchema = z.object({
   view: z.enum(ATENCIONES_VIEWS).default('resumen'),
   // Active dimension tab within the "incidencias" view.
   category: z.enum(INCIDENT_CATEGORIES).default('ambito'),
-  date: dateFilterValue.default('all')
+  // Defaults to today (not 'all') -- a fresh visit should show today's
+  // atenciones, not every historical day merged together; 'all' is still
+  // reachable via the clear ("Quitar filtro de fecha") button.
+  date: dateFilterValue.default(todayIsoDate)
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
 export type EstadosFilter = AttentionsSearch['estados']
