@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import openpyxl
@@ -80,3 +81,28 @@ def test_parse_report_parses_the_latest_downloaded_file(
     )
 
     assert parsing.parse_report("attention") == [{"Nombre": "Ana"}]
+
+
+def test_parse_report_history_returns_none_when_nothing_downloaded_yet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(config, "DOWNLOADS_DIR", tmp_path)
+
+    assert parsing.parse_report_history("attention") is None
+
+
+def test_parse_report_history_concatenates_every_days_file_oldest_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(config, "DOWNLOADS_DIR", tmp_path)
+    older = tmp_path / "attention_2026-08-13_export.xlsx"
+    newer = tmp_path / "attention_2026-08-14_export.xlsx"
+    _write_workbook(older, {"Campaña A": [("Nombre",), ("Ana",)]})
+    _write_workbook(newer, {"Campaña A": [("Nombre",), ("Luis",)]})
+    older_time = newer.stat().st_mtime - 100
+    os.utime(older, (older_time, older_time))
+
+    assert parsing.parse_report_history("attention") == [
+        {"Nombre": "Ana"},
+        {"Nombre": "Luis"},
+    ]

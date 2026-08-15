@@ -1,12 +1,15 @@
 import { createServerFn } from '@tanstack/react-start'
+import { filterRowsByDate } from '#/lib/date-filter'
 import {
   deriveIncidentAnalytics,
+  INCIDENT_DATE_FIELD,
   INCIDENT_SOURCE_REPORTS
 } from '#/lib/incident-analytics'
 import {
   fetchExtractionStatus,
   fetchMassiveExtractionStatus,
   fetchReportRows,
+  fetchReportRowsHistory,
   triggerExtractionRefresh,
   triggerMassiveExtractionRefresh
 } from './backend.server'
@@ -17,7 +20,9 @@ import type {
   ReportRow,
   ReportSummary
 } from './schemas'
-import { reportNameSchema } from './schemas'
+import { dateFilterSchema, reportNameSchema } from './schemas'
+
+const ATTENTION_DATE_FIELD = 'Fecha registro'
 
 export const getReportRows = createServerFn({ method: 'GET' })
   .validator(reportNameSchema)
@@ -113,27 +118,43 @@ function deriveDirectionAnalytics(
   }
 }
 
-export const getAttentionsAnalytics = createServerFn({ method: 'GET' }).handler(
-  async (): Promise<AttentionsAnalytics> => {
+export const getAttentionsAnalytics = createServerFn({ method: 'GET' })
+  .validator(dateFilterSchema)
+  .handler(async ({ data }): Promise<AttentionsAnalytics> => {
     const [attentionRows, outboundRows] = await Promise.all([
-      fetchReportRows('attention'),
-      fetchReportRows('outboundattention')
+      fetchReportRowsHistory('attention'),
+      fetchReportRowsHistory('outboundattention')
     ])
     return {
-      incoming: deriveDirectionAnalytics(attentionRows),
-      outgoing: deriveDirectionAnalytics(outboundRows)
+      incoming: deriveDirectionAnalytics(
+        attentionRows === null
+          ? null
+          : filterRowsByDate(attentionRows, ATTENTION_DATE_FIELD, data.date)
+      ),
+      outgoing: deriveDirectionAnalytics(
+        outboundRows === null
+          ? null
+          : filterRowsByDate(outboundRows, ATTENTION_DATE_FIELD, data.date)
+      )
     }
-  }
-)
+  })
 
-export const getIncidentAnalytics = createServerFn({ method: 'GET' }).handler(
-  async (): Promise<IncidentAnalytics> => {
+export const getIncidentAnalytics = createServerFn({ method: 'GET' })
+  .validator(dateFilterSchema)
+  .handler(async ({ data }): Promise<IncidentAnalytics> => {
     const rowSets = await Promise.all(
-      INCIDENT_SOURCE_REPORTS.map(reportName => fetchReportRows(reportName))
+      INCIDENT_SOURCE_REPORTS.map(async reportName => {
+        const rows = await fetchReportRowsHistory(reportName)
+        if (rows === null) return null
+        return filterRowsByDate(
+          rows,
+          INCIDENT_DATE_FIELD[reportName],
+          data.date
+        )
+      })
     )
     return deriveIncidentAnalytics(rowSets)
-  }
-)
+  })
 
 export const getExtractionStatus = createServerFn({ method: 'GET' }).handler(
   async () => {

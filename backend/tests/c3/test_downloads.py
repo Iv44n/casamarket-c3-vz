@@ -203,3 +203,29 @@ def test_latest_file_picks_the_most_recently_modified_match(isolated_downloads_d
     os.utime(older, (older_time, older_time))
 
     assert downloads.latest_file("attention") == newer
+
+
+def test_all_files_returns_empty_list_when_nothing_downloaded_yet(
+    isolated_downloads_dir,
+):
+    assert downloads.all_files("attention") == []
+
+
+def test_all_files_ignores_other_report_names_and_the_massive_zip(
+    isolated_downloads_dir,
+):
+    (isolated_downloads_dir / "contacts_2026-08-13_export.xlsx").write_bytes(b"x")
+    (isolated_downloads_dir / "attention_masivo_2026-08-13_export.zip").write_bytes(b"x")
+
+    assert downloads.all_files("attention") == []
+
+
+def test_all_files_returns_every_days_file_oldest_first(isolated_downloads_dir):
+    older = isolated_downloads_dir / "attention_2026-08-11_a.xlsx"
+    newer = isolated_downloads_dir / "attention_2026-08-13_b.xlsx"
+    newer.write_bytes(b"new")
+    older.write_bytes(b"old")
+    older_time = newer.stat().st_mtime - 100
+    os.utime(older, (older_time, older_time))
+
+    assert downloads.all_files("attention") == [older, newer]

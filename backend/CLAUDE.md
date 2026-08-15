@@ -182,8 +182,12 @@ guessed -- see the comments next to each params dict for exactly which default w
 For the two dated families (atenciones, llamadas), the date range is always the current day in
 `America/Lima` (`config.hoy()`), formatted `YYYY-MM-DD HH:mm`, 00:00 to 23:59 -- the timezone fix
 matters because the server responds in GMT and Peru is UTC-5, so a naive local-clock "today" can
-drift by a day near midnight. Saved filename prefers the server's `Content-Disposition`; falls back
-to a content-type-derived extension.
+drift by a day near midnight. **Deliberately kept single-day, not widened**: the frontend's
+`/atenciones` day filter (`frontend/src/routes/atenciones.tsx`) needs data for days other than today,
+but that's solved by *reading* multiple already-downloaded daily files together (`all_files()` below
++ `extraction/parsing.py`'s `parse_report_history()`), not by requesting a wider range from C3 in a
+single file -- one file per day stays the on-disk shape. Saved filename prefers the server's
+`Content-Disposition`; falls back to a content-type-derived extension.
 
 Built in two steps, specifically so the caller can report exactly what's happening without
 `downloads.py` printing anything itself:
@@ -199,6 +203,10 @@ Built in two steps, specifically so the caller can report exactly what's happeni
   `f"{name}_20??-??-??_*"`, not a bare `f"{name}_*"`: the latter would also match
   `attention_masivo_*` (the async zip from `massive.py`) when looking up `"attention"` -- both share
   the `attention_` prefix but are unrelated reports.
+- `all_files(name)` -- every downloaded file for a report name, oldest first (same glob as
+  `latest_file`, just not reduced to the single newest). Used by `parse_report_history()` below to
+  reconstruct multi-day history from daily snapshots that already exist on disk, instead of widening
+  what a single day's C3 request asks for.
 
 **Extraction orchestration** (`extraction/service.py`): `run_all(client)` loops
 `build_jobs()`/`run_job()` (a failed job doesn't abort the rest), returning an `ExtractionRun` (list
@@ -229,9 +237,15 @@ in `ANALYTICS_PLAN.md` §6.1) -- reading only the first sheet silently drops ~90
 `contacts.xlsx` happens to have one sheet, so it's unaffected either way. No date/duration/"-"
 normalization happens here -- that's Fase 2 ingestion work per `ANALYTICS_PLAN.md`, out of scope for
 now; this returns whatever value each cell holds. `parse_report(name)` is the `latest_file(name)` +
-`parse_xlsx()` composition the `/data` router calls; returns `None` (not `[]`) when nothing has been
-downloaded yet, so the router can tell "no data yet" (404) apart from "downloaded, but zero rows"
-(200 with `[]`).
+`parse_xlsx()` composition `GET /data/{report_name}` calls; returns `None` (not `[]`) when nothing has
+been downloaded yet, so the router can tell "no data yet" (404) apart from "downloaded, but zero
+rows" (200 with `[]`). `parse_report_history(name)` is the equivalent composition over
+`all_files(name)`, concatenating every day's file oldest-first -- exposed as
+`GET /data/{report_name}/history`, and what `frontend/src/routes/atenciones.tsx`'s per-day filter
+reads from instead of the single-snapshot `/data/{report_name}` (see that route's frontend CLAUDE.md
+for why: the dashboard needs more than just today, but the raw `/reports/$reportName` table still
+only ever shows the latest snapshot, unchanged). No dedup across days: each day's export already
+only covers that single day's `date_init`/`date_end` window, so consecutive files can't overlap.
 
 **Async massive export** (`c3/massive.py`): "Generar reporte masivo" for attention/outboundattention
 is encolar-y-recoger-despues, not request-and-save. `GET .../attentions-massive` (same params as the

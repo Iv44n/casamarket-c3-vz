@@ -24,6 +24,14 @@ export async function fetchReportRows(
   if (response.status === 404) return null
   return response.json()
 }
+
+export async function fetchReportRowsHistory(
+  reportName: string
+): Promise<ReportRow[] | null> {
+  const response = await backendFetch(`/data/${reportName}/history`)
+  if (response.status === 404) return null
+  return response.json()
+}
 export async function fetchExtractionStatus(): Promise<ExtractionStatus> {
   const response = await backendFetch('/extraction/status')
   return response.json()

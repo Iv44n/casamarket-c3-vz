@@ -10,11 +10,20 @@ import type {
 // incident-classification columns -- see backend/recon/hallazgos.md and the
 // live `/data/attention` payload, which has these mixed in with the regular
 // atenciones columns. callincoming/contacts don't have them.
-export const INCIDENT_SOURCE_REPORTS: ReportName[] = [
+export const INCIDENT_SOURCE_REPORTS = [
   'attention',
   'outboundattention',
   'calloutgoing'
-]
+] as const satisfies readonly ReportName[]
+
+export const INCIDENT_DATE_FIELD: Record<
+  'attention' | 'outboundattention' | 'calloutgoing',
+  string
+> = {
+  attention: 'Fecha registro',
+  outboundattention: 'Fecha registro',
+  calloutgoing: 'Fecha'
+}
 export const INCIDENT_CATEGORY_LABEL: Record<IncidentCategory, string> = {
   origen: 'Origen',
   tipo: 'Tipo',

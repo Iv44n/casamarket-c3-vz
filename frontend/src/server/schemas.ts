@@ -29,6 +29,16 @@ export type AttentionFilter = (typeof ATTENTION_FILTERS)[number]
 export type AttentionDirection = Exclude<AttentionFilter, 'all'>
 export const AGENT_LIMIT_OPTIONS = [5, 10, 15, 20, 25, 'all'] as const
 export type AgentLimit = (typeof AGENT_LIMIT_OPTIONS)[number]
+
+const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/
+const dateFilterValue = z.union([
+  z.literal('all'),
+  z.string().regex(ISO_DATE_REGEX)
+])
+export type DateFilter = z.infer<typeof dateFilterValue>
+export const dateFilterSchema = z.object({
+  date: dateFilterValue.default('all')
+})
 // Ambito first: it's the richest dimension to drill into (ambito -> origen ->
 // tipo), see DIMENSION_CHAIN in lib/incident-analytics.ts.
 export const INCIDENT_CATEGORIES = ['ambito', 'origen', 'tipo'] as const
@@ -57,7 +67,8 @@ export const attentionsSearchSchema = z.object({
   // Which of the page's two tabs is showing.
   view: z.enum(ATENCIONES_VIEWS).default('resumen'),
   // Active dimension tab within the "incidencias" view.
-  category: z.enum(INCIDENT_CATEGORIES).default('ambito')
+  category: z.enum(INCIDENT_CATEGORIES).default('ambito'),
+  date: dateFilterValue.default('all')
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
 export type EstadosFilter = AttentionsSearch['estados']

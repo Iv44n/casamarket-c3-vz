@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
-import { ChevronDownIcon, RefreshCwIcon } from 'lucide-react'
+import { ChevronDownIcon, RefreshCwIcon, XIcon } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { AgentWorkloadChart } from '#/components/agent-workload-chart'
@@ -21,6 +21,7 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger
 } from '#/components/ui/dropdown-menu'
+import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import {
   Select,
@@ -90,10 +91,11 @@ function CategorySwatch({ category }: { category: IncidentCategory }) {
 export const Route = createFileRoute('/atenciones')({
   ssr: 'data-only',
   validateSearch: attentionsSearchSchema,
-  loader: async () => {
+  loaderDeps: ({ search }) => ({ date: search.date }),
+  loader: async ({ deps }) => {
     const [attentions, incidents] = await Promise.all([
-      getAttentionsAnalytics(),
-      getIncidentAnalytics()
+      getAttentionsAnalytics({ data: { date: deps.date } }),
+      getIncidentAnalytics({ data: { date: deps.date } })
     ])
     return { attentions, incidents }
   },
@@ -102,7 +104,8 @@ export const Route = createFileRoute('/atenciones')({
 function AtencionesPage() {
   const { attentions: analytics, incidents: incidentAnalytics } =
     Route.useLoaderData()
-  const { direction, agentLimit, estados, view, category } = Route.useSearch()
+  const { direction, agentLimit, estados, view, category, date } =
+    Route.useSearch()
   const navigate = Route.useNavigate()
   const router = useRouter()
   const refresh = useServerFn(triggerRefresh)
@@ -151,102 +154,136 @@ function AtencionesPage() {
           </p>
         </div>
 
-        {view === 'resumen' && (
-          <div className="flex items-center gap-2">
-            <Button
-              onClick={handleRefresh}
-              disabled={pending}
-              variant="outline"
-            >
-              <RefreshCwIcon
-                data-icon="inline-start"
-                className={cn(pending && 'animate-spin')}
-              />
-              {pending ? 'Corriendo...' : 'Refresh ahora'}
-            </Button>
-
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button
-                    variant="outline"
-                    className="w-40 justify-between font-normal"
-                  />
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
+            <Input
+              type="date"
+              value={date === 'all' ? '' : date}
+              onValueChange={value =>
+                navigate({
+                  search: prev => ({
+                    ...prev,
+                    date: value === '' ? 'all' : value
+                  }),
+                  replace: true
+                })
+              }
+              className="w-40"
+            />
+            {date !== 'all' && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Quitar filtro de fecha"
+                onClick={() =>
+                  navigate({
+                    search: prev => ({ ...prev, date: 'all' }),
+                    replace: true
+                  })
                 }
               >
-                {formatEstadosFilter(estados, availableEstados)}
-                <ChevronDownIcon className="size-4 text-muted-foreground" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {availableEstados.map(estado => (
-                  <Label
-                    key={estado}
-                    className="cursor-default rounded-xl px-3 py-2 font-normal hover:bg-accent"
-                  >
-                    <Checkbox
-                      checked={isEstadoChecked(estado)}
-                      onCheckedChange={() => toggleEstado(estado)}
-                    />
-                    {estado}
-                  </Label>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            <Select
-              value={String(agentLimit)}
-              onValueChange={value =>
-                navigate({
-                  search: prev => ({
-                    ...prev,
-                    agentLimit:
-                      value === 'all' ? 'all' : (Number(value) as AgentLimit)
-                  }),
-                  replace: true
-                })
-              }
-            >
-              <SelectTrigger className="w-32">
-                <SelectValue>
-                  {(value: string) => formatAgentLimit(value as AgentLimit)}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {AGENT_LIMIT_OPTIONS.map(limit => (
-                  <SelectItem key={limit} value={String(limit)}>
-                    {formatAgentLimit(limit)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <Select
-              value={direction}
-              onValueChange={value =>
-                navigate({
-                  search: prev => ({
-                    ...prev,
-                    direction: value as AttentionFilter
-                  }),
-                  replace: true
-                })
-              }
-            >
-              <SelectTrigger className="w-36">
-                <SelectValue>
-                  {(value: AttentionFilter) => FILTER_LABEL[value]}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {ATTENTION_FILTERS.map(filter => (
-                  <SelectItem key={filter} value={filter}>
-                    {FILTER_LABEL[filter]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+                <XIcon />
+              </Button>
+            )}
           </div>
-        )}
+
+          {view === 'resumen' && (
+            <>
+              <Button
+                onClick={handleRefresh}
+                disabled={pending}
+                variant="outline"
+              >
+                <RefreshCwIcon
+                  data-icon="inline-start"
+                  className={cn(pending && 'animate-spin')}
+                />
+                {pending ? 'Corriendo...' : 'Refresh ahora'}
+              </Button>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button
+                      variant="outline"
+                      className="w-40 justify-between font-normal"
+                    />
+                  }
+                >
+                  {formatEstadosFilter(estados, availableEstados)}
+                  <ChevronDownIcon className="size-4 text-muted-foreground" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {availableEstados.map(estado => (
+                    <Label
+                      key={estado}
+                      className="cursor-default rounded-xl px-3 py-2 font-normal hover:bg-accent"
+                    >
+                      <Checkbox
+                        checked={isEstadoChecked(estado)}
+                        onCheckedChange={() => toggleEstado(estado)}
+                      />
+                      {estado}
+                    </Label>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <Select
+                value={String(agentLimit)}
+                onValueChange={value =>
+                  navigate({
+                    search: prev => ({
+                      ...prev,
+                      agentLimit:
+                        value === 'all' ? 'all' : (Number(value) as AgentLimit)
+                    }),
+                    replace: true
+                  })
+                }
+              >
+                <SelectTrigger className="w-32">
+                  <SelectValue>
+                    {(value: string) => formatAgentLimit(value as AgentLimit)}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {AGENT_LIMIT_OPTIONS.map(limit => (
+                    <SelectItem key={limit} value={String(limit)}>
+                      {formatAgentLimit(limit)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select
+                value={direction}
+                onValueChange={value =>
+                  navigate({
+                    search: prev => ({
+                      ...prev,
+                      direction: value as AttentionFilter
+                    }),
+                    replace: true
+                  })
+                }
+              >
+                <SelectTrigger className="w-36">
+                  <SelectValue>
+                    {(value: AttentionFilter) => FILTER_LABEL[value]}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {ATTENTION_FILTERS.map(filter => (
+                    <SelectItem key={filter} value={filter}>
+                      {FILTER_LABEL[filter]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </>
+          )}
+        </div>
       </div>
 
       <Tabs

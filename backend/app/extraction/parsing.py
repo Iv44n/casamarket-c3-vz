@@ -29,3 +29,13 @@ def parse_report(name: str) -> list[dict] | None:
     if path is None:
         return None
     return parse_xlsx(path)
+
+
+def parse_report_history(name: str) -> list[dict] | None:
+    paths = downloads.all_files(name)
+    if not paths:
+        return None
+    records = []
+    for path in paths:
+        records.extend(parse_xlsx(path))
+    return records

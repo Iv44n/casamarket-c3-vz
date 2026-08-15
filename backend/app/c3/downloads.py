@@ -108,6 +108,13 @@ def latest_file(name: str) -> Path | None:
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
+def all_files(name: str) -> list[Path]:
+    if not config.DOWNLOADS_DIR.exists():
+        return []
+    candidates = list(config.DOWNLOADS_DIR.glob(f"{name}_20??-??-??_*"))
+    return sorted(candidates, key=lambda path: path.stat().st_mtime)
+
+
 def _filename_from_response(response: httpx.Response, fallback: str) -> str:
     disposition = response.headers.get("content-disposition", "")
     match = re.search(r'filename="?([^";]+)"?', disposition)
