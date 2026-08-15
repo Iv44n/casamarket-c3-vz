@@ -10,6 +10,9 @@ export type ReportName = (typeof REPORT_NAMES)[number]
 export const reportNameSchema = z.object({
   reportName: z.enum(REPORT_NAMES)
 })
+export const deleteFileSchema = z.object({
+  filename: z.string().min(1)
+})
 export const reportSearchSchema = z.object({
   page: z.number().int().min(1).default(1),
   pageSize: z.number().int().min(1).max(200).default(25)
@@ -38,6 +41,11 @@ const dateFilterValue = z.union([
 export type DateFilter = z.infer<typeof dateFilterValue>
 export const dateFilterSchema = z.object({
   date: dateFilterValue.default('all')
+})
+// Unlike dateFilterSchema above, backfill always targets one concrete day --
+// there's no 'all' concept for "re-fetch every day from C3".
+export const backfillRequestSchema = z.object({
+  date: z.string().regex(ISO_DATE_REGEX)
 })
 // Ambito first: it's the richest dimension to drill into (ambito -> origen ->
 // tipo), see DIMENSION_CHAIN in lib/incident-analytics.ts.
@@ -130,8 +138,22 @@ export type MassiveRunSummary = {
   massive: string | null
   massive_error: string | null
 }
+export type BackfillRunSummary = {
+  started_at: string
+  finished_at: string
+  ok: boolean
+  target_date: string
+  jobs: JobSummary[]
+}
 export type NoRunsYet = {
   status: 'no_runs_yet'
 }
 export type ExtractionStatus = RunSummary | NoRunsYet
 export type MassiveExtractionStatus = MassiveRunSummary | NoRunsYet
+export type BackfillStatus = BackfillRunSummary | NoRunsYet
+export type DownloadedFile = {
+  report_name: ReportName
+  date: string
+  filename: string
+  size_bytes: number
+}

@@ -1,6 +1,6 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
-import { RefreshCwIcon } from 'lucide-react'
+import { RefreshCwIcon, Trash2Icon } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useAutoRefresh } from '#/components/auto-refresh-provider'
@@ -24,24 +24,39 @@ import {
   SelectValue
 } from '#/components/ui/select'
 import { Switch } from '#/components/ui/switch'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow
+} from '#/components/ui/table'
 import type { IntervalUnit } from '#/lib/auto-refresh-settings'
 import { cn } from '#/lib/utils'
 import {
+  deleteFile,
+  getBackfillStatus,
+  getDownloadedFiles,
   getExtractionStatus,
   getMassiveExtractionStatus,
+  triggerBackfill,
   triggerMassiveRefresh,
   triggerRefresh
 } from '#/server/reports.functions'
+import type { DownloadedFile } from '#/server/schemas'
 export const Route = createFileRoute('/status')({
   ssr: 'data-only',
   loader: async () => ({
     status: await getExtractionStatus(),
-    massiveStatus: await getMassiveExtractionStatus()
+    massiveStatus: await getMassiveExtractionStatus(),
+    backfillStatus: await getBackfillStatus(),
+    files: await getDownloadedFiles()
   }),
   component: StatusPage
 })
 function StatusPage() {
-  const { status, massiveStatus } = Route.useLoaderData()
+  const { status, massiveStatus, backfillStatus, files } = Route.useLoaderData()
   const router = useRouter()
   const refresh = useServerFn(triggerRefresh)
   const [pending, setPending] = useState(false)
@@ -94,7 +109,106 @@ function StatusPage() {
       <AutoRefreshSettingsCard />
 
       <MassiveRefreshCard massiveStatus={massiveStatus} />
+
+      <BackfillCard backfillStatus={backfillStatus} />
+
+      <DownloadedFilesCard files={files} />
     </div>
+  )
+}
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const kb = bytes / 1024
+  if (kb < 1024) return `${kb.toFixed(1)} KB`
+  return `${(kb / 1024).toFixed(1)} MB`
+}
+function DownloadedFilesCard({ files }: { files: DownloadedFile[] }) {
+  const router = useRouter()
+  const removeFile = useServerFn(deleteFile)
+  const [deleting, setDeleting] = useState<string | null>(null)
+  const sorted = [...files].sort(
+    (a, b) =>
+      b.date.localeCompare(a.date) || a.report_name.localeCompare(b.report_name)
+  )
+  async function handleDelete(filename: string) {
+    if (
+      !window.confirm(
+        `Eliminar '${filename}'? Esta accion no se puede deshacer.`
+      )
+    ) {
+      return
+    }
+    setDeleting(filename)
+    try {
+      await removeFile({ data: { filename } })
+      await router.invalidate()
+      toast.success(`'${filename}' eliminado.`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDeleting(null)
+    }
+  }
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle>Archivos descargados</CardTitle>
+        <CardDescription>
+          Un archivo por reporte por dia -- se acumulan indefinidamente, nada
+          los borra automaticamente. El filtro de fecha de /atenciones lee de
+          todos ellos, no solo del mas reciente.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {sorted.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Todavia no se descargo ningun archivo.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Reporte</TableHead>
+                <TableHead>Fecha</TableHead>
+                <TableHead>Archivo</TableHead>
+                <TableHead>Tamaño</TableHead>
+                <TableHead className="text-right">Acciones</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sorted.map(file => (
+                <TableRow key={file.filename}>
+                  <TableCell>{file.report_name}</TableCell>
+                  <TableCell>{file.date}</TableCell>
+                  <TableCell
+                    className="max-w-64 truncate"
+                    title={file.filename}
+                  >
+                    {file.filename}
+                  </TableCell>
+                  <TableCell>{formatBytes(file.size_bytes)}</TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Eliminar ${file.filename}`}
+                      disabled={deleting === file.filename}
+                      onClick={() => handleDelete(file.filename)}
+                    >
+                      <Trash2Icon
+                        className={cn(
+                          deleting === file.filename && 'animate-pulse'
+                        )}
+                      />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 function MassiveRefreshCard({
@@ -146,6 +260,77 @@ function MassiveRefreshCard({
         </p>
         <pre className="mt-2 overflow-x-auto rounded-md bg-muted p-4 text-xs">
           {JSON.stringify(massiveStatus, null, 2)}
+        </pre>
+      </CardContent>
+    </Card>
+  )
+}
+function BackfillCard({
+  backfillStatus
+}: {
+  backfillStatus: Awaited<ReturnType<typeof getBackfillStatus>>
+}) {
+  const router = useRouter()
+  const backfill = useServerFn(triggerBackfill)
+  const [date, setDate] = useState('')
+  const [pending, setPending] = useState(false)
+  const hasRun = 'started_at' in backfillStatus
+  async function handleBackfill() {
+    if (!date) {
+      toast.error('Elegi una fecha primero.')
+      return
+    }
+    setPending(true)
+    try {
+      await backfill({ data: { date } })
+      await router.invalidate()
+      toast.success(`Backfill de ${date} completado.`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setPending(false)
+    }
+  }
+  return (
+    <Card className="mt-4">
+      <CardHeader className="flex-row items-center justify-between">
+        <div>
+          <CardTitle>Backfill de un dia especifico</CardTitle>
+          <CardDescription>
+            Vuelve a pedirle a C3 un dia puntual (atenciones y llamadas, no
+            contactos -- su export no tiene rango de fechas) y sobreescribe el
+            archivo de ese dia. Util si se elimino un archivo o el refresh de
+            ese dia no corrio.
+          </CardDescription>
+        </div>
+        <div className="flex items-center gap-2">
+          <Input
+            type="date"
+            value={date}
+            onValueChange={setDate}
+            className="w-40"
+          />
+          <Button
+            onClick={handleBackfill}
+            disabled={pending}
+            variant="secondary"
+          >
+            <RefreshCwIcon
+              data-icon="inline-start"
+              className={cn(pending && 'animate-spin')}
+            />
+            {pending ? 'Corriendo...' : 'Backfill'}
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <p className="text-sm text-muted-foreground">
+          {hasRun
+            ? `Ultimo backfill: ${backfillStatus.target_date} (${backfillStatus.finished_at})`
+            : 'Sin corridas todavia'}
+        </p>
+        <pre className="mt-2 overflow-x-auto rounded-md bg-muted p-4 text-xs">
+          {JSON.stringify(backfillStatus, null, 2)}
         </pre>
       </CardContent>
     </Card>

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import date
 
 import httpx
 
@@ -32,9 +33,9 @@ class MassiveRun:
         return self.massive_error is None
 
 
-def run_all(client: httpx.Client) -> ExtractionRun:
+def _run_jobs(client: httpx.Client, jobs: list[downloads.DownloadJob]) -> ExtractionRun:
     outcomes = []
-    for job in downloads.build_jobs():
+    for job in jobs:
         try:
             result = downloads.run_job(client, job)
         except (downloads.DownloadError, httpx.HTTPError) as exc:
@@ -43,6 +44,14 @@ def run_all(client: httpx.Client) -> ExtractionRun:
             outcomes.append(JobOutcome(job=job, result=result, error=None))
 
     return ExtractionRun(jobs=outcomes)
+
+
+def run_all(client: httpx.Client) -> ExtractionRun:
+    return _run_jobs(client, downloads.build_jobs())
+
+
+def run_backfill_jobs(client: httpx.Client, target_date: date) -> ExtractionRun:
+    return _run_jobs(client, downloads.build_backfill_jobs(target_date))
 
 
 def run_massive_cycle(client: httpx.Client) -> MassiveRun:
@@ -72,5 +81,18 @@ def run_massive(
     client = session.login(creds, transport=transport)
     try:
         return run_massive_cycle(client)
+    finally:
+        client.close()
+
+
+def run_backfill(
+    target_date: date,
+    creds: config.Credentials | None = None,
+    transport: httpx.BaseTransport | None = None,
+) -> ExtractionRun:
+    creds = creds or config.load_credentials()
+    client = session.login(creds, transport=transport)
+    try:
+        return run_backfill_jobs(client, target_date)
     finally:
         client.close()

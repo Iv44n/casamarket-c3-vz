@@ -1,14 +1,15 @@
 import threading
-from datetime import datetime
+from datetime import date, datetime
 
 from .. import config
 from ..c3 import massive
-from ..schemas import JobSummary, MassiveRunSummary, RunSummary
+from ..schemas import BackfillRunSummary, JobSummary, MassiveRunSummary, RunSummary
 from . import service
 
 _lock = threading.Lock()
 _last_run: RunSummary | None = None
 _last_massive_run: MassiveRunSummary | None = None
+_last_backfill_run: BackfillRunSummary | None = None
 
 
 class AlreadyRunningError(RuntimeError):
@@ -73,3 +74,28 @@ def run_massive_extraction() -> MassiveRunSummary:
 
 def last_massive_run() -> MassiveRunSummary | None:
     return _last_massive_run
+
+
+def run_backfill(target_date: date) -> BackfillRunSummary:
+    global _last_backfill_run
+    if not _lock.acquire(blocking=False):
+        raise AlreadyRunningError("Ya hay una extraccion en curso.")
+    try:
+        started_at = datetime.now(config.TZ)
+        run = service.run_backfill(target_date)
+    finally:
+        _lock.release()
+
+    summary = BackfillRunSummary(
+        started_at=started_at.isoformat(),
+        finished_at=datetime.now(config.TZ).isoformat(),
+        ok=run.ok,
+        target_date=target_date.isoformat(),
+        jobs=[_job_summary(o) for o in run.jobs],
+    )
+    _last_backfill_run = summary
+    return summary
+
+
+def last_backfill_run() -> BackfillRunSummary | None:
+    return _last_backfill_run

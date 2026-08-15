@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import data, runs
+from .routers import data, files, runs
 
 DESCRIPTION = """
 Extraccion y consulta de los reportes diarios de Casa Market's Contact Center Cloud (C3): atenciones
@@ -45,3 +45,4 @@ app.add_middleware(
 
 app.include_router(runs.router)
 app.include_router(data.router)
+app.include_router(files.router)

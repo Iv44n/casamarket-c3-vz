@@ -26,5 +26,20 @@ class MassiveRunSummary(BaseModel):
     massive_error: str | None
 
 
+class BackfillRunSummary(BaseModel):
+    started_at: str
+    finished_at: str
+    ok: bool
+    target_date: str
+    jobs: list[JobSummary]
+
+
 class NoRunsYet(BaseModel):
     status: Literal["no_runs_yet"] = "no_runs_yet"
+
+
+class DownloadedFile(BaseModel):
+    report_name: str
+    date: str
+    filename: str
+    size_bytes: int

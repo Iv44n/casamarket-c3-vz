@@ -1,6 +1,7 @@
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 import httpx
@@ -26,6 +27,11 @@ class DownloadJob:
     name: str
     endpoint: str
     params: dict = field(default_factory=dict)
+    # The day this job's *file* gets stamped with in run_job() -- normally
+    # "today" (a regular refresh), but a backfill job sets this to whatever
+    # past day it's actually fetching, so all_files()/parse_report_history()
+    # file it under the right day rather than under today.
+    file_date: date = field(default_factory=config.hoy)
 
 
 @dataclass(frozen=True)
@@ -38,11 +44,11 @@ class DownloadResult:
     elapsed_seconds: float
 
 
-def attention_base_params(type_param_value: str) -> dict:
-    today = config.hoy().isoformat()
+def attention_base_params(type_param_value: str, target_date: date | None = None) -> dict:
+    day = (target_date or config.hoy()).isoformat()
     return {
-        "date_init": f"{today} 00:00",
-        "date_end": f"{today} 23:59",
+        "date_init": f"{day} 00:00",
+        "date_end": f"{day} 23:59",
         "agent": "",
         "campaign": "",
         "attention_id": "",
@@ -57,19 +63,24 @@ def attention_base_params(type_param_value: str) -> dict:
     }
 
 
-def _attention_job(name: str) -> DownloadJob:
+def _attention_job(name: str, target_date: date | None = None) -> DownloadJob:
     mechanism = reports.EXPORT_MECHANISMS[name]
-    params = attention_base_params(mechanism.type_param_value)
+    params = attention_base_params(mechanism.type_param_value, target_date)
     params["with_form"] = 1
-    return DownloadJob(name=name, endpoint=mechanism.export_endpoint, params=params)
+    return DownloadJob(
+        name=name,
+        endpoint=mechanism.export_endpoint,
+        params=params,
+        file_date=target_date or config.hoy(),
+    )
 
 
-def _call_job(name: str) -> DownloadJob:
+def _call_job(name: str, target_date: date | None = None) -> DownloadJob:
     mechanism = reports.CALL_EXPORT_MECHANISMS[name]
-    today = config.hoy().isoformat()
+    day = (target_date or config.hoy()).isoformat()
     params = {
-        "date_init": f"{today} 00:00",
-        "date_end": f"{today} 23:59",
+        "date_init": f"{day} 00:00",
+        "date_end": f"{day} 23:59",
         "agent": "",
         "campaign": "",
         "linkedid": "",
@@ -81,7 +92,12 @@ def _call_job(name: str) -> DownloadJob:
         "with": mechanism.selected_with,
         **mechanism.extra_params,
     }
-    return DownloadJob(name=name, endpoint=reports.CALLS_EXPORT_ENDPOINT, params=params)
+    return DownloadJob(
+        name=name,
+        endpoint=reports.CALLS_EXPORT_ENDPOINT,
+        params=params,
+        file_date=target_date or config.hoy(),
+    )
 
 
 def _contacts_job() -> DownloadJob:
@@ -96,6 +112,19 @@ def build_jobs() -> list[DownloadJob]:
     jobs = [_attention_job(name) for name in reports.EXPORT_MECHANISMS]
     jobs += [_call_job(name) for name in reports.CALL_EXPORT_MECHANISMS]
     jobs.append(_contacts_job())
+    return jobs
+
+
+def build_backfill_jobs(target_date: date) -> list[DownloadJob]:
+    """Jobs to (re-)fetch a single past day for the 4 dated families only.
+
+    Contacts is deliberately excluded: its export has no date range at all
+    (see attention_base_params vs _contacts_job) -- it's always today's whole
+    roster, so "backfilling" it under a past date would just save today's
+    roster mislabeled as that day's, which is wrong, not merely redundant.
+    """
+    jobs = [_attention_job(name, target_date) for name in reports.EXPORT_MECHANISMS]
+    jobs += [_call_job(name, target_date) for name in reports.CALL_EXPORT_MECHANISMS]
     return jobs
 
 
@@ -142,11 +171,10 @@ def run_job(client: httpx.Client, job: DownloadJob) -> DownloadResult:
     if not response.content:
         raise DownloadError(f"'{job.name}' devolvio una respuesta vacia.")
 
-    today = config.hoy().isoformat()
     filename = _filename_from_response(response, fallback="export")
 
     config.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
-    dest = config.DOWNLOADS_DIR / f"{job.name}_{today}_{filename}"
+    dest = config.DOWNLOADS_DIR / f"{job.name}_{job.file_date.isoformat()}_{filename}"
     dest.write_bytes(response.content)
 
     return DownloadResult(

@@ -1,3 +1,4 @@
+import datetime
 import os
 import re
 from pathlib import Path
@@ -72,6 +73,35 @@ def test_contacts_job_has_no_date_range():
     assert "date_init" not in job.params
     assert "date_end" not in job.params
     assert job.params["company_id"] == "ALL"
+
+
+def test_build_jobs_file_date_defaults_to_today_for_every_job():
+    for job in downloads.build_jobs():
+        assert job.file_date == config.hoy()
+
+
+def test_build_backfill_jobs_covers_the_four_dated_families_not_contacts():
+    target = datetime.date(2026, 8, 10)
+
+    jobs = downloads.build_backfill_jobs(target)
+
+    assert {job.name for job in jobs} == {
+        "attention",
+        "outboundattention",
+        "callincoming",
+        "calloutgoing",
+    }
+
+
+def test_build_backfill_jobs_requests_and_stamps_the_target_date_not_today():
+    target = datetime.date(2026, 8, 10)
+
+    jobs = downloads.build_backfill_jobs(target)
+
+    for job in jobs:
+        assert job.file_date == target
+        assert job.params["date_init"] == "2026-08-10 00:00"
+        assert job.params["date_end"] == "2026-08-10 23:59"
 
 
 def test_filename_from_response_prefers_content_disposition():
@@ -159,6 +189,28 @@ def test_run_job_success_writes_file_and_reports_timing(isolated_downloads_dir):
     assert result.path.exists()
     assert result.path.read_bytes() == body
     assert result.path.parent == isolated_downloads_dir
+
+
+def test_run_job_names_the_file_after_the_jobs_file_date_not_todays_date(
+    isolated_downloads_dir,
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={
+                "content-type": "application/vnd.ms-excel",
+                "content-disposition": 'attachment; filename="reporte.xls"',
+            },
+            content=b"x",
+        )
+
+    target = datetime.date(2026, 8, 10)
+    job = downloads.DownloadJob(
+        name="attention", endpoint="/fake", params={}, file_date=target
+    )
+    result = downloads.run_job(_client(handler), job)
+
+    assert result.path.name == "attention_2026-08-10_reporte.xls"
 
 
 def test_run_job_preserves_query_string_already_in_endpoint_when_params_empty(

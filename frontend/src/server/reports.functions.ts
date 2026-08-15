@@ -6,10 +6,14 @@ import {
   INCIDENT_SOURCE_REPORTS
 } from '#/lib/incident-analytics'
 import {
+  deleteDownloadedFile,
+  fetchBackfillStatus,
+  fetchDownloadedFiles,
   fetchExtractionStatus,
   fetchMassiveExtractionStatus,
   fetchReportRows,
   fetchReportRowsHistory,
+  triggerBackfillExtraction,
   triggerExtractionRefresh,
   triggerMassiveExtractionRefresh
 } from './backend.server'
@@ -20,7 +24,12 @@ import type {
   ReportRow,
   ReportSummary
 } from './schemas'
-import { dateFilterSchema, reportNameSchema } from './schemas'
+import {
+  backfillRequestSchema,
+  dateFilterSchema,
+  deleteFileSchema,
+  reportNameSchema
+} from './schemas'
 
 const ATTENTION_DATE_FIELD = 'Fecha registro'
 
@@ -179,3 +188,30 @@ export const triggerMassiveRefresh = createServerFn({ method: 'POST' }).handler(
     return triggerMassiveExtractionRefresh()
   }
 )
+
+export const getDownloadedFiles = createServerFn({ method: 'GET' }).handler(
+  async () => {
+    return fetchDownloadedFiles()
+  }
+)
+
+// method: 'POST' -- createServerFn only supports GET/POST (see
+// @tanstack/start-client-core's Method type); the actual backend call this
+// wraps is a real HTTP DELETE (backend.server.ts's deleteDownloadedFile).
+export const deleteFile = createServerFn({ method: 'POST' })
+  .validator(deleteFileSchema)
+  .handler(async ({ data }) => {
+    await deleteDownloadedFile(data.filename)
+  })
+
+export const getBackfillStatus = createServerFn({ method: 'GET' }).handler(
+  async () => {
+    return fetchBackfillStatus()
+  }
+)
+
+export const triggerBackfill = createServerFn({ method: 'POST' })
+  .validator(backfillRequestSchema)
+  .handler(async ({ data }) => {
+    return triggerBackfillExtraction(data.date)
+  })

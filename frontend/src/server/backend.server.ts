@@ -1,4 +1,7 @@
 import type {
+  BackfillRunSummary,
+  BackfillStatus,
+  DownloadedFile,
   ExtractionStatus,
   MassiveExtractionStatus,
   ReportRow
@@ -49,6 +52,36 @@ export async function fetchMassiveExtractionStatus(): Promise<MassiveExtractionS
 export async function triggerMassiveExtractionRefresh(): Promise<MassiveExtractionStatus> {
   const response = await backendFetch('/extraction/massive/refresh', {
     method: 'POST'
+  })
+  return response.json()
+}
+export async function fetchDownloadedFiles(): Promise<DownloadedFile[]> {
+  const response = await backendFetch('/extraction/files')
+  return response.json()
+}
+// Not routed through backendFetch: a 404 here means "the file is already
+// gone", a real error for a delete action, unlike the read paths above where
+// backendFetch's blanket 404-is-fine handling means "nothing downloaded yet".
+export async function deleteDownloadedFile(filename: string): Promise<void> {
+  const path = `/extraction/files/${encodeURIComponent(filename)}`
+  const response = await fetch(`${BASE_URL}${path}`, { method: 'DELETE' })
+  if (!response.ok) {
+    throw new Error(
+      `C3 backend ${path} responded ${response.status}: ${await response.text()}`
+    )
+  }
+}
+export async function fetchBackfillStatus(): Promise<BackfillStatus> {
+  const response = await backendFetch('/extraction/backfill/status')
+  return response.json()
+}
+export async function triggerBackfillExtraction(
+  date: string
+): Promise<BackfillRunSummary> {
+  const response = await backendFetch('/extraction/backfill', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date })
   })
   return response.json()
 }

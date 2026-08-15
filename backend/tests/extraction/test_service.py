@@ -1,3 +1,4 @@
+import datetime
 from pathlib import Path
 
 import httpx
@@ -55,6 +56,15 @@ def _download_steps() -> list[tuple[str, httpx.Response]]:
     ]
 
 
+def _backfill_steps() -> list[tuple[str, httpx.Response]]:
+    return [
+        (ATTENTIONS_EXPORT, _file_response()),
+        (ATTENTIONS_EXPORT, _file_response()),
+        (CALLS_EXPORT, _file_response()),
+        (CALLS_EXPORT, _file_response()),
+    ]
+
+
 def _massive_cycle_steps() -> list[tuple[str, httpx.Response]]:
     return [
         (LIST, _json_response([])),
@@ -99,6 +109,22 @@ def test_run_all_collects_a_failed_job_without_aborting_the_rest():
     assert failed.result is None
     assert sum(1 for o in run.jobs if o.error is None) == 4
     assert run.ok is False
+
+
+def test_run_backfill_jobs_downloads_only_the_four_dated_families():
+    client = _sequenced_client(_backfill_steps())
+
+    run = service.run_backfill_jobs(client, datetime.date(2026, 8, 10))
+
+    assert {outcome.job.name for outcome in run.jobs} == {
+        "attention",
+        "outboundattention",
+        "callincoming",
+        "calloutgoing",
+    }
+    assert all(outcome.job.file_date == datetime.date(2026, 8, 10) for outcome in run.jobs)
+    assert all(outcome.error is None for outcome in run.jobs)
+    assert run.ok is True
 
 
 def test_run_massive_cycle_advances_the_massive_state_machine():
@@ -171,4 +197,24 @@ def test_run_massive_logs_in_then_advances_one_step_of_the_massive_cycle():
     result = service.run_massive(_creds(), transport=httpx.MockTransport(handler))
 
     assert result.ok is True
+
+
+def test_run_backfill_logs_in_then_downloads_only_the_four_dated_families():
+    steps = _login_steps() + _backfill_steps()
+    remaining = list(steps)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert remaining, f"peticion inesperada (no quedan pasos): {request.url}"
+        expected_path, response = remaining.pop(0)
+        assert request.url.path == expected_path, (
+            f"se esperaba {expected_path!r}, llego {request.url.path!r}"
+        )
+        return response
+
+    result = service.run_backfill(
+        datetime.date(2026, 8, 10), _creds(), transport=httpx.MockTransport(handler)
+    )
+
+    assert result.ok is True
+    assert not remaining
     assert not remaining

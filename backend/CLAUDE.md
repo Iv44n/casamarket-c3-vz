@@ -19,9 +19,15 @@ checking that decision first. Unit tests exist (`tests/`, pytest, no live networ
 
 **Security gap, read before deploying beyond localhost**: there is currently **no authentication on
 this API**. `POST /extraction/refresh` and `GET /data/{report_name}` (which serves parsed customer
-PII -- contacts, WhatsApp attentions, calls) are open to anyone who can reach the port. CORS is
-wide open (`allow_origins=["*"]`) to make local frontend development frictionless. Add auth (and
-narrow CORS) before this server is reachable from anywhere but a trusted local/internal network.
+PII -- contacts, WhatsApp attentions, calls) are open to anyone who can reach the port. So is
+`DELETE /extraction/files/{filename}` (`routers/files.py`) -- a real, irreversible delete of a
+downloaded snapshot off disk, with nothing but the filename-shape check standing between an
+anonymous caller and any of those files -- and `POST /extraction/backfill`, which like
+`POST /extraction/refresh` logs into the live `casamarket.c3.pe` and runs real downloads, just for
+whatever past day an anonymous caller asks for. CORS is wide open (`allow_origins=["*"]`) to make
+local frontend development frictionless. Add auth (and narrow CORS) before this server is reachable
+from
+anywhere but a trusted local/internal network.
 
 ## Tooling
 
@@ -100,10 +106,17 @@ app/
                        same shape FastAPI's own "Bigger Applications" tutorial recommends.
     runs.py             POST /extraction/refresh, GET /extraction/status (the 5 daily downloads) plus
                         POST /extraction/massive/refresh, GET /extraction/massive/status (the
-                        dedicated massive-cycle pair) -- named runs.py (not extraction.py) to avoid
-                        clashing with the extraction/ package above; the actual API prefix
-                        (`/extraction/...`) is unchanged
-    data.py              GET /data/{report_name} -- parsed rows from the latest download
+                        dedicated massive-cycle pair), plus POST /extraction/backfill,
+                        GET /extraction/backfill/status (re-fetch one past day for the 4 dated
+                        families -- see "Backfilling a past day" below) -- named runs.py (not
+                        extraction.py) to avoid clashing with the extraction/ package above; the
+                        actual API prefix (`/extraction/...`) is unchanged
+    data.py              GET /data/{report_name} -- parsed rows from the latest download, plus
+                         GET /data/{report_name}/history -- every downloaded day's rows concatenated
+    files.py              GET /extraction/files -- lists every downloaded file on disk (report name,
+                          date, filename, size), DELETE /extraction/files/{filename} to remove one --
+                          `KNOWN_REPORTS` is imported from data.py (promoted from that module's own
+                          private `_KNOWN_REPORTS`, now shared across both routers)
 ```
 
 `tests/` mirrors this exactly: `tests/c3/`, `tests/extraction/`, `tests/routers/`, plus
@@ -230,6 +243,26 @@ automatically -- today the only caller is a manual button on the frontend's `/st
 cycle to advance on its own cadence again, that belongs on its own separate (and much longer)
 interval, not bundled back into the regular refresh.
 
+**Backfilling a past day** (`c3/downloads.py`, `extraction/service.py`/`state.py`,
+`routers/runs.py`): the regular refresh only ever requests "today" from C3 (see the Downloads note
+above), so if a day's file is missing/wrong -- deleted via `DELETE /extraction/files/{filename}`
+(`routers/files.py`), or the refresh simply didn't run that day -- there's no way to get it back
+*except* asking C3 for that specific day again. `POST /extraction/backfill` (body: `{"date":
+"YYYY-MM-DD"}`) does exactly that, for the 4 dated families only (`downloads.build_backfill_jobs`) --
+**not contacts**, whose export has no date range at all (see `_contacts_job`), so a "backfill" of it
+would just save today's roster mislabeled as a past day, which is wrong, not merely redundant.
+`DownloadJob` gained a `file_date` field for this: normally `config.hoy()` (a regular refresh's file
+is still named after today, unchanged), but a backfill job sets it to the requested past day so
+`run_job()` names the saved file after *that* day, not today -- otherwise `all_files()`/
+`parse_report_history()` would file the re-fetched data under the wrong day. Same
+locking/single-flight discipline as the regular and massive runs (shares `extraction/state.py`'s one
+`threading.Lock` -- a backfill can't run concurrently with either), its own summary type
+(`BackfillRunSummary`, adds `target_date` to `RunSummary`'s shape) and its own last-run cache
+(`_last_backfill_run`/`run_backfill()`/`last_backfill_run()`), same reasoning as the massive pair
+being kept separate from the regular run's cache. Nothing calls this automatically -- it's a manual,
+one-day-at-a-time action from the frontend's `/status` page, same posture as the massive cycle's
+button.
+
 **Parsing** (`extraction/parsing.py`): `parse_xlsx(path)` concatenates **every sheet** in the
 workbook into one `list[dict]`, using each sheet's own first row as its header. This matters because
 the four atenciones/llamadas reports come back with **10 fixed sheets, one per campaign** (confirmed
@@ -310,7 +343,21 @@ this.
 - `routers/data.py`: `GET /data/{report_name}` validates the name against the 5 known tabular
   reports (`attention`, `outboundattention`, `callincoming`, `calloutgoing`, `contacts` -- not the
   massive zip, which isn't tabular), 404s on an unknown name or on no file downloaded yet, otherwise
-  returns `parsing.parse_report(name)` as JSON.
+  returns `parsing.parse_report(name)` as JSON. `GET /data/{report_name}/history` is the same
+  validation over `parsing.parse_report_history(name)` instead -- every downloaded day's file for that
+  report, concatenated (see that function's docstring for why no dedup is needed).
+- `routers/files.py`: lets a caller see and prune what's actually sitting in `DOWNLOADS_DIR`, since
+  nothing ever deletes an old daily snapshot on its own and they accumulate forever (frontend's
+  `/status` page surfaces this -- see `frontend/CLAUDE.md`). `GET /extraction/files` lists every file
+  matching the known `{report}_{YYYY-MM-DD}_...` naming convention (built from the same
+  `KNOWN_REPORTS` set `data.py` validates against), skipping anything else that might be in that
+  directory (the massive zips, a `.~lock.*` file left by someone having the .xlsx open in a desktop
+  app, etc) -- each entry carries `report_name`/`date`/`filename`/`size_bytes`, `filename` being the
+  identifier the delete route below takes. `DELETE /extraction/files/{filename}` re-validates that
+  same filename shape before touching disk (400 if it doesn't match) and 404s if the file's already
+  gone; a literal slash in `{filename}` never even reaches the handler -- Starlette's default path
+  converter for a single path segment doesn't match `/`, encoded or not, so a `../` traversal attempt
+  is rejected at the routing layer before this router's own regex check would run.
 
 **Following FastAPI's own docs** (fastapi.tiangolo.com), deliberately, this project:
 

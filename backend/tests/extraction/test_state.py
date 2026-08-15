@@ -1,3 +1,4 @@
+import datetime
 from pathlib import Path
 
 import pytest
@@ -152,3 +153,59 @@ def test_run_massive_extraction_releases_the_lock_even_if_it_raises(
 
     assert not state._lock.locked()
     assert state.last_massive_run() is None
+
+
+@pytest.fixture(autouse=True)
+def reset_last_backfill_run():
+    state._last_backfill_run = None
+    yield
+    state._last_backfill_run = None
+
+
+_TARGET_DATE = datetime.date(2026, 8, 10)
+
+
+def test_run_backfill_returns_a_summary_with_the_target_date_and_records_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(service, "run_backfill", lambda target_date: _fake_run(ok=True))
+
+    summary = state.run_backfill(_TARGET_DATE)
+
+    assert summary.ok is True
+    assert summary.target_date == "2026-08-10"
+    assert state.last_backfill_run() == summary
+    assert state.last_run() is None
+    assert state.last_massive_run() is None
+
+
+def test_run_backfill_reports_a_failed_job_and_ok_false(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(service, "run_backfill", lambda target_date: _fake_run(ok=False))
+
+    summary = state.run_backfill(_TARGET_DATE)
+
+    assert summary.ok is False
+    assert summary.jobs[0].error == "boom"
+
+
+def test_run_backfill_raises_already_running_if_lock_held(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(service, "run_backfill", lambda target_date: _fake_run(ok=True))
+    state._lock.acquire()
+    try:
+        with pytest.raises(state.AlreadyRunningError):
+            state.run_backfill(_TARGET_DATE)
+    finally:
+        state._lock.release()
+
+
+def test_run_backfill_releases_the_lock_even_if_it_raises(monkeypatch: pytest.MonkeyPatch):
+    def boom(target_date):
+        raise RuntimeError("login failed")
+
+    monkeypatch.setattr(service, "run_backfill", boom)
+
+    with pytest.raises(RuntimeError):
+        state.run_backfill(_TARGET_DATE)
+
+    assert not state._lock.locked()
+    assert state.last_backfill_run() is None

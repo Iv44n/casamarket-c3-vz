@@ -4,15 +4,15 @@ from ..extraction import parsing
 
 router = APIRouter(prefix="/data", tags=["data"])
 
-_KNOWN_REPORTS = {"attention", "outboundattention", "callincoming", "calloutgoing", "contacts"}
+KNOWN_REPORTS = {"attention", "outboundattention", "callincoming", "calloutgoing", "contacts"}
 
 
 @router.get("/{report_name}")
 def get_report(report_name: str) -> list[dict]:
-    if report_name not in _KNOWN_REPORTS:
+    if report_name not in KNOWN_REPORTS:
         raise HTTPException(
             status_code=404,
-            detail=f"Reporte desconocido: {report_name!r}. Validos: {sorted(_KNOWN_REPORTS)}",
+            detail=f"Reporte desconocido: {report_name!r}. Validos: {sorted(KNOWN_REPORTS)}",
         )
 
     records = parsing.parse_report(report_name)
@@ -26,10 +26,10 @@ def get_report(report_name: str) -> list[dict]:
 
 @router.get("/{report_name}/history")
 def get_report_history(report_name: str) -> list[dict]:
-    if report_name not in _KNOWN_REPORTS:
+    if report_name not in KNOWN_REPORTS:
         raise HTTPException(
             status_code=404,
-            detail=f"Reporte desconocido: {report_name!r}. Validos: {sorted(_KNOWN_REPORTS)}",
+            detail=f"Reporte desconocido: {report_name!r}. Validos: {sorted(KNOWN_REPORTS)}",
         )
 
     records = parsing.parse_report_history(report_name)
