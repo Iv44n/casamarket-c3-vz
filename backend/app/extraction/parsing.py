@@ -1,8 +1,18 @@
+import csv
 from pathlib import Path
 
 import openpyxl
 
 from ..c3 import downloads
+
+
+def parse_csv(path: Path) -> list[dict]:
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        return [dict(row) for row in csv.DictReader(handle)]
+
+
+def _parse_file(path: Path) -> list[dict]:
+    return parse_csv(path) if path.suffix.lower() == ".csv" else parse_xlsx(path)
 
 
 def parse_xlsx(path: Path) -> list[dict]:
@@ -28,7 +38,7 @@ def parse_report(name: str) -> list[dict] | None:
     path = downloads.latest_file(name)
     if path is None:
         return None
-    return parse_xlsx(path)
+    return _parse_file(path)
 
 
 def parse_report_history(name: str) -> list[dict] | None:
@@ -37,5 +47,5 @@ def parse_report_history(name: str) -> list[dict] | None:
         return None
     records = []
     for path in paths:
-        records.extend(parse_xlsx(path))
+        records.extend(_parse_file(path))
     return records

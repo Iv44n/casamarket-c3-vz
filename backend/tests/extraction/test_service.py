@@ -34,6 +34,7 @@ _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 ATTENTIONS_EXPORT = reports.EXPORT_MECHANISMS["attention"].export_endpoint
 CALLS_EXPORT = reports.CALLS_EXPORT_ENDPOINT
 CONTACTS_EXPORT = reports.CONTACTS_EXPORT_ENDPOINT
+TRANSFER_EXPORT = reports.TRANSFER_EXPORT_ENDPOINT
 ATTENTION_MASSIVE = reports.EXPORT_MECHANISMS["attention"].massive_endpoint
 LIST = reports.MASSIVE_LIST_ENDPOINT
 
@@ -53,6 +54,7 @@ def _download_steps() -> list[tuple[str, httpx.Response]]:
         (CALLS_EXPORT, _file_response()),
         (CALLS_EXPORT, _file_response()),
         (CONTACTS_EXPORT, _file_response()),
+        (TRANSFER_EXPORT, _file_response()),
     ]
 
 
@@ -62,6 +64,7 @@ def _backfill_steps() -> list[tuple[str, httpx.Response]]:
         (ATTENTIONS_EXPORT, _file_response()),
         (CALLS_EXPORT, _file_response()),
         (CALLS_EXPORT, _file_response()),
+        (TRANSFER_EXPORT, _file_response()),
     ]
 
 
@@ -89,6 +92,7 @@ def test_run_all_downloads_everything_and_never_touches_the_massive_cycle():
         "callincoming",
         "calloutgoing",
         "contacts",
+        "transfer",
     }
     assert all(outcome.error is None for outcome in run.jobs)
     assert run.ok is True
@@ -107,11 +111,11 @@ def test_run_all_collects_a_failed_job_without_aborting_the_rest():
     failed = next(o for o in run.jobs if o.job.name == "attention")
     assert failed.error is not None
     assert failed.result is None
-    assert sum(1 for o in run.jobs if o.error is None) == 4
+    assert sum(1 for o in run.jobs if o.error is None) == 5
     assert run.ok is False
 
 
-def test_run_backfill_jobs_downloads_only_the_four_dated_families():
+def test_run_backfill_jobs_downloads_only_the_five_dated_families():
     client = _sequenced_client(_backfill_steps())
 
     run = service.run_backfill_jobs(client, datetime.date(2026, 8, 10))
@@ -121,6 +125,7 @@ def test_run_backfill_jobs_downloads_only_the_four_dated_families():
         "outboundattention",
         "callincoming",
         "calloutgoing",
+        "transfer",
     }
     assert all(outcome.job.file_date == datetime.date(2026, 8, 10) for outcome in run.jobs)
     assert all(outcome.error is None for outcome in run.jobs)
@@ -199,7 +204,7 @@ def test_run_massive_logs_in_then_advances_one_step_of_the_massive_cycle():
     assert result.ok is True
 
 
-def test_run_backfill_logs_in_then_downloads_only_the_four_dated_families():
+def test_run_backfill_logs_in_then_downloads_only_the_five_dated_families():
     steps = _login_steps() + _backfill_steps()
     remaining = list(steps)
 

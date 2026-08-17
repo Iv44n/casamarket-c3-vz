@@ -4,7 +4,14 @@ from ..extraction import parsing
 
 router = APIRouter(prefix="/data", tags=["data"])
 
-KNOWN_REPORTS = {"attention", "outboundattention", "callincoming", "calloutgoing", "contacts"}
+KNOWN_REPORTS = {
+    "attention",
+    "outboundattention",
+    "callincoming",
+    "calloutgoing",
+    "contacts",
+    "transfer",
+}
 
 
 @router.get("/{report_name}")

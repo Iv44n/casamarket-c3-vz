@@ -104,16 +104,33 @@ def _contacts_job() -> DownloadJob:
     )
 
 
+def _transfer_job(target_date: date | None = None) -> DownloadJob:
+    day = (target_date or config.hoy()).isoformat()
+    params = {
+        "date_init": f"{day} 00:00",
+        "date_end": f"{day} 23:59",
+        **reports.TRANSFER_EXPORT_DEFAULT_PARAMS,
+    }
+    return DownloadJob(
+        name="transfer",
+        endpoint=reports.TRANSFER_EXPORT_ENDPOINT,
+        params=params,
+        file_date=target_date or config.hoy(),
+    )
+
+
 def build_jobs() -> list[DownloadJob]:
     jobs = [_attention_job(name) for name in reports.EXPORT_MECHANISMS]
     jobs += [_call_job(name) for name in reports.CALL_EXPORT_MECHANISMS]
     jobs.append(_contacts_job())
+    jobs.append(_transfer_job())
     return jobs
 
 
 def build_backfill_jobs(target_date: date) -> list[DownloadJob]:
     jobs = [_attention_job(name, target_date) for name in reports.EXPORT_MECHANISMS]
     jobs += [_call_job(name, target_date) for name in reports.CALL_EXPORT_MECHANISMS]
+    jobs.append(_transfer_job(target_date))
     return jobs
 
 

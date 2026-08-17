@@ -4,7 +4,8 @@ export const REPORT_NAMES = [
   'outboundattention',
   'callincoming',
   'calloutgoing',
-  'contacts'
+  'contacts',
+  'transfer'
 ] as const
 export type ReportName = (typeof REPORT_NAMES)[number]
 export const reportNameSchema = z.object({
@@ -59,7 +60,7 @@ export const backfillRequestSchema = z.object({
 
 export const INCIDENT_CATEGORIES = ['ambito', 'origen', 'tipo'] as const
 export type IncidentCategory = (typeof INCIDENT_CATEGORIES)[number]
-export const ATENCIONES_VIEWS = ['resumen', 'incidencias'] as const
+export const ATENCIONES_VIEWS = ['resumen', 'incidencias', 'demoras'] as const
 export type AtencionesView = (typeof ATENCIONES_VIEWS)[number]
 export const attentionsSearchSchema = z.object({
   direction: z.enum(ATTENTION_FILTERS).default('all'),
@@ -77,6 +78,7 @@ export const attentionsSearchSchema = z.object({
   view: z.enum(ATENCIONES_VIEWS).default('resumen'),
   category: z.enum(INCIDENT_CATEGORIES).default('ambito'),
   agente: z.string().default('all'),
+  campana: z.string().default('all'),
   date: dateFilterValue.default(todayIsoDate)
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
@@ -114,6 +116,17 @@ export type DirectionAnalytics = {
     totalSeconds: number
     sampleCount: number
   }[]
+  openAttentions: OpenAttentionRecord[]
+}
+export type OpenAttentionRecord = {
+  idAtencion: string
+  cliente: string
+  agente: string
+  campana: string
+  direction: AttentionDirection
+  startEpochMs: number | null
+  transferredBy: string | null
+  withAgentSinceMs: number | null
 }
 export type AttentionsAnalytics = {
   incoming: DirectionAnalytics

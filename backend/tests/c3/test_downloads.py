@@ -10,7 +10,7 @@ from app import config
 from app.c3 import downloads
 
 
-def test_build_jobs_returns_the_five_expected_names():
+def test_build_jobs_returns_the_six_expected_names():
     names = {job.name for job in downloads.build_jobs()}
 
     assert names == {
@@ -19,6 +19,7 @@ def test_build_jobs_returns_the_five_expected_names():
         "callincoming",
         "calloutgoing",
         "contacts",
+        "transfer",
     }
 
 
@@ -75,12 +76,24 @@ def test_contacts_job_has_no_date_range():
     assert job.params["company_id"] == "ALL"
 
 
+def test_transfer_job_uses_today_00_00_to_23_59_and_no_filters():
+    job = _job("transfer")
+
+    assert DATE_RANGE_RE.match(job.params["date_init"])
+    assert job.params["date_init"].endswith("00:00")
+    assert job.params["date_end"].endswith("23:59")
+    assert job.endpoint == "/user/report_message/transfer/export"
+    assert job.params["agent_id_origin"] == ""
+    assert job.params["dest_type"] == ""
+    assert job.params["status"] == ""
+
+
 def test_build_jobs_file_date_defaults_to_today_for_every_job():
     for job in downloads.build_jobs():
         assert job.file_date == config.hoy()
 
 
-def test_build_backfill_jobs_covers_the_four_dated_families_not_contacts():
+def test_build_backfill_jobs_covers_the_five_dated_families_not_contacts():
     target = datetime.date(2026, 8, 10)
 
     jobs = downloads.build_backfill_jobs(target)
@@ -90,6 +103,7 @@ def test_build_backfill_jobs_covers_the_four_dated_families_not_contacts():
         "outboundattention",
         "callincoming",
         "calloutgoing",
+        "transfer",
     }
 
 

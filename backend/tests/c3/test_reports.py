@@ -94,3 +94,14 @@ def test_call_export_mechanisms_are_not_symmetric():
 def test_contacts_export_has_no_date_range_params():
     assert "date_init" not in reports.CONTACTS_EXPORT_DEFAULT_PARAMS
     assert reports.CONTACTS_EXPORT_DEFAULT_PARAMS["company_id"] == "ALL"
+
+
+def test_transfer_export_endpoint_and_default_filters():
+    assert reports.TRANSFER_EXPORT_ENDPOINT == "/user/report_message/transfer/export"
+    assert reports.TRANSFER_EXPORT_DEFAULT_PARAMS == {
+        "agent_id_origin": "",
+        "dest_type": "",
+        "dest_id": "",
+        "number": "",
+        "status": "",
+    }

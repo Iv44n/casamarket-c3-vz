@@ -19,12 +19,9 @@ const MIN_BAR_PX = 4
 
 function TicketList({ items }: { items: IncidentRecord[] }) {
   return (
-    <div className="flex max-h-80 flex-col gap-1 overflow-y-auto rounded-xl bg-foreground/[0.03] p-2">
+    <div className="flex max-h-80 flex-col gap-1 overflow-y-auto rounded-xl bg-foreground/3 p-2">
       {items.map((item, i) => (
-        <div
-          key={i}
-          className="rounded-lg px-2 py-1.5 hover:bg-foreground/[0.04]"
-        >
+        <div key={i} className="rounded-lg px-2 py-1.5 hover:bg-foreground/4">
           <p className="text-foreground text-sm">
             {item.descripcion || (
               <span className="text-muted-foreground">Sin descripción</span>
@@ -74,7 +71,7 @@ function HierarchyRow({
         {entry.label}
       </span>
       <span
-        className="h-[17px] shrink-0 rounded-[5px]"
+        className="h-4.25 shrink-0 rounded-[5px]"
         style={{ width: barWidth, background: color }}
       />
       <span
@@ -91,8 +88,8 @@ function HierarchyRow({
         type="button"
         onClick={() => setExpanded(value => !value)}
         className={cn(
-          'flex w-full cursor-pointer items-center justify-end gap-2.5 rounded-md px-1 py-1.5 text-left transition-colors hover:bg-foreground/[0.04]',
-          expanded && 'bg-foreground/[0.05]'
+          'flex w-full cursor-pointer items-center justify-end gap-2.5 rounded-md px-1 py-1.5 text-left transition-colors hover:bg-foreground/4',
+          expanded && 'bg-foreground/5'
         )}
       >
         {rowContent}

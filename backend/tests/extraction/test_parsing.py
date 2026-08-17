@@ -63,6 +63,26 @@ def test_parse_xlsx_skips_fully_empty_rows(tmp_path: Path):
     assert records == [{"Nombre": "Ana", "Estado": "Abierta"}]
 
 
+def test_parse_csv_reads_utf8_bom_and_quoted_commas(tmp_path: Path):
+    path = tmp_path / "reporte.csv"
+    path.write_bytes(
+        "﻿Nombre,Destino\r\nAna,\"CARLOS, GABRIEL\"\r\n".encode("utf-8")
+    )
+
+    assert parsing.parse_csv(path) == [{"Nombre": "Ana", "Destino": "CARLOS, GABRIEL"}]
+
+
+def test_parse_report_dispatches_to_csv_by_extension(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(config, "DOWNLOADS_DIR", tmp_path)
+    (tmp_path / "transfer_2026-08-17_Whatsapp_transferecias.csv").write_bytes(
+        "﻿Nombre\r\nAna\r\n".encode("utf-8")
+    )
+
+    assert parsing.parse_report("transfer") == [{"Nombre": "Ana"}]
+
+
 def test_parse_report_returns_none_when_nothing_downloaded_yet(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

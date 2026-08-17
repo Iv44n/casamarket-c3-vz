@@ -1,5 +1,9 @@
 import { createServerFn } from '@tanstack/react-start'
-import { filterRowsByDate } from '#/lib/date-filter'
+import {
+  filterRowsByDate,
+  parseLimaDateTime,
+  parseLimaIsoDateTime
+} from '#/lib/date-filter'
 import { parseDurationToSeconds } from '#/lib/duration'
 import {
   deriveIncidentAnalytics,
@@ -19,6 +23,7 @@ import {
   triggerMassiveExtractionRefresh
 } from './backend.server'
 import type {
+  AttentionDirection,
   AttentionsAnalytics,
   DirectionAnalytics,
   IncidentAnalytics,
@@ -33,6 +38,30 @@ import {
 } from './schemas'
 
 const ATTENTION_DATE_FIELD = 'Fecha registro'
+
+type LastTransfer = {
+  agenteOrigen: string
+  epochMs: number
+}
+
+function buildLastTransferIndex(rows: ReportRow[]): Map<string, LastTransfer> {
+  const index = new Map<string, LastTransfer>()
+  for (const row of rows) {
+    const idRaw = row['Atención ID']
+    if (typeof idRaw !== 'string' && typeof idRaw !== 'number') continue
+    const id = String(idRaw).trim()
+    const epochMs = parseLimaIsoDateTime(row.Fecha, row.Hora)
+    if (epochMs === null) continue
+    const current = index.get(id)
+    if (current && current.epochMs >= epochMs) continue
+    const agenteOrigen = row['Agente Origen']
+    index.set(id, {
+      agenteOrigen: typeof agenteOrigen === 'string' ? agenteOrigen : '',
+      epochMs
+    })
+  }
+  return index
+}
 
 export const getReportRows = createServerFn({ method: 'GET' })
   .validator(reportNameSchema)
@@ -65,7 +94,9 @@ export const getReportSummary = createServerFn({ method: 'GET' })
   })
 
 function deriveDirectionAnalytics(
-  rows: ReportRow[] | null
+  rows: ReportRow[] | null,
+  direction: AttentionDirection,
+  transfersById: Map<string, LastTransfer>
 ): DirectionAnalytics {
   if (rows === null) {
     return {
@@ -75,7 +106,8 @@ function deriveDirectionAnalytics(
       agentCounts: [],
       campaignCounts: [],
       agentCampaignCounts: [],
-      agentAttentionSeconds: []
+      agentAttentionSeconds: [],
+      openAttentions: []
     }
   }
   const statusCounts = new Map<string, number>()
@@ -89,6 +121,7 @@ function deriveDirectionAnalytics(
     string,
     Map<string, { totalSeconds: number; sampleCount: number }>
   >()
+  const openAttentions: DirectionAnalytics['openAttentions'] = []
 
   for (const row of rows) {
     const estado = row.Estado
@@ -139,6 +172,36 @@ function deriveDirectionAnalytics(
       estadoAttention.set(estadoKey, current)
       agentEstadoAttentionSeconds.set(agenteKey, estadoAttention)
     }
+
+    if (estadoKey === 'Abierta') {
+      const idAtencionRaw = row['ID atención']
+      const idAtencion =
+        typeof idAtencionRaw === 'number' || typeof idAtencionRaw === 'string'
+          ? String(idAtencionRaw)
+          : ''
+      const cliente = row['Nombre de cliente']
+      const campana = row.Campaña
+      const startEpochMs = parseLimaDateTime(
+        row['Fecha inicio'],
+        row['Hora inicio']
+      )
+      const lastTransfer = idAtencion
+        ? transfersById.get(idAtencion)
+        : undefined
+      openAttentions.push({
+        idAtencion,
+        cliente: typeof cliente === 'string' ? cliente : '',
+        agente: agenteKey,
+        campana:
+          typeof campana === 'string' && campana.trim() !== ''
+            ? campana
+            : 'Sin campaña',
+        direction,
+        startEpochMs,
+        transferredBy: lastTransfer?.agenteOrigen ?? null,
+        withAgentSinceMs: lastTransfer?.epochMs ?? startEpochMs
+      })
+    }
   }
 
   return {
@@ -186,27 +249,34 @@ function deriveDirectionAnalytics(
             sampleCount
           })
         )
-    )
+    ),
+    openAttentions
   }
 }
 
 export const getAttentionsAnalytics = createServerFn({ method: 'GET' })
   .validator(dateFilterSchema)
   .handler(async ({ data }): Promise<AttentionsAnalytics> => {
-    const [attentionRows, outboundRows] = await Promise.all([
+    const [attentionRows, outboundRows, transferRows] = await Promise.all([
       fetchReportRowsHistory('attention'),
-      fetchReportRowsHistory('outboundattention')
+      fetchReportRowsHistory('outboundattention'),
+      fetchReportRowsHistory('transfer')
     ])
+    const transfersById = buildLastTransferIndex(transferRows ?? [])
     return {
       incoming: deriveDirectionAnalytics(
         attentionRows === null
           ? null
-          : filterRowsByDate(attentionRows, ATTENTION_DATE_FIELD, data.date)
+          : filterRowsByDate(attentionRows, ATTENTION_DATE_FIELD, data.date),
+        'incoming',
+        transfersById
       ),
       outgoing: deriveDirectionAnalytics(
         outboundRows === null
           ? null
-          : filterRowsByDate(outboundRows, ATTENTION_DATE_FIELD, data.date)
+          : filterRowsByDate(outboundRows, ATTENTION_DATE_FIELD, data.date),
+        'outgoing',
+        transfersById
       )
     }
   })

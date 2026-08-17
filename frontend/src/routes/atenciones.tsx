@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { AgentWorkloadChart } from '#/components/agent-workload-chart'
 import { CampaignWorkloadChart } from '#/components/campaign-workload-chart'
 import { IncidentHierarchy } from '#/components/incident-hierarchy'
+import { OpenAttentionsTable } from '#/components/open-attentions-table'
 import { StatusDonutChart } from '#/components/status-donut-chart'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
@@ -113,8 +114,16 @@ export const Route = createFileRoute('/atenciones')({
 function AtencionesPage() {
   const { attentions: analytics, incidents: incidentAnalytics } =
     Route.useLoaderData()
-  const { direction, agentLimit, estados, view, category, agente, date } =
-    Route.useSearch()
+  const {
+    direction,
+    agentLimit,
+    estados,
+    view,
+    category,
+    agente,
+    campana,
+    date
+  } = Route.useSearch()
   const navigate = Route.useNavigate()
   const router = useRouter()
   const refresh = useServerFn(triggerRefresh)
@@ -140,6 +149,24 @@ function AtencionesPage() {
       : incidentAnalytics.records.filter(
           record => incidentAgentLabel(record.agente) === agente
         )
+  const openAttentionsAvailable =
+    analytics.incoming.available || analytics.outgoing.available
+  const allOpenAttentions = [
+    ...analytics.incoming.openAttentions,
+    ...analytics.outgoing.openAttentions
+  ]
+  const availableOpenCampaigns = [
+    ...new Set(allOpenAttentions.map(record => record.campana))
+  ].sort((a, b) => a.localeCompare(b))
+  const availableOpenAgents = [
+    ...new Set(allOpenAttentions.map(record => record.agente))
+  ].sort((a, b) => a.localeCompare(b))
+  const openAttentions = allOpenAttentions.filter(
+    record =>
+      (direction === 'all' || record.direction === direction) &&
+      (campana === 'all' || record.campana === campana) &&
+      (agente === 'all' || record.agente === agente)
+  )
   const isPastDaySelected = date !== 'all' && date !== todayIsoDate()
   async function handleRefresh() {
     setPending(true)
@@ -341,6 +368,7 @@ function AtencionesPage() {
         <TabsList className="w-fit">
           <TabsTrigger value="resumen">Resumen</TabsTrigger>
           <TabsTrigger value="incidencias">Incidencias</TabsTrigger>
+          <TabsTrigger value="demoras">Demoras</TabsTrigger>
         </TabsList>
 
         <TabsContent value="resumen" className="mt-4">
@@ -565,6 +593,129 @@ function AtencionesPage() {
                 </Tabs>
               </CardContent>
             </Card>
+          )}
+        </TabsContent>
+
+        <TabsContent value="demoras" className="mt-4">
+          <p className="text-sm text-muted-foreground">
+            Atenciones que siguen abiertas para la fecha seleccionada, ordenadas
+            por cuanto tiempo llevan corriendo. Si eliges un dia pasado, refleja
+            el estado al momento de la ultima descarga de ese dia, no
+            necesariamente el estado actual.
+          </p>
+
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-muted-foreground">
+                Dirección
+              </span>
+              <Select
+                value={direction}
+                onValueChange={value =>
+                  navigate({
+                    search: prev => ({
+                      ...prev,
+                      direction: value as AttentionFilter
+                    }),
+                    replace: true
+                  })
+                }
+              >
+                <SelectTrigger className="w-36">
+                  <SelectValue>
+                    {(value: AttentionFilter) => FILTER_LABEL[value]}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {ATTENTION_FILTERS.map(filter => (
+                    <SelectItem key={filter} value={filter}>
+                      {FILTER_LABEL[filter]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {availableOpenCampaigns.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-muted-foreground">
+                  Campaña
+                </span>
+                <Select
+                  value={campana}
+                  onValueChange={value =>
+                    navigate({
+                      search: prev => ({ ...prev, campana: value ?? 'all' }),
+                      replace: true
+                    })
+                  }
+                >
+                  <SelectTrigger className="min-w-40">
+                    <SelectValue>
+                      {(value: string) =>
+                        value === 'all' ? 'Todas las campañas' : value
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todas las campañas</SelectItem>
+                    {availableOpenCampaigns.map(name => (
+                      <SelectItem key={name} value={name}>
+                        {name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {availableOpenAgents.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-muted-foreground">
+                  Agente
+                </span>
+                <Select
+                  value={agente}
+                  onValueChange={value =>
+                    navigate({
+                      search: prev => ({ ...prev, agente: value ?? 'all' }),
+                      replace: true
+                    })
+                  }
+                >
+                  <SelectTrigger className="min-w-56">
+                    <SelectValue>
+                      {(value: string) =>
+                        value === 'all' ? 'Todos los agentes' : value
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos los agentes</SelectItem>
+                    {availableOpenAgents.map(name => (
+                      <SelectItem key={name} value={name}>
+                        {name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+
+          {!openAttentionsAvailable ? (
+            <Card className="mt-4">
+              <CardContent className="text-sm text-muted-foreground">
+                Todavia no se descargo ningun archivo de atenciones. Dispara un
+                refresh desde{' '}
+                <Link to="/status" className="text-primary underline">
+                  /status
+                </Link>
+                .
+              </CardContent>
+            </Card>
+          ) : (
+            <OpenAttentionsTable records={openAttentions} />
           )}
         </TabsContent>
       </Tabs>

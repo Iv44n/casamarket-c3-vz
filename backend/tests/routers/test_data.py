@@ -33,6 +33,17 @@ def test_get_report_returns_parsed_rows(client: TestClient, tmp_path: Path):
     assert response.json() == [{"Nombre": "Ana"}]
 
 
+def test_get_report_parses_csv_for_transfer(client: TestClient, tmp_path: Path):
+    (tmp_path / "transfer_2026-08-17_Whatsapp_transferecias.csv").write_bytes(
+        "﻿Nombre\r\nAna\r\n".encode("utf-8")
+    )
+
+    response = client.get("/data/transfer")
+
+    assert response.status_code == 200
+    assert response.json() == [{"Nombre": "Ana"}]
+
+
 def test_get_report_404s_for_unknown_report_name(client: TestClient):
     response = client.get("/data/not-a-real-report")
 

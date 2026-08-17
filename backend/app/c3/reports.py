@@ -107,6 +107,16 @@ CONTACTS_EXPORT_DEFAULT_PARAMS = {
     "contact": "",
 }
 
+TRANSFER_EXPORT_ENDPOINT = "/user/report_message/transfer/export"
+
+TRANSFER_EXPORT_DEFAULT_PARAMS = {
+    "agent_id_origin": "",
+    "dest_type": "",
+    "dest_id": "",
+    "number": "",
+    "status": "",
+}
+
 MASSIVE_LIST_ENDPOINT = "/user/report_general/get_massives"
 
 

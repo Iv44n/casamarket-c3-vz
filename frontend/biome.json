@@ -45,6 +45,14 @@
           "suspicious": { "noArrayIndexKey": "off" }
         }
       }
+    },
+    {
+      "includes": ["**/src/components/open-attentions-table.tsx"],
+      "linter": {
+        "rules": {
+          "suspicious": { "noArrayIndexKey": "off" }
+        }
+      }
     }
   ],
   "javascript": {
