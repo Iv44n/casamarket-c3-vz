@@ -59,9 +59,6 @@ export async function fetchDownloadedFiles(): Promise<DownloadedFile[]> {
   const response = await backendFetch('/extraction/files')
   return response.json()
 }
-// Not routed through backendFetch: a 404 here means "the file is already
-// gone", a real error for a delete action, unlike the read paths above where
-// backendFetch's blanket 404-is-fine handling means "nothing downloaded yet".
 export async function deleteDownloadedFile(filename: string): Promise<void> {
   const path = `/extraction/files/${encodeURIComponent(filename)}`
   const response = await fetch(`${BASE_URL}${path}`, { method: 'DELETE' })

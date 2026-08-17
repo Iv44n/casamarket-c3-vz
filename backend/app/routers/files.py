@@ -8,12 +8,6 @@ from .data import KNOWN_REPORTS
 
 router = APIRouter(prefix="/extraction/files", tags=["extraction"])
 
-# Same shape all_files()/latest_file() already glob for (c3/downloads.py):
-# "{known report name}_YYYY-MM-DD_...". Anchored and built only from
-# KNOWN_REPORTS so it never matches the massive zips (attention_masivo_*),
-# stray lock files, or anything else that isn't a real daily download -- and
-# `[^/]+` (not `.+`) keeps a path-traversal filename from ever reconstructing
-# to somewhere outside DOWNLOADS_DIR in delete_file below.
 _FILENAME_RE = re.compile(
     r"^(?P<name>" + "|".join(sorted(KNOWN_REPORTS)) + r")_(?P<date>\d{4}-\d{2}-\d{2})_[^/]+$"
 )

@@ -195,9 +195,6 @@ export const getDownloadedFiles = createServerFn({ method: 'GET' }).handler(
   }
 )
 
-// method: 'POST' -- createServerFn only supports GET/POST (see
-// @tanstack/start-client-core's Method type); the actual backend call this
-// wraps is a real HTTP DELETE (backend.server.ts's deleteDownloadedFile).
 export const deleteFile = createServerFn({ method: 'POST' })
   .validator(deleteFileSchema)
   .handler(async ({ data }) => {

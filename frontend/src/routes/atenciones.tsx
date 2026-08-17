@@ -121,9 +121,6 @@ function AtencionesPage() {
     analytics,
     direction
   )
-  // 'all' and "today" both mean the regular refresh already covers it (it
-  // only ever fetches today anyway) -- only an actual past day needs the
-  // backfill path instead, to bring back a day the regular refresh can't.
   const isPastDaySelected = date !== 'all' && date !== todayIsoDate()
   async function handleRefresh() {
     setPending(true)

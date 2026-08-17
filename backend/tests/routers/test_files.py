@@ -96,9 +96,6 @@ def test_delete_file_400s_for_a_name_not_matching_the_download_convention(
 
 
 def test_delete_file_rejects_a_path_traversal_attempt(client: TestClient):
-    # Starlette's default path converter never matches an encoded slash within
-    # a single {filename} segment, so this 404s at the routing layer -- it
-    # never even reaches delete_file's own _FILENAME_RE check.
     response = client.delete(
         "/extraction/files/attention_2026-08-13_..%2F..%2F..%2Fetc%2Fpasswd"
     )

@@ -42,12 +42,6 @@ export type DateFilter = z.infer<typeof dateFilterValue>
 export const dateFilterSchema = z.object({
   date: dateFilterValue.default('all')
 })
-// "Today" in America/Lima specifically -- not the executing machine's local
-// time, which (unlike the browser) could be anything once this runs
-// server-side during SSR. Mirrors the backend's config.hoy() (see
-// backend/app/config.py), which uses the same zone for the same reason: the
-// server responds in GMT, so a naive local-clock "today" can drift by a day
-// near midnight.
 export function todayIsoDate(): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Lima',
@@ -59,21 +53,16 @@ export function todayIsoDate(): string {
     parts.find(p => p.type === type)?.value ?? ''
   return `${part('year')}-${part('month')}-${part('day')}`
 }
-// Unlike dateFilterSchema above, backfill always targets one concrete day --
-// there's no 'all' concept for "re-fetch every day from C3".
 export const backfillRequestSchema = z.object({
   date: z.string().regex(ISO_DATE_REGEX)
 })
-// Ambito first: it's the richest dimension to drill into (ambito -> origen ->
-// tipo), see DIMENSION_CHAIN in lib/incident-analytics.ts.
+
 export const INCIDENT_CATEGORIES = ['ambito', 'origen', 'tipo'] as const
 export type IncidentCategory = (typeof INCIDENT_CATEGORIES)[number]
 export const ATENCIONES_VIEWS = ['resumen', 'incidencias'] as const
 export type AtencionesView = (typeof ATENCIONES_VIEWS)[number]
 export const attentionsSearchSchema = z.object({
   direction: z.enum(ATTENTION_FILTERS).default('all'),
-  // Kept in sync by hand with AGENT_LIMIT_OPTIONS -- z.union needs a literal
-  // per option, it can't be built from that array's mixed number/string type.
   agentLimit: z
     .union([
       z.literal(5),
@@ -84,18 +73,9 @@ export const attentionsSearchSchema = z.object({
       z.literal('all')
     ])
     .default(10),
-  // Which "estado" values to include in the charts. 'all' means no filter --
-  // the set of valid estados comes from the backend data itself, so it can't
-  // be validated against a fixed enum here. Once the user unchecks anything,
-  // this becomes an explicit list (which may be empty, meaning "show none").
   estados: z.union([z.literal('all'), z.array(z.string())]).default('all'),
-  // Which of the page's two tabs is showing.
   view: z.enum(ATENCIONES_VIEWS).default('resumen'),
-  // Active dimension tab within the "incidencias" view.
   category: z.enum(INCIDENT_CATEGORIES).default('ambito'),
-  // Defaults to today (not 'all') -- a fresh visit should show today's
-  // atenciones, not every historical day merged together; 'all' is still
-  // reachable via the clear ("Quitar filtro de fecha") button.
   date: dateFilterValue.default(todayIsoDate)
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
@@ -116,8 +96,6 @@ export type DirectionAnalytics = {
     estado: string
     count: number
   }[]
-  // "Campaña" in the raw C3 export -- the case's business type (Soporte,
-  // Implementacion, Activaciones, etc), not a marketing campaign.
   campaignCounts: {
     campana: string
     estado: string

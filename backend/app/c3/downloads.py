@@ -27,10 +27,6 @@ class DownloadJob:
     name: str
     endpoint: str
     params: dict = field(default_factory=dict)
-    # The day this job's *file* gets stamped with in run_job() -- normally
-    # "today" (a regular refresh), but a backfill job sets this to whatever
-    # past day it's actually fetching, so all_files()/parse_report_history()
-    # file it under the right day rather than under today.
     file_date: date = field(default_factory=config.hoy)
 
 
@@ -116,13 +112,6 @@ def build_jobs() -> list[DownloadJob]:
 
 
 def build_backfill_jobs(target_date: date) -> list[DownloadJob]:
-    """Jobs to (re-)fetch a single past day for the 4 dated families only.
-
-    Contacts is deliberately excluded: its export has no date range at all
-    (see attention_base_params vs _contacts_job) -- it's always today's whole
-    roster, so "backfilling" it under a past date would just save today's
-    roster mislabeled as that day's, which is wrong, not merely redundant.
-    """
     jobs = [_attention_job(name, target_date) for name in reports.EXPORT_MECHANISMS]
     jobs += [_call_job(name, target_date) for name in reports.CALL_EXPORT_MECHANISMS]
     return jobs
