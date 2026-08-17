@@ -28,7 +28,8 @@ import type {
   DirectionAnalytics,
   IncidentAnalytics,
   ReportRow,
-  ReportSummary
+  ReportSummary,
+  TransferHop
 } from './schemas'
 import {
   backfillRequestSchema,
@@ -39,32 +40,30 @@ import {
 
 const ATTENTION_DATE_FIELD = 'Fecha registro'
 
-type LastTransfer = {
-  agenteOrigen: string
-  destType: string
-  destino: string
-  epochMs: number
-}
-
-function buildLastTransferIndex(rows: ReportRow[]): Map<string, LastTransfer> {
-  const index = new Map<string, LastTransfer>()
+function buildTransferChainIndex(
+  rows: ReportRow[]
+): Map<string, TransferHop[]> {
+  const index = new Map<string, TransferHop[]>()
   for (const row of rows) {
     const idRaw = row['Atención ID']
     if (typeof idRaw !== 'string' && typeof idRaw !== 'number') continue
     const id = String(idRaw).trim()
     const epochMs = parseLimaIsoDateTime(row.Fecha, row.Hora)
     if (epochMs === null) continue
-    const current = index.get(id)
-    if (current && current.epochMs >= epochMs) continue
     const agenteOrigen = row['Agente Origen']
     const destType = row['Tipo destino']
     const destino = row.Destino
-    index.set(id, {
+    const chain = index.get(id) ?? []
+    chain.push({
       agenteOrigen: typeof agenteOrigen === 'string' ? agenteOrigen : '',
       destType: typeof destType === 'string' ? destType : '',
       destino: typeof destino === 'string' ? destino : '',
       epochMs
     })
+    index.set(id, chain)
+  }
+  for (const chain of index.values()) {
+    chain.sort((a, b) => a.epochMs - b.epochMs)
   }
   return index
 }
@@ -102,7 +101,7 @@ export const getReportSummary = createServerFn({ method: 'GET' })
 function deriveDirectionAnalytics(
   rows: ReportRow[] | null,
   direction: AttentionDirection,
-  transfersById: Map<string, LastTransfer>
+  transfersById: Map<string, TransferHop[]>
 ): DirectionAnalytics {
   if (rows === null) {
     return {
@@ -191,9 +190,8 @@ function deriveDirectionAnalytics(
         row['Fecha inicio'],
         row['Hora inicio']
       )
-      const lastTransfer = idAtencion
-        ? transfersById.get(idAtencion)
-        : undefined
+      const chain = idAtencion ? (transfersById.get(idAtencion) ?? []) : []
+      const lastHop = chain.length > 0 ? chain[chain.length - 1] : undefined
       openAttentions.push({
         idAtencion,
         cliente: typeof cliente === 'string' ? cliente : '',
@@ -204,10 +202,11 @@ function deriveDirectionAnalytics(
             : 'Sin campaña',
         direction,
         startEpochMs,
-        transferredBy: lastTransfer?.agenteOrigen ?? null,
-        transferDestType: lastTransfer?.destType ?? null,
-        transferDestino: lastTransfer?.destino ?? null,
-        withAgentSinceMs: lastTransfer?.epochMs ?? startEpochMs
+        transferredBy: lastHop?.agenteOrigen ?? null,
+        transferDestType: lastHop?.destType ?? null,
+        transferDestino: lastHop?.destino ?? null,
+        transferChain: chain,
+        withAgentSinceMs: lastHop?.epochMs ?? startEpochMs
       })
     }
   }
@@ -270,7 +269,7 @@ export const getAttentionsAnalytics = createServerFn({ method: 'GET' })
       fetchReportRowsHistory('outboundattention'),
       fetchReportRowsHistory('transfer')
     ])
-    const transfersById = buildLastTransferIndex(transferRows ?? [])
+    const transfersById = buildTransferChainIndex(transferRows ?? [])
     return {
       incoming: deriveDirectionAnalytics(
         attentionRows === null

@@ -118,6 +118,12 @@ export type DirectionAnalytics = {
   }[]
   openAttentions: OpenAttentionRecord[]
 }
+export type TransferHop = {
+  agenteOrigen: string
+  destType: string
+  destino: string
+  epochMs: number
+}
 export type OpenAttentionRecord = {
   idAtencion: string
   cliente: string
@@ -128,6 +134,7 @@ export type OpenAttentionRecord = {
   transferredBy: string | null
   transferDestType: string | null
   transferDestino: string | null
+  transferChain: TransferHop[]
   withAgentSinceMs: number | null
 }
 export type AttentionsAnalytics = {

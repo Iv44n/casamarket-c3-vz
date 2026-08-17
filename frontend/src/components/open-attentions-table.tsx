@@ -72,6 +72,12 @@ function TruncatedCell({
   )
 }
 
+function hopLabel(hop: OpenAttentionRecord['transferChain'][number]): string {
+  return hop.destType === 'Campaña'
+    ? `a la campaña "${hop.destino}"`
+    : `al agente "${hop.destino}"`
+}
+
 function TransferredByCell({
   record,
   className
@@ -79,20 +85,13 @@ function TransferredByCell({
   record: OpenAttentionRecord
   className: string
 }) {
-  if (record.transferredBy === null) {
+  if (record.transferredBy === null || record.transferChain.length === 0) {
     return <span className="text-muted-foreground">—</span>
   }
   const color = record.transferDestType
     ? TRANSFER_DEST_COLOR[record.transferDestType]
     : undefined
-  const destinoLabel =
-    record.transferDestType && record.transferDestino
-      ? `${record.transferredBy} transfirió ${
-          record.transferDestType === 'Campaña'
-            ? `a la campaña "${record.transferDestino}"`
-            : `al agente "${record.transferDestino}"`
-        }`
-      : `${record.transferredBy} transfirió este ticket (destino no registrado)`
+  const chain = record.transferChain
   return (
     <Tooltip>
       <TooltipTrigger render={<span className="flex items-center gap-1.5" />}>
@@ -105,8 +104,35 @@ function TransferredByCell({
         <span className={cn('truncate', className)}>
           {record.transferredBy}
         </span>
+        {chain.length > 1 && (
+          <span className="shrink-0 text-[10px] text-muted-foreground">
+            ×{chain.length}
+          </span>
+        )}
       </TooltipTrigger>
-      <TooltipContent>{destinoLabel}</TooltipContent>
+      <TooltipContent className="max-w-sm p-3 text-sm">
+        <div className="flex flex-col gap-2.5">
+          {chain.map((hop, i) => {
+            const hopColor = TRANSFER_DEST_COLOR[hop.destType]
+            return (
+              <div key={i} className="flex items-start gap-2">
+                <span className="shrink-0 text-muted-foreground tabular-nums">
+                  {i + 1}.
+                </span>
+                {hopColor && (
+                  <span
+                    className="mt-1.5 size-1.5 shrink-0 rounded-full"
+                    style={{ background: hopColor }}
+                  />
+                )}
+                <span className="leading-snug">
+                  {hop.agenteOrigen} transfirió {hopLabel(hop)}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      </TooltipContent>
     </Tooltip>
   )
 }
