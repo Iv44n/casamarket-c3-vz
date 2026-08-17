@@ -41,6 +41,8 @@ const ATTENTION_DATE_FIELD = 'Fecha registro'
 
 type LastTransfer = {
   agenteOrigen: string
+  destType: string
+  destino: string
   epochMs: number
 }
 
@@ -55,8 +57,12 @@ function buildLastTransferIndex(rows: ReportRow[]): Map<string, LastTransfer> {
     const current = index.get(id)
     if (current && current.epochMs >= epochMs) continue
     const agenteOrigen = row['Agente Origen']
+    const destType = row['Tipo destino']
+    const destino = row.Destino
     index.set(id, {
       agenteOrigen: typeof agenteOrigen === 'string' ? agenteOrigen : '',
+      destType: typeof destType === 'string' ? destType : '',
+      destino: typeof destino === 'string' ? destino : '',
       epochMs
     })
   }
@@ -199,6 +205,8 @@ function deriveDirectionAnalytics(
         direction,
         startEpochMs,
         transferredBy: lastTransfer?.agenteOrigen ?? null,
+        transferDestType: lastTransfer?.destType ?? null,
+        transferDestino: lastTransfer?.destino ?? null,
         withAgentSinceMs: lastTransfer?.epochMs ?? startEpochMs
       })
     }

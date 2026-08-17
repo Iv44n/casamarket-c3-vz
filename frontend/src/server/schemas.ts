@@ -126,6 +126,8 @@ export type OpenAttentionRecord = {
   direction: AttentionDirection
   startEpochMs: number | null
   transferredBy: string | null
+  transferDestType: string | null
+  transferDestino: string | null
   withAgentSinceMs: number | null
 }
 export type AttentionsAnalytics = {

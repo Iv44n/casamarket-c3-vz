@@ -37,6 +37,10 @@ const DIRECTION_LABEL: Record<OpenAttentionRecord['direction'], string> = {
   outgoing: 'Saliente'
 }
 const STALE_THRESHOLD_SECONDS = 60 * 60
+const TRANSFER_DEST_COLOR: Record<string, string> = {
+  Agente: 'var(--color-chart-3)',
+  Campaña: 'var(--color-chart-5)'
+}
 
 function Cell({ value }: { value: string }) {
   return value.trim() === '' ? (
@@ -64,6 +68,45 @@ function TruncatedCell({
         {value}
       </TooltipTrigger>
       <TooltipContent>{value}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+function TransferredByCell({
+  record,
+  className
+}: {
+  record: OpenAttentionRecord
+  className: string
+}) {
+  if (record.transferredBy === null) {
+    return <span className="text-muted-foreground">—</span>
+  }
+  const color = record.transferDestType
+    ? TRANSFER_DEST_COLOR[record.transferDestType]
+    : undefined
+  const destinoLabel =
+    record.transferDestType && record.transferDestino
+      ? `${record.transferredBy} transfirió ${
+          record.transferDestType === 'Campaña'
+            ? `a la campaña "${record.transferDestino}"`
+            : `al agente "${record.transferDestino}"`
+        }`
+      : `${record.transferredBy} transfirió este ticket (destino no registrado)`
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className="flex items-center gap-1.5" />}>
+        {color && (
+          <span
+            className="size-2 shrink-0 rounded-full"
+            style={{ background: color }}
+          />
+        )}
+        <span className={cn('truncate', className)}>
+          {record.transferredBy}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{destinoLabel}</TooltipContent>
     </Tooltip>
   )
 }
@@ -121,6 +164,22 @@ export function OpenAttentionsTable({
           lleva cada una con su agente actual (desde la ultima transferencia, si
           la hubo).
         </CardDescription>
+        <div className="flex items-center gap-3 text-muted-foreground text-xs">
+          <span className="flex items-center gap-1.5">
+            <span
+              className="size-2 rounded-full"
+              style={{ background: TRANSFER_DEST_COLOR.Agente }}
+            />
+            Transferido a un agente
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span
+              className="size-2 rounded-full"
+              style={{ background: TRANSFER_DEST_COLOR.Campaña }}
+            />
+            Transferido a una campaña
+          </span>
+        </div>
         {staleCount > 0 && (
           <p className="mt-1 flex items-center gap-1.5 text-destructive text-sm">
             <TriangleAlertIcon className="size-4" />
@@ -164,10 +223,7 @@ export function OpenAttentionsTable({
                     <TruncatedCell value={record.agente} className="max-w-36" />
                   </TableCell>
                   <TableCell className="max-w-36 align-top">
-                    <TruncatedCell
-                      value={record.transferredBy ?? ''}
-                      className="max-w-36"
-                    />
+                    <TransferredByCell record={record} className="max-w-32" />
                   </TableCell>
                   <TableCell className="max-w-32 align-top">
                     <TruncatedCell
