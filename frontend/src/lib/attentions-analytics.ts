@@ -104,6 +104,8 @@ export type AgentBarDatum = {
   agente: string
   total: number
   estadoCounts: Record<string, number>
+  campaignCounts: { campana: string; count: number }[]
+  avgAttentionSeconds: number | null
 }
 export function buildAgentRanking(
   analytics: AttentionsAnalytics,
@@ -118,6 +120,11 @@ export function buildAgentRanking(
         ? [analytics.outgoing]
         : [analytics.incoming, analytics.outgoing]
   const merged = new Map<string, Map<string, number>>()
+  const campaignMerged = new Map<string, Map<string, number>>()
+  const attentionMerged = new Map<
+    string,
+    { totalSeconds: number; sampleCount: number }
+  >()
   for (const direction of directions) {
     for (const { agente, estado, count } of direction.agentCounts) {
       if (!estadoAllowed(estado, estadosFilter)) {
@@ -127,15 +134,81 @@ export function buildAgentRanking(
       estadoCounts.set(estado, (estadoCounts.get(estado) ?? 0) + count)
       merged.set(agente, estadoCounts)
     }
+    for (const {
+      agente,
+      campana,
+      estado,
+      count
+    } of direction.agentCampaignCounts) {
+      if (!estadoAllowed(estado, estadosFilter)) {
+        continue
+      }
+      const campanaCounts =
+        campaignMerged.get(agente) ?? new Map<string, number>()
+      campanaCounts.set(campana, (campanaCounts.get(campana) ?? 0) + count)
+      campaignMerged.set(agente, campanaCounts)
+    }
+    for (const {
+      agente,
+      estado,
+      totalSeconds,
+      sampleCount
+    } of direction.agentAttentionSeconds) {
+      if (!estadoAllowed(estado, estadosFilter)) {
+        continue
+      }
+      const current = attentionMerged.get(agente) ?? {
+        totalSeconds: 0,
+        sampleCount: 0
+      }
+      current.totalSeconds += totalSeconds
+      current.sampleCount += sampleCount
+      attentionMerged.set(agente, current)
+    }
   }
   return [...merged.entries()]
-    .map(([agente, estadoCounts]) => ({
-      agente,
-      total: [...estadoCounts.values()].reduce((sum, count) => sum + count, 0),
-      estadoCounts: Object.fromEntries(estadoCounts)
-    }))
+    .map(([agente, estadoCounts]) => {
+      const attention = attentionMerged.get(agente)
+      return {
+        agente,
+        total: [...estadoCounts.values()].reduce(
+          (sum, count) => sum + count,
+          0
+        ),
+        estadoCounts: Object.fromEntries(estadoCounts),
+        campaignCounts: [
+          ...(campaignMerged.get(agente) ?? new Map<string, number>()).entries()
+        ]
+          .map(([campana, count]) => ({ campana, count }))
+          .sort((a, b) => b.count - a.count),
+        avgAttentionSeconds:
+          attention && attention.sampleCount > 0
+            ? attention.totalSeconds / attention.sampleCount
+            : null
+      }
+    })
     .sort((a, b) => b.total - a.total || a.agente.localeCompare(b.agente))
     .slice(0, limit === 'all' ? undefined : limit)
+}
+export type TopCloserDatum = {
+  agente: string
+  count: number
+}
+const TOP_CLOSERS_LIMIT = 5
+export function buildTopClosers(
+  analytics: AttentionsAnalytics
+): TopCloserDatum[] {
+  const merged = new Map<string, number>()
+  for (const direction of [analytics.incoming, analytics.outgoing]) {
+    for (const { agente, estado, count } of direction.agentCounts) {
+      if (estado !== 'Cerrada') continue
+      merged.set(agente, (merged.get(agente) ?? 0) + count)
+    }
+  }
+  return [...merged.entries()]
+    .map(([agente, count]) => ({ agente, count }))
+    .sort((a, b) => b.count - a.count || a.agente.localeCompare(b.agente))
+    .slice(0, TOP_CLOSERS_LIMIT)
 }
 export type CampaignBarDatum = {
   campana: string

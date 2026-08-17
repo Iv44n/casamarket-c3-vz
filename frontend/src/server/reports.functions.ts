@@ -1,5 +1,6 @@
 import { createServerFn } from '@tanstack/react-start'
 import { filterRowsByDate } from '#/lib/date-filter'
+import { parseDurationToSeconds } from '#/lib/duration'
 import {
   deriveIncidentAnalytics,
   INCIDENT_DATE_FIELD,
@@ -72,12 +73,22 @@ function deriveDirectionAnalytics(
       total: 0,
       statusCounts: [],
       agentCounts: [],
-      campaignCounts: []
+      campaignCounts: [],
+      agentCampaignCounts: [],
+      agentAttentionSeconds: []
     }
   }
   const statusCounts = new Map<string, number>()
   const agentEstadoCounts = new Map<string, Map<string, number>>()
   const campaignEstadoCounts = new Map<string, Map<string, number>>()
+  const agentCampaignEstadoCounts = new Map<
+    string,
+    Map<string, Map<string, number>>
+  >()
+  const agentEstadoAttentionSeconds = new Map<
+    string,
+    Map<string, { totalSeconds: number; sampleCount: number }>
+  >()
 
   for (const row of rows) {
     const estado = row.Estado
@@ -98,6 +109,36 @@ function deriveDirectionAnalytics(
     const campaignCounts = campaignEstadoCounts.get(campanaKey) ?? new Map()
     campaignCounts.set(estadoKey, (campaignCounts.get(estadoKey) ?? 0) + 1)
     campaignEstadoCounts.set(campanaKey, campaignCounts)
+
+    const campanaEstadoCounts =
+      agentCampaignEstadoCounts.get(agenteKey) ??
+      new Map<string, Map<string, number>>()
+    const estadoCountsForCampana =
+      campanaEstadoCounts.get(campanaKey) ?? new Map<string, number>()
+    estadoCountsForCampana.set(
+      estadoKey,
+      (estadoCountsForCampana.get(estadoKey) ?? 0) + 1
+    )
+    campanaEstadoCounts.set(campanaKey, estadoCountsForCampana)
+    agentCampaignEstadoCounts.set(agenteKey, campanaEstadoCounts)
+
+    const attentionSeconds = parseDurationToSeconds(
+      typeof row['Tiempo de atención'] === 'string'
+        ? row['Tiempo de atención']
+        : null
+    )
+    if (attentionSeconds !== null) {
+      const estadoAttention =
+        agentEstadoAttentionSeconds.get(agenteKey) ?? new Map()
+      const current = estadoAttention.get(estadoKey) ?? {
+        totalSeconds: 0,
+        sampleCount: 0
+      }
+      current.totalSeconds += attentionSeconds
+      current.sampleCount += 1
+      estadoAttention.set(estadoKey, current)
+      agentEstadoAttentionSeconds.set(agenteKey, estadoAttention)
+    }
   }
 
   return {
@@ -123,7 +164,29 @@ function deriveDirectionAnalytics(
           count
         }))
       )
-      .sort((a, b) => b.count - a.count)
+      .sort((a, b) => b.count - a.count),
+    agentCampaignCounts: [...agentCampaignEstadoCounts.entries()].flatMap(
+      ([agente, campanaEstadoCounts]) =>
+        [...campanaEstadoCounts.entries()].flatMap(([campana, estadoCounts]) =>
+          [...estadoCounts.entries()].map(([estado, count]) => ({
+            agente,
+            campana,
+            estado,
+            count
+          }))
+        )
+    ),
+    agentAttentionSeconds: [...agentEstadoAttentionSeconds.entries()].flatMap(
+      ([agente, estadoAttention]) =>
+        [...estadoAttention.entries()].map(
+          ([estado, { totalSeconds, sampleCount }]) => ({
+            agente,
+            estado,
+            totalSeconds,
+            sampleCount
+          })
+        )
+    )
   }
 }
 

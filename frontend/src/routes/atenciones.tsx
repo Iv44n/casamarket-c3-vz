@@ -7,9 +7,11 @@ import { AgentWorkloadChart } from '#/components/agent-workload-chart'
 import { CampaignWorkloadChart } from '#/components/campaign-workload-chart'
 import { IncidentHierarchy } from '#/components/incident-hierarchy'
 import { StatusDonutChart } from '#/components/status-donut-chart'
+import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
@@ -35,6 +37,7 @@ import {
   buildAgentRanking,
   buildCampaignRanking,
   buildStatusChartData,
+  buildTopClosers,
   describeAvailability,
   getAvailableEstados
 } from '#/lib/attentions-analytics'
@@ -90,6 +93,10 @@ function CategorySwatch({ category }: { category: IncidentCategory }) {
     />
   )
 }
+const UNKNOWN_AGENT_LABEL = 'Sin agente'
+function incidentAgentLabel(agente: string) {
+  return agente.trim() === '' ? UNKNOWN_AGENT_LABEL : agente
+}
 export const Route = createFileRoute('/atenciones')({
   ssr: 'data-only',
   validateSearch: attentionsSearchSchema,
@@ -106,7 +113,7 @@ export const Route = createFileRoute('/atenciones')({
 function AtencionesPage() {
   const { attentions: analytics, incidents: incidentAnalytics } =
     Route.useLoaderData()
-  const { direction, agentLimit, estados, view, category, date } =
+  const { direction, agentLimit, estados, view, category, agente, date } =
     Route.useSearch()
   const navigate = Route.useNavigate()
   const router = useRouter()
@@ -116,11 +123,23 @@ function AtencionesPage() {
   const availableEstados = getAvailableEstados(analytics)
   const { total, slices } = buildStatusChartData(analytics, direction, estados)
   const agents = buildAgentRanking(analytics, direction, agentLimit, estados)
+  const topClosers = buildTopClosers(analytics)
   const campaigns = buildCampaignRanking(analytics, direction, estados)
   const { blockedMessage, advisoryMessage } = describeAvailability(
     analytics,
     direction
   )
+  const availableIncidentAgents = [
+    ...new Set(
+      incidentAnalytics.records.map(record => incidentAgentLabel(record.agente))
+    )
+  ].sort((a, b) => a.localeCompare(b))
+  const incidentRecords =
+    agente === 'all'
+      ? incidentAnalytics.records
+      : incidentAnalytics.records.filter(
+          record => incidentAgentLabel(record.agente) === agente
+        )
   const isPastDaySelected = date !== 'all' && date !== todayIsoDate()
   async function handleRefresh() {
     setPending(true)
@@ -149,6 +168,16 @@ function AtencionesPage() {
       : [...current, estado]
     navigate({
       search: prev => ({ ...prev, estados: next }),
+      replace: true
+    })
+  }
+  function goToAgentIncidents(clickedAgent: string) {
+    navigate({
+      search: prev => ({
+        ...prev,
+        view: 'incidencias',
+        agente: clickedAgent
+      }),
       replace: true
     })
   }
@@ -402,6 +431,24 @@ function AtencionesPage() {
                       <CardDescription className="text-sm">
                         Carga de trabajo diaria
                       </CardDescription>
+                      {topClosers.length > 0 && (
+                        <CardAction>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              goToAgentIncidents(topClosers[0].agente)
+                            }
+                          >
+                            <Badge
+                              variant="secondary"
+                              className="cursor-pointer"
+                            >
+                              Top cerrando: {topClosers[0].agente} (
+                              {topClosers[0].count})
+                            </Badge>
+                          </button>
+                        </CardAction>
+                      )}
                     </CardHeader>
                     <CardContent className="flex flex-1 items-center">
                       {agents.length === 0 ? (
@@ -409,7 +456,10 @@ function AtencionesPage() {
                           Sin registros.
                         </p>
                       ) : (
-                        <AgentWorkloadChart agents={agents} />
+                        <AgentWorkloadChart
+                          agents={agents}
+                          onAgentClick={goToAgentIncidents}
+                        />
                       )}
                     </CardContent>
                   </Card>
@@ -420,11 +470,47 @@ function AtencionesPage() {
         </TabsContent>
 
         <TabsContent value="incidencias" className="mt-4">
-          <p className="text-sm text-muted-foreground">
-            {incidentAnalytics.total} incidencias registradas en atenciones y
-            llamadas salientes -- haz clic en una barra para ver su desglose,
-            hasta llegar al ticket.
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              {incidentRecords.length} incidencias registradas en atenciones y
+              llamadas salientes
+              {agente !== 'all' && ` para ${agente}`} -- haz clic en una barra
+              para ver su desglose, hasta llegar al ticket.
+            </p>
+
+            {availableIncidentAgents.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-muted-foreground">
+                  Agente
+                </span>
+                <Select
+                  value={agente}
+                  onValueChange={value =>
+                    navigate({
+                      search: prev => ({ ...prev, agente: value ?? 'all' }),
+                      replace: true
+                    })
+                  }
+                >
+                  <SelectTrigger className="min-w-56 justify-between">
+                    <SelectValue>
+                      {(value: string) =>
+                        value === 'all' ? 'Todos los agentes' : value
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos los agentes</SelectItem>
+                    {availableIncidentAgents.map(name => (
+                      <SelectItem key={name} value={name}>
+                        {name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
 
           {!incidentAnalytics.available ? (
             <Card className="mt-4">
@@ -437,10 +523,12 @@ function AtencionesPage() {
                 .
               </CardContent>
             </Card>
-          ) : incidentAnalytics.total === 0 ? (
+          ) : incidentRecords.length === 0 ? (
             <Card className="mt-4">
               <CardContent className="text-sm text-muted-foreground">
-                No hay incidencias registradas todavia.
+                {agente === 'all'
+                  ? 'No hay incidencias registradas todavia.'
+                  : `No hay incidencias registradas para ${agente}.`}
               </CardContent>
             </Card>
           ) : (
@@ -469,7 +557,7 @@ function AtencionesPage() {
                   {INCIDENT_CATEGORIES.map(cat => (
                     <TabsContent key={cat} value={cat}>
                       <IncidentHierarchy
-                        records={incidentAnalytics.records}
+                        records={incidentRecords}
                         dimension={cat}
                       />
                     </TabsContent>

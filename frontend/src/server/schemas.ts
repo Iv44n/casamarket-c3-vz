@@ -76,6 +76,7 @@ export const attentionsSearchSchema = z.object({
   estados: z.union([z.literal('all'), z.array(z.string())]).default('all'),
   view: z.enum(ATENCIONES_VIEWS).default('resumen'),
   category: z.enum(INCIDENT_CATEGORIES).default('ambito'),
+  agente: z.string().default('all'),
   date: dateFilterValue.default(todayIsoDate)
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
@@ -100,6 +101,18 @@ export type DirectionAnalytics = {
     campana: string
     estado: string
     count: number
+  }[]
+  agentCampaignCounts: {
+    agente: string
+    campana: string
+    estado: string
+    count: number
+  }[]
+  agentAttentionSeconds: {
+    agente: string
+    estado: string
+    totalSeconds: number
+    sampleCount: number
   }[]
 }
 export type AttentionsAnalytics = {
