@@ -110,6 +110,12 @@ export type IncidentRecord = {
   origen: string
   tipo: string
   ambito: string
+  descripcion: string
+  agente: string
+  estado: string
+  fecha: string
+  hora: string
+  tiempoSegundos: number | null
 }
 export type IncidentAnalytics = {
   available: boolean

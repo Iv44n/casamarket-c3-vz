@@ -422,7 +422,8 @@ function AtencionesPage() {
         <TabsContent value="incidencias" className="mt-4">
           <p className="text-sm text-muted-foreground">
             {incidentAnalytics.total} incidencias registradas en atenciones y
-            llamadas salientes -- haz clic en una barra para ver su desglose.
+            llamadas salientes -- haz clic en una barra para ver su desglose,
+            hasta llegar al ticket.
           </p>
 
           {!incidentAnalytics.available ? (

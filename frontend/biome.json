@@ -37,6 +37,14 @@
           "suspicious": { "noArrayIndexKey": "off" }
         }
       }
+    },
+    {
+      "includes": ["**/src/components/incident-hierarchy.tsx"],
+      "linter": {
+        "rules": {
+          "suspicious": { "noArrayIndexKey": "off" }
+        }
+      }
     }
   ],
   "javascript": {

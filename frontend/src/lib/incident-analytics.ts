@@ -1,3 +1,4 @@
+import { parseDurationToSeconds } from '#/lib/duration'
 import type {
   IncidentAnalytics,
   IncidentCategory,
@@ -6,23 +7,50 @@ import type {
   ReportRow
 } from '#/server/schemas'
 
-// The only reports whose C3 export ("Incluir formulario") carries the
-// incident-classification columns -- see backend/recon/hallazgos.md and the
-// live `/data/attention` payload, which has these mixed in with the regular
-// atenciones columns. callincoming/contacts don't have them.
 export const INCIDENT_SOURCE_REPORTS = [
   'attention',
   'outboundattention',
   'calloutgoing'
 ] as const satisfies readonly ReportName[]
 
-export const INCIDENT_DATE_FIELD: Record<
-  'attention' | 'outboundattention' | 'calloutgoing',
-  string
-> = {
+type IncidentSourceReportName = (typeof INCIDENT_SOURCE_REPORTS)[number]
+
+export const INCIDENT_DATE_FIELD: Record<IncidentSourceReportName, string> = {
   attention: 'Fecha registro',
   outboundattention: 'Fecha registro',
   calloutgoing: 'Fecha'
+}
+export const INCIDENT_DETAIL_FIELD: Record<
+  IncidentSourceReportName,
+  {
+    descripcion: string
+    agente: string
+    estado: string
+    hora: string
+    tiempo: string[]
+  }
+> = {
+  attention: {
+    descripcion: 'Descripción de la incidencia',
+    agente: 'Agente',
+    estado: 'Estado',
+    hora: 'Hora registro',
+    tiempo: ['Tiempo de atención']
+  },
+  outboundattention: {
+    descripcion: 'Descripción de la incidencia',
+    agente: 'Agente',
+    estado: 'Estado',
+    hora: 'Hora registro',
+    tiempo: ['Tiempo de atención']
+  },
+  calloutgoing: {
+    descripcion: 'Descripción de la incidencia',
+    agente: 'Agente',
+    estado: 'Estado',
+    hora: 'Hora',
+    tiempo: ['Hablado llamada', 'Total llamada']
+  }
 }
 export const INCIDENT_CATEGORY_LABEL: Record<IncidentCategory, string> = {
   origen: 'Origen',
@@ -44,8 +72,7 @@ const INCIDENT_FIELD: Record<IncidentCategory, string> = {
   tipo: 'Tipo de incidencia',
   ambito: 'Ámbito de incidencia'
 }
-// C3's incident form leaves these fields as the literal string "N.A" (not
-// blank) when an attention/call has no incident attached to it.
+
 const EMPTY_INCIDENT_VALUES = new Set(['', 'n.a', '-'])
 function isEmptyIncidentValue(value: unknown): boolean {
   return (
@@ -56,23 +83,54 @@ function isEmptyIncidentValue(value: unknown): boolean {
 function normalizeIncidentField(value: unknown, fallback: string): string {
   return isEmptyIncidentValue(value) ? fallback : String(value).trim()
 }
+
+function stringField(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function firstNonEmptyValue(row: ReportRow, fields: string[]): string | null {
+  for (const field of fields) {
+    const value = row[field]
+    if (!isEmptyIncidentValue(value)) {
+      return String(value)
+    }
+  }
+  return null
+}
+
 export function deriveIncidentAnalytics(
   rowSets: (ReportRow[] | null)[]
 ): IncidentAnalytics {
   const available = rowSets.some(rows => rows !== null)
-  const rows = rowSets.flatMap(rows => rows ?? [])
   const records: IncidentRecord[] = []
-  for (const row of rows) {
-    const origenRaw = row[INCIDENT_FIELD.origen]
-    if (isEmptyIncidentValue(origenRaw)) {
-      continue
+  rowSets.forEach((rows, index) => {
+    if (rows === null) return
+    const reportName = INCIDENT_SOURCE_REPORTS[index]
+    const detailField = INCIDENT_DETAIL_FIELD[reportName]
+    const dateField = INCIDENT_DATE_FIELD[reportName]
+    for (const row of rows) {
+      const origenRaw = row[INCIDENT_FIELD.origen]
+      if (isEmptyIncidentValue(origenRaw)) {
+        continue
+      }
+      records.push({
+        origen: String(origenRaw).trim(),
+        tipo: normalizeIncidentField(row[INCIDENT_FIELD.tipo], 'Sin tipo'),
+        ambito: normalizeIncidentField(
+          row[INCIDENT_FIELD.ambito],
+          'Sin ambito'
+        ),
+        descripcion: normalizeIncidentField(row[detailField.descripcion], ''),
+        agente: normalizeIncidentField(row[detailField.agente], ''),
+        estado: normalizeIncidentField(row[detailField.estado], ''),
+        fecha: stringField(row[dateField]),
+        hora: stringField(row[detailField.hora]),
+        tiempoSegundos: parseDurationToSeconds(
+          firstNonEmptyValue(row, detailField.tiempo)
+        )
+      })
     }
-    records.push({
-      origen: String(origenRaw).trim(),
-      tipo: normalizeIncidentField(row[INCIDENT_FIELD.tipo], 'Sin tipo'),
-      ambito: normalizeIncidentField(row[INCIDENT_FIELD.ambito], 'Sin ambito')
-    })
-  }
+  })
   return { available, total: records.length, records }
 }
 export type IncidentGroup = {

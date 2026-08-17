@@ -1,8 +1,10 @@
+import { ClockIcon, UserIcon } from 'lucide-react'
 import { useState } from 'react'
 import {
   CHART_AXIS_LABEL_FONT_SIZE,
   CHART_BIG_NUMBER_FONT_SIZE
 } from '#/lib/chart-typography'
+import { formatSecondsAsDuration } from '#/lib/duration'
 import {
   DIMENSION_CHAIN,
   groupIncidentsBy,
@@ -14,6 +16,38 @@ import type { IncidentCategory, IncidentRecord } from '#/server/schemas'
 
 const MAX_BAR_PX = 220
 const MIN_BAR_PX = 4
+
+function TicketList({ items }: { items: IncidentRecord[] }) {
+  return (
+    <div className="flex max-h-80 flex-col gap-1 overflow-y-auto rounded-xl bg-foreground/[0.03] p-2">
+      {items.map((item, i) => (
+        <div
+          key={i}
+          className="rounded-lg px-2 py-1.5 hover:bg-foreground/[0.04]"
+        >
+          <p className="text-foreground text-sm">
+            {item.descripcion || (
+              <span className="text-muted-foreground">Sin descripción</span>
+            )}
+          </p>
+          <div className="mt-0.5 flex items-center gap-3 text-muted-foreground text-xs">
+            <span className="inline-flex items-center gap-1">
+              <ClockIcon className="size-3" />
+              {item.tiempoSegundos === null
+                ? '—'
+                : formatSecondsAsDuration(item.tiempoSegundos)}
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <UserIcon className="size-3" />
+              {item.agente || 'Sin agente'}
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function HierarchyRow({
   entry,
   color,
@@ -51,13 +85,6 @@ function HierarchyRow({
       </span>
     </>
   )
-  if (isLeaf) {
-    return (
-      <div className="flex items-center justify-end gap-2.5 px-1 py-1.5">
-        {rowContent}
-      </div>
-    )
-  }
   return (
     <div>
       <button
@@ -72,11 +99,15 @@ function HierarchyRow({
       </button>
       {expanded && (
         <div className="mt-1.5 mb-2 ml-5">
-          <HierarchyLevel
-            records={entry.items}
-            chain={chain}
-            depth={depth + 1}
-          />
+          {isLeaf ? (
+            <TicketList items={entry.items} />
+          ) : (
+            <HierarchyLevel
+              records={entry.items}
+              chain={chain}
+              depth={depth + 1}
+            />
+          )}
         </div>
       )}
     </div>
