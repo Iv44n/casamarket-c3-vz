@@ -6,7 +6,6 @@ import {
 } from '#/lib/chart-typography'
 import { formatSecondsAsDuration } from '#/lib/duration'
 import {
-  DIMENSION_CHAIN,
   groupIncidentsBy,
   INCIDENT_CATEGORY_COLOR,
   type IncidentGroup
@@ -151,16 +150,10 @@ function HierarchyLevel({
 }
 export function IncidentHierarchy({
   records,
-  dimension
+  chain
 }: {
   records: IncidentRecord[]
-  dimension: IncidentCategory
+  chain: IncidentCategory[]
 }) {
-  return (
-    <HierarchyLevel
-      records={records}
-      chain={DIMENSION_CHAIN[dimension]}
-      depth={0}
-    />
-  )
+  return <HierarchyLevel records={records} chain={chain} depth={0} />
 }

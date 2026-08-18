@@ -1,10 +1,11 @@
 import { parseDurationToSeconds } from '#/lib/duration'
-import type {
-  IncidentAnalytics,
-  IncidentCategory,
-  IncidentRecord,
-  ReportName,
-  ReportRow
+import {
+  INCIDENT_CATEGORIES,
+  type IncidentAnalytics,
+  type IncidentCategory,
+  type IncidentRecord,
+  type ReportName,
+  type ReportRow
 } from '#/server/schemas'
 
 export const INCIDENT_SOURCE_REPORTS = [
@@ -25,6 +26,7 @@ export const INCIDENT_DETAIL_FIELD: Record<
   {
     descripcion: string
     agente: string
+    campana: string
     estado: string
     hora: string
     tiempo: string[]
@@ -33,6 +35,7 @@ export const INCIDENT_DETAIL_FIELD: Record<
   attention: {
     descripcion: 'Descripción de la incidencia',
     agente: 'Agente',
+    campana: 'Campaña',
     estado: 'Estado',
     hora: 'Hora registro',
     tiempo: ['Tiempo de atención']
@@ -40,6 +43,7 @@ export const INCIDENT_DETAIL_FIELD: Record<
   outboundattention: {
     descripcion: 'Descripción de la incidencia',
     agente: 'Agente',
+    campana: 'Campaña',
     estado: 'Estado',
     hora: 'Hora registro',
     tiempo: ['Tiempo de atención']
@@ -47,6 +51,7 @@ export const INCIDENT_DETAIL_FIELD: Record<
   calloutgoing: {
     descripcion: 'Descripción de la incidencia',
     agente: 'Agente',
+    campana: 'Campaña',
     estado: 'Estado',
     hora: 'Hora',
     tiempo: ['Hablado llamada', 'Total llamada']
@@ -55,22 +60,50 @@ export const INCIDENT_DETAIL_FIELD: Record<
 export const INCIDENT_CATEGORY_LABEL: Record<IncidentCategory, string> = {
   origen: 'Origen',
   tipo: 'Tipo',
-  ambito: 'Ámbito'
+  ambito: 'Ámbito',
+  resultado: 'Resultado'
 }
 export const INCIDENT_CATEGORY_COLOR: Record<IncidentCategory, string> = {
   origen: 'var(--color-chart-1)',
   tipo: 'var(--color-chart-2)',
-  ambito: 'var(--color-chart-3)'
-}
-export const DIMENSION_CHAIN: Record<IncidentCategory, IncidentCategory[]> = {
-  ambito: ['ambito', 'origen', 'tipo'],
-  origen: ['origen', 'tipo'],
-  tipo: ['tipo']
+  ambito: 'var(--color-chart-3)',
+  resultado: 'var(--color-chart-4)'
 }
 const INCIDENT_FIELD: Record<IncidentCategory, string> = {
   origen: 'Origen de incidencia',
   tipo: 'Tipo de incidencia',
-  ambito: 'Ámbito de incidencia'
+  ambito: 'Ámbito de incidencia',
+  resultado: 'Resultado de la atención'
+}
+const CATEGORY_BY_FIELD: Record<string, IncidentCategory> = Object.fromEntries(
+  (Object.entries(INCIDENT_FIELD) as [IncidentCategory, string][]).map(
+    ([category, field]) => [field, category]
+  )
+)
+
+function deriveRowCategoryOrder(row: ReportRow): IncidentCategory[] {
+  const order: IncidentCategory[] = []
+  for (const key of Object.keys(row)) {
+    const category = CATEGORY_BY_FIELD[key]
+    if (category && !order.includes(category)) {
+      order.push(category)
+    }
+  }
+  return order
+}
+
+export function pickDominantCategoryOrder(
+  records: IncidentRecord[]
+): IncidentCategory[] {
+  const counts = new Map<string, { order: IncidentCategory[]; count: number }>()
+  for (const record of records) {
+    const key = record.categoryOrder.join(',')
+    const entry = counts.get(key) ?? { order: record.categoryOrder, count: 0 }
+    entry.count += 1
+    counts.set(key, entry)
+  }
+  const [dominant] = [...counts.values()].sort((a, b) => b.count - a.count)
+  return dominant?.order ?? [...INCIDENT_CATEGORIES]
 }
 
 const EMPTY_INCIDENT_VALUES = new Set(['', 'n.a', '-'])
@@ -114,14 +147,23 @@ export function deriveIncidentAnalytics(
         continue
       }
       records.push({
+        categoryOrder: deriveRowCategoryOrder(row),
         origen: String(origenRaw).trim(),
         tipo: normalizeIncidentField(row[INCIDENT_FIELD.tipo], 'Sin tipo'),
         ambito: normalizeIncidentField(
           row[INCIDENT_FIELD.ambito],
           'Sin ambito'
         ),
+        resultado: normalizeIncidentField(
+          row[INCIDENT_FIELD.resultado],
+          'Sin resultado'
+        ),
         descripcion: normalizeIncidentField(row[detailField.descripcion], ''),
         agente: normalizeIncidentField(row[detailField.agente], ''),
+        campana: normalizeIncidentField(
+          row[detailField.campana],
+          'Sin campaña'
+        ),
         estado: normalizeIncidentField(row[detailField.estado], ''),
         fecha: stringField(row[dateField]),
         hora: stringField(row[detailField.hora]),

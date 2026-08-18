@@ -27,12 +27,13 @@ import {
   TooltipContent,
   TooltipTrigger
 } from '#/components/ui/tooltip'
+import { estadoColor } from '#/lib/attentions-analytics'
 import { formatSecondsAsDuration } from '#/lib/duration'
 import { cn } from '#/lib/utils'
-import type { OpenAttentionRecord } from '#/server/schemas'
+import type { AttentionRecord } from '#/server/schemas'
 
-const PAGE_SIZE = 15
-const DIRECTION_LABEL: Record<OpenAttentionRecord['direction'], string> = {
+const PAGE_SIZE = 50
+const DIRECTION_LABEL: Record<AttentionRecord['direction'], string> = {
   incoming: 'Entrante',
   outgoing: 'Saliente'
 }
@@ -72,7 +73,19 @@ function TruncatedCell({
   )
 }
 
-function hopLabel(hop: OpenAttentionRecord['transferChain'][number]): string {
+function EstadoCell({ estado }: { estado: string }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span
+        className="size-2 shrink-0 rounded-full"
+        style={{ background: estadoColor(estado) }}
+      />
+      {estado}
+    </span>
+  )
+}
+
+function hopLabel(hop: AttentionRecord['transferChain'][number]): string {
   return hop.destType === 'Campaña'
     ? `a la campaña "${hop.destino}"`
     : `al agente "${hop.destino}"`
@@ -82,7 +95,7 @@ function TransferredByCell({
   record,
   className
 }: {
-  record: OpenAttentionRecord
+  record: AttentionRecord
   className: string
 }) {
   if (record.transferredBy === null || record.transferChain.length === 0) {
@@ -137,22 +150,29 @@ function TransferredByCell({
   )
 }
 
-function withAgentSeconds(
-  record: OpenAttentionRecord,
-  now: number
-): number | null {
-  return record.withAgentSinceMs === null
-    ? null
-    : Math.max(0, (now - record.withAgentSinceMs) / 1000)
+function endEpochMs(record: AttentionRecord, now: number): number {
+  return record.closeEpochMs ?? now
 }
 
-export function OpenAttentionsTable({
+function elapsedSeconds(record: AttentionRecord, now: number): number | null {
+  return record.startEpochMs === null
+    ? null
+    : Math.max(0, (endEpochMs(record, now) - record.startEpochMs) / 1000)
+}
+
+function withAgentSeconds(record: AttentionRecord, now: number): number | null {
+  return record.withAgentSinceMs === null
+    ? null
+    : Math.max(0, (endEpochMs(record, now) - record.withAgentSinceMs) / 1000)
+}
+
+export function AttentionRecordsTable({
   records
 }: {
-  records: OpenAttentionRecord[]
+  records: AttentionRecord[]
 }) {
   const [page, setPage] = useState(0)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: resets pagination whenever the parent's records (e.g. its date filter) change
+  // biome-ignore lint/correctness/useExhaustiveDependencies: resets pagination whenever the parent's records (e.g. its date/estado filter) change
   useEffect(() => {
     setPage(0)
   }, [records])
@@ -161,7 +181,7 @@ export function OpenAttentionsTable({
     return (
       <Card size="sm" className="mt-4">
         <CardContent className="text-sm text-muted-foreground">
-          No hay atenciones abiertas para el filtro actual.
+          No hay atenciones para el filtro actual.
         </CardContent>
       </Card>
     )
@@ -169,6 +189,7 @@ export function OpenAttentionsTable({
 
   const now = Date.now()
   const staleCount = records.filter(record => {
+    if (record.closeEpochMs !== null) return false
     const seconds = withAgentSeconds(record, now)
     return seconds !== null && seconds > STALE_THRESHOLD_SECONDS
   }).length
@@ -184,11 +205,11 @@ export function OpenAttentionsTable({
   return (
     <Card size="sm" className="mt-4">
       <CardHeader>
-        <CardTitle>Atenciones abiertas</CardTitle>
+        <CardTitle>Atenciones</CardTitle>
         <CardDescription>
-          {records.length} atenciones sin cerrar, ordenadas por cuanto tiempo
-          lleva cada una con su agente actual (desde la ultima transferencia, si
-          la hubo).
+          {records.length} atenciones para el filtro actual, ordenadas por
+          cuanto tiempo llevan (o llevaron, si ya se cerraron) con su agente
+          actual (desde la ultima transferencia, si la hubo).
         </CardDescription>
         <div className="flex items-center gap-3 text-muted-foreground text-xs">
           <span className="flex items-center gap-1.5">
@@ -220,7 +241,9 @@ export function OpenAttentionsTable({
           <TableHeader>
             <TableRow>
               <TableHead>ID</TableHead>
+              <TableHead>Estado</TableHead>
               <TableHead className="max-w-48">Cliente</TableHead>
+              <TableHead className="max-w-32">Plan</TableHead>
               <TableHead className="max-w-36">Agente</TableHead>
               <TableHead className="max-w-36">Transferido por</TableHead>
               <TableHead className="max-w-32">Campaña</TableHead>
@@ -232,18 +255,27 @@ export function OpenAttentionsTable({
           <TableBody>
             {pageRecords.map((record, i) => {
               const seconds = withAgentSeconds(record, now)
+              const totalSeconds = elapsedSeconds(record, now)
               const isStale =
-                seconds !== null && seconds > STALE_THRESHOLD_SECONDS
+                record.closeEpochMs === null &&
+                seconds !== null &&
+                seconds > STALE_THRESHOLD_SECONDS
               return (
                 <TableRow key={start + i}>
                   <TableCell className="align-top text-muted-foreground">
                     <Cell value={record.idAtencion} />
+                  </TableCell>
+                  <TableCell className="align-top">
+                    <EstadoCell estado={record.estado} />
                   </TableCell>
                   <TableCell className="max-w-48 align-top">
                     <TruncatedCell
                       value={record.cliente}
                       className="max-w-48"
                     />
+                  </TableCell>
+                  <TableCell className="max-w-32 align-top">
+                    <TruncatedCell value={record.plan} className="max-w-32" />
                   </TableCell>
                   <TableCell className="max-w-36 align-top">
                     <TruncatedCell value={record.agente} className="max-w-36" />
@@ -263,12 +295,10 @@ export function OpenAttentionsTable({
                     </Badge>
                   </TableCell>
                   <TableCell className="align-top font-medium">
-                    {record.startEpochMs === null ? (
+                    {totalSeconds === null ? (
                       <span className="text-muted-foreground">—</span>
                     ) : (
-                      formatSecondsAsDuration(
-                        Math.max(0, (now - record.startEpochMs) / 1000)
-                      )
+                      formatSecondsAsDuration(totalSeconds)
                     )}
                   </TableCell>
                   <TableCell className="align-top font-medium">

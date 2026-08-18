@@ -16,7 +16,7 @@ export const deleteFileSchema = z.object({
 })
 export const reportSearchSchema = z.object({
   page: z.number().int().min(1).default(1),
-  pageSize: z.number().int().min(1).max(200).default(25)
+  pageSize: z.number().int().min(1).max(200).default(50)
 })
 export type ReportSearch = z.infer<typeof reportSearchSchema>
 type JsonPrimitive = string | number | boolean | null
@@ -58,7 +58,12 @@ export const backfillRequestSchema = z.object({
   date: z.string().regex(ISO_DATE_REGEX)
 })
 
-export const INCIDENT_CATEGORIES = ['ambito', 'origen', 'tipo'] as const
+export const INCIDENT_CATEGORIES = [
+  'tipo',
+  'origen',
+  'ambito',
+  'resultado'
+] as const
 export type IncidentCategory = (typeof INCIDENT_CATEGORIES)[number]
 export const ATENCIONES_VIEWS = ['resumen', 'incidencias', 'demoras'] as const
 export type AtencionesView = (typeof ATENCIONES_VIEWS)[number]
@@ -79,6 +84,7 @@ export const attentionsSearchSchema = z.object({
   category: z.enum(INCIDENT_CATEGORIES).default('ambito'),
   agente: z.string().default('all'),
   campana: z.string().default('all'),
+  plan: z.string().default('all'),
   date: dateFilterValue.default(todayIsoDate)
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
@@ -116,7 +122,7 @@ export type DirectionAnalytics = {
     totalSeconds: number
     sampleCount: number
   }[]
-  openAttentions: OpenAttentionRecord[]
+  attentionRecords: AttentionRecord[]
 }
 export type TransferHop = {
   agenteOrigen: string
@@ -124,13 +130,17 @@ export type TransferHop = {
   destino: string
   epochMs: number
 }
-export type OpenAttentionRecord = {
+export type AttentionRecord = {
   idAtencion: string
   cliente: string
+  plan: string
+  rubro: string
   agente: string
   campana: string
   direction: AttentionDirection
+  estado: string
   startEpochMs: number | null
+  closeEpochMs: number | null
   transferredBy: string | null
   transferDestType: string | null
   transferDestino: string | null
@@ -142,11 +152,14 @@ export type AttentionsAnalytics = {
   outgoing: DirectionAnalytics
 }
 export type IncidentRecord = {
+  categoryOrder: IncidentCategory[]
   origen: string
   tipo: string
   ambito: string
+  resultado: string
   descripcion: string
   agente: string
+  campana: string
   estado: string
   fecha: string
   hora: string

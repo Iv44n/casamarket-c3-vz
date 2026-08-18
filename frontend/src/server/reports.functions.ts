@@ -40,6 +40,31 @@ import {
 
 const ATTENTION_DATE_FIELD = 'Fecha registro'
 
+type ContactInfo = { plan: string; rubro: string }
+
+function normalizePhoneKey(value: unknown): string | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null
+  const digits = String(value).replace(/\D/g, '')
+  return digits.length >= 9 ? digits.slice(-9) : null
+}
+
+function cleanContactField(value: unknown): string {
+  return typeof value === 'string' && value.trim() !== '-' ? value.trim() : ''
+}
+
+function buildContactsIndex(rows: ReportRow[]): Map<string, ContactInfo> {
+  const index = new Map<string, ContactInfo>()
+  for (const row of rows) {
+    const key = normalizePhoneKey(row.Telefono)
+    if (key === null) continue
+    index.set(key, {
+      plan: cleanContactField(row.Plan),
+      rubro: cleanContactField(row.Rubro)
+    })
+  }
+  return index
+}
+
 function buildTransferChainIndex(
   rows: ReportRow[]
 ): Map<string, TransferHop[]> {
@@ -101,7 +126,8 @@ export const getReportSummary = createServerFn({ method: 'GET' })
 function deriveDirectionAnalytics(
   rows: ReportRow[] | null,
   direction: AttentionDirection,
-  transfersById: Map<string, TransferHop[]>
+  transfersById: Map<string, TransferHop[]>,
+  contactsByPhone: Map<string, ContactInfo>
 ): DirectionAnalytics {
   if (rows === null) {
     return {
@@ -112,7 +138,7 @@ function deriveDirectionAnalytics(
       campaignCounts: [],
       agentCampaignCounts: [],
       agentAttentionSeconds: [],
-      openAttentions: []
+      attentionRecords: []
     }
   }
   const statusCounts = new Map<string, number>()
@@ -126,7 +152,7 @@ function deriveDirectionAnalytics(
     string,
     Map<string, { totalSeconds: number; sampleCount: number }>
   >()
-  const openAttentions: DirectionAnalytics['openAttentions'] = []
+  const attentionRecords: DirectionAnalytics['attentionRecords'] = []
 
   for (const row of rows) {
     const estado = row.Estado
@@ -135,7 +161,11 @@ function deriveDirectionAnalytics(
     statusCounts.set(estadoKey, (statusCounts.get(estadoKey) ?? 0) + 1)
     const agente = row.Agente
     const agenteKey =
-      typeof agente === 'string' && agente.trim() !== '' ? agente : 'Sin agente'
+      typeof agente === 'string' &&
+      agente.trim() !== '' &&
+      agente.trim() !== '-'
+        ? agente
+        : 'Sin agente'
     const agentCounts = agentEstadoCounts.get(agenteKey) ?? new Map()
     agentCounts.set(estadoKey, (agentCounts.get(estadoKey) ?? 0) + 1)
     agentEstadoCounts.set(agenteKey, agentCounts)
@@ -178,37 +208,41 @@ function deriveDirectionAnalytics(
       agentEstadoAttentionSeconds.set(agenteKey, estadoAttention)
     }
 
-    if (estadoKey === 'Abierta') {
-      const idAtencionRaw = row['ID atención']
-      const idAtencion =
-        typeof idAtencionRaw === 'number' || typeof idAtencionRaw === 'string'
-          ? String(idAtencionRaw)
-          : ''
-      const cliente = row['Nombre de cliente']
-      const campana = row.Campaña
-      const startEpochMs = parseLimaDateTime(
-        row['Fecha inicio'],
-        row['Hora inicio']
-      )
-      const chain = idAtencion ? (transfersById.get(idAtencion) ?? []) : []
-      const lastHop = chain.length > 0 ? chain[chain.length - 1] : undefined
-      openAttentions.push({
-        idAtencion,
-        cliente: typeof cliente === 'string' ? cliente : '',
-        agente: agenteKey,
-        campana:
-          typeof campana === 'string' && campana.trim() !== ''
-            ? campana
-            : 'Sin campaña',
-        direction,
-        startEpochMs,
-        transferredBy: lastHop?.agenteOrigen ?? null,
-        transferDestType: lastHop?.destType ?? null,
-        transferDestino: lastHop?.destino ?? null,
-        transferChain: chain,
-        withAgentSinceMs: lastHop?.epochMs ?? startEpochMs
-      })
-    }
+    const idAtencionRaw = row['ID atención']
+    const idAtencion =
+      typeof idAtencionRaw === 'number' || typeof idAtencionRaw === 'string'
+        ? String(idAtencionRaw)
+        : ''
+    const cliente = row['Nombre de cliente']
+    const startEpochMs =
+      parseLimaDateTime(row['Fecha inicio'], row['Hora inicio']) ??
+      parseLimaDateTime(row['Fecha registro'], row['Hora registro'])
+    const closeEpochMs = parseLimaDateTime(
+      row['Fecha final'],
+      row['Hora final']
+    )
+    const chain = idAtencion ? (transfersById.get(idAtencion) ?? []) : []
+    const lastHop = chain.length > 0 ? chain[chain.length - 1] : undefined
+    const contactKey = normalizePhoneKey(row['Número cliente'])
+    const contact = contactKey ? contactsByPhone.get(contactKey) : undefined
+    attentionRecords.push({
+      idAtencion,
+      cliente: typeof cliente === 'string' ? cliente : '',
+      plan: contact?.plan ?? '',
+      rubro: contact?.rubro ?? '',
+      agente: agenteKey,
+      campana: campanaKey,
+      direction,
+      estado: estadoKey,
+      startEpochMs,
+      closeEpochMs,
+      transferredBy: lastHop?.agenteOrigen ?? null,
+      transferDestType: lastHop?.destType ?? null,
+      transferDestino: lastHop?.destino ?? null,
+      transferChain: chain,
+      withAgentSinceMs:
+        agenteKey === 'Sin agente' ? null : (lastHop?.epochMs ?? startEpochMs)
+    })
   }
 
   return {
@@ -257,33 +291,38 @@ function deriveDirectionAnalytics(
           })
         )
     ),
-    openAttentions
+    attentionRecords
   }
 }
 
 export const getAttentionsAnalytics = createServerFn({ method: 'GET' })
   .validator(dateFilterSchema)
   .handler(async ({ data }): Promise<AttentionsAnalytics> => {
-    const [attentionRows, outboundRows, transferRows] = await Promise.all([
-      fetchReportRowsHistory('attention'),
-      fetchReportRowsHistory('outboundattention'),
-      fetchReportRowsHistory('transfer')
-    ])
+    const [attentionRows, outboundRows, transferRows, contactsRows] =
+      await Promise.all([
+        fetchReportRowsHistory('attention'),
+        fetchReportRowsHistory('outboundattention'),
+        fetchReportRowsHistory('transfer'),
+        fetchReportRows('contacts')
+      ])
     const transfersById = buildTransferChainIndex(transferRows ?? [])
+    const contactsByPhone = buildContactsIndex(contactsRows ?? [])
     return {
       incoming: deriveDirectionAnalytics(
         attentionRows === null
           ? null
           : filterRowsByDate(attentionRows, ATTENTION_DATE_FIELD, data.date),
         'incoming',
-        transfersById
+        transfersById,
+        contactsByPhone
       ),
       outgoing: deriveDirectionAnalytics(
         outboundRows === null
           ? null
           : filterRowsByDate(outboundRows, ATTENTION_DATE_FIELD, data.date),
         'outgoing',
-        transfersById
+        transfersById,
+        contactsByPhone
       )
     }
   })

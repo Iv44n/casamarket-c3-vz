@@ -47,7 +47,7 @@
       }
     },
     {
-      "includes": ["**/src/components/open-attentions-table.tsx"],
+      "includes": ["**/src/components/attention-records-table.tsx"],
       "linter": {
         "rules": {
           "suspicious": { "noArrayIndexKey": "off" }

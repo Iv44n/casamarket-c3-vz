@@ -4,9 +4,9 @@ import { ChevronDownIcon, RefreshCwIcon, XIcon } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { AgentWorkloadChart } from '#/components/agent-workload-chart'
+import { AttentionRecordsTable } from '#/components/attention-records-table'
 import { CampaignWorkloadChart } from '#/components/campaign-workload-chart'
 import { IncidentHierarchy } from '#/components/incident-hierarchy'
-import { OpenAttentionsTable } from '#/components/open-attentions-table'
 import { StatusDonutChart } from '#/components/status-donut-chart'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
@@ -44,7 +44,8 @@ import {
 } from '#/lib/attentions-analytics'
 import {
   INCIDENT_CATEGORY_COLOR,
-  INCIDENT_CATEGORY_LABEL
+  INCIDENT_CATEGORY_LABEL,
+  pickDominantCategoryOrder
 } from '#/lib/incident-analytics'
 import { cn } from '#/lib/utils'
 import {
@@ -61,7 +62,6 @@ import {
   type AttentionFilter,
   attentionsSearchSchema,
   type EstadosFilter,
-  INCIDENT_CATEGORIES,
   type IncidentCategory,
   todayIsoDate
 } from '#/server/schemas'
@@ -98,6 +98,10 @@ const UNKNOWN_AGENT_LABEL = 'Sin agente'
 function incidentAgentLabel(agente: string) {
   return agente.trim() === '' ? UNKNOWN_AGENT_LABEL : agente
 }
+const UNKNOWN_PLAN_LABEL = 'Sin plan'
+function planLabel(plan: string) {
+  return plan.trim() === '' ? UNKNOWN_PLAN_LABEL : plan
+}
 export const Route = createFileRoute('/atenciones')({
   ssr: 'data-only',
   validateSearch: attentionsSearchSchema,
@@ -122,6 +126,7 @@ function AtencionesPage() {
     category,
     agente,
     campana,
+    plan,
     date
   } = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -143,29 +148,40 @@ function AtencionesPage() {
       incidentAnalytics.records.map(record => incidentAgentLabel(record.agente))
     )
   ].sort((a, b) => a.localeCompare(b))
-  const incidentRecords =
-    agente === 'all'
-      ? incidentAnalytics.records
-      : incidentAnalytics.records.filter(
-          record => incidentAgentLabel(record.agente) === agente
-        )
-  const openAttentionsAvailable =
+  const availableIncidentCampaigns = [
+    ...new Set(incidentAnalytics.records.map(record => record.campana))
+  ].sort((a, b) => a.localeCompare(b))
+  const incidentRecords = incidentAnalytics.records.filter(
+    record =>
+      (agente === 'all' || incidentAgentLabel(record.agente) === agente) &&
+      (campana === 'all' || record.campana === campana)
+  )
+  const incidentCategoryOrder = pickDominantCategoryOrder(incidentRecords)
+  const activeIncidentCategory = incidentCategoryOrder.includes(category)
+    ? category
+    : (incidentCategoryOrder[0] ?? category)
+  const attentionRecordsAvailable =
     analytics.incoming.available || analytics.outgoing.available
-  const allOpenAttentions = [
-    ...analytics.incoming.openAttentions,
-    ...analytics.outgoing.openAttentions
+  const allAttentionRecords = [
+    ...analytics.incoming.attentionRecords,
+    ...analytics.outgoing.attentionRecords
   ]
-  const availableOpenCampaigns = [
-    ...new Set(allOpenAttentions.map(record => record.campana))
+  const availableRecordCampaigns = [
+    ...new Set(allAttentionRecords.map(record => record.campana))
   ].sort((a, b) => a.localeCompare(b))
-  const availableOpenAgents = [
-    ...new Set(allOpenAttentions.map(record => record.agente))
+  const availableRecordAgents = [
+    ...new Set(allAttentionRecords.map(record => record.agente))
   ].sort((a, b) => a.localeCompare(b))
-  const openAttentions = allOpenAttentions.filter(
+  const availableRecordPlans = [
+    ...new Set(allAttentionRecords.map(record => planLabel(record.plan)))
+  ].sort((a, b) => a.localeCompare(b))
+  const filteredAttentionRecords = allAttentionRecords.filter(
     record =>
       (direction === 'all' || record.direction === direction) &&
       (campana === 'all' || record.campana === campana) &&
-      (agente === 'all' || record.agente === agente)
+      (agente === 'all' || record.agente === agente) &&
+      (plan === 'all' || planLabel(record.plan) === plan) &&
+      (estados === 'all' || estados.includes(record.estado))
   )
   const isPastDaySelected = date !== 'all' && date !== todayIsoDate()
   async function handleRefresh() {
@@ -502,42 +518,78 @@ function AtencionesPage() {
             <p className="text-sm text-muted-foreground">
               {incidentRecords.length} incidencias registradas en atenciones y
               llamadas salientes
-              {agente !== 'all' && ` para ${agente}`} -- haz clic en una barra
+              {agente !== 'all' && ` para ${agente}`}
+              {campana !== 'all' && ` en ${campana}`} -- haz clic en una barra
               para ver su desglose, hasta llegar al ticket.
             </p>
 
-            {availableIncidentAgents.length > 0 && (
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-muted-foreground">
-                  Agente
-                </span>
-                <Select
-                  value={agente}
-                  onValueChange={value =>
-                    navigate({
-                      search: prev => ({ ...prev, agente: value ?? 'all' }),
-                      replace: true
-                    })
-                  }
-                >
-                  <SelectTrigger className="min-w-56 justify-between">
-                    <SelectValue>
-                      {(value: string) =>
-                        value === 'all' ? 'Todos los agentes' : value
-                      }
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Todos los agentes</SelectItem>
-                    {availableIncidentAgents.map(name => (
-                      <SelectItem key={name} value={name}>
-                        {name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+            <div className="flex flex-wrap items-center gap-3">
+              {availableIncidentCampaigns.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-muted-foreground">
+                    Campaña
+                  </span>
+                  <Select
+                    value={campana}
+                    onValueChange={value =>
+                      navigate({
+                        search: prev => ({ ...prev, campana: value ?? 'all' }),
+                        replace: true
+                      })
+                    }
+                  >
+                    <SelectTrigger className="min-w-56 justify-between">
+                      <SelectValue>
+                        {(value: string) =>
+                          value === 'all' ? 'Todas las campañas' : value
+                        }
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Todas las campañas</SelectItem>
+                      {availableIncidentCampaigns.map(name => (
+                        <SelectItem key={name} value={name}>
+                          {name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {availableIncidentAgents.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-muted-foreground">
+                    Agente
+                  </span>
+                  <Select
+                    value={agente}
+                    onValueChange={value =>
+                      navigate({
+                        search: prev => ({ ...prev, agente: value ?? 'all' }),
+                        replace: true
+                      })
+                    }
+                  >
+                    <SelectTrigger className="min-w-56 justify-between">
+                      <SelectValue>
+                        {(value: string) =>
+                          value === 'all' ? 'Todos los agentes' : value
+                        }
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Todos los agentes</SelectItem>
+                      {availableIncidentAgents.map(name => (
+                        <SelectItem key={name} value={name}>
+                          {name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
           </div>
 
           {!incidentAnalytics.available ? (
@@ -554,16 +606,16 @@ function AtencionesPage() {
           ) : incidentRecords.length === 0 ? (
             <Card className="mt-4">
               <CardContent className="text-sm text-muted-foreground">
-                {agente === 'all'
+                {agente === 'all' && campana === 'all'
                   ? 'No hay incidencias registradas todavia.'
-                  : `No hay incidencias registradas para ${agente}.`}
+                  : 'No hay incidencias registradas para este filtro.'}
               </CardContent>
             </Card>
           ) : (
             <Card size="sm" className="mt-4">
               <CardContent>
                 <Tabs
-                  value={category}
+                  value={activeIncidentCategory}
                   onValueChange={value =>
                     navigate({
                       search: prev => ({
@@ -575,18 +627,18 @@ function AtencionesPage() {
                   }
                 >
                   <TabsList className="mb-4">
-                    {INCIDENT_CATEGORIES.map(cat => (
+                    {incidentCategoryOrder.map(cat => (
                       <TabsTrigger key={cat} value={cat} className="gap-1.5">
                         <CategorySwatch category={cat} />
                         {INCIDENT_CATEGORY_LABEL[cat]}
                       </TabsTrigger>
                     ))}
                   </TabsList>
-                  {INCIDENT_CATEGORIES.map(cat => (
+                  {incidentCategoryOrder.map((cat, index) => (
                     <TabsContent key={cat} value={cat}>
                       <IncidentHierarchy
                         records={incidentRecords}
-                        dimension={cat}
+                        chain={incidentCategoryOrder.slice(index)}
                       />
                     </TabsContent>
                   ))}
@@ -598,13 +650,47 @@ function AtencionesPage() {
 
         <TabsContent value="demoras" className="mt-4">
           <p className="text-sm text-muted-foreground">
-            Atenciones que siguen abiertas para la fecha seleccionada, ordenadas
-            por cuanto tiempo llevan corriendo. Si eliges un dia pasado, refleja
-            el estado al momento de la ultima descarga de ese dia, no
-            necesariamente el estado actual.
+            Rotacion de atenciones por estado (abierta, asignada o cerrada) para
+            la fecha seleccionada, ordenadas por cuanto tiempo llevan (o
+            llevaron, si ya se cerraron) con su agente actual. Si eliges un dia
+            pasado, refleja el estado al momento de la ultima descarga de ese
+            dia, no necesariamente el estado actual.
           </p>
 
           <div className="mt-3 flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-muted-foreground">
+                Estado
+              </span>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button
+                      variant="outline"
+                      className="w-40 justify-between font-normal"
+                    />
+                  }
+                >
+                  {formatEstadosFilter(estados, availableEstados)}
+                  <ChevronDownIcon className="size-4 text-muted-foreground" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  {availableEstados.map(estado => (
+                    <Label
+                      key={estado}
+                      className="cursor-default rounded-xl px-3 py-2 font-normal hover:bg-accent"
+                    >
+                      <Checkbox
+                        checked={isEstadoChecked(estado)}
+                        onCheckedChange={() => toggleEstado(estado)}
+                      />
+                      {estado}
+                    </Label>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-muted-foreground">
                 Dirección
@@ -636,7 +722,7 @@ function AtencionesPage() {
               </Select>
             </div>
 
-            {availableOpenCampaigns.length > 0 && (
+            {availableRecordCampaigns.length > 0 && (
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-muted-foreground">
                   Campaña
@@ -659,7 +745,7 @@ function AtencionesPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todas las campañas</SelectItem>
-                    {availableOpenCampaigns.map(name => (
+                    {availableRecordCampaigns.map(name => (
                       <SelectItem key={name} value={name}>
                         {name}
                       </SelectItem>
@@ -669,7 +755,7 @@ function AtencionesPage() {
               </div>
             )}
 
-            {availableOpenAgents.length > 0 && (
+            {availableRecordAgents.length > 0 && (
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-muted-foreground">
                   Agente
@@ -692,7 +778,40 @@ function AtencionesPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todos los agentes</SelectItem>
-                    {availableOpenAgents.map(name => (
+                    {availableRecordAgents.map(name => (
+                      <SelectItem key={name} value={name}>
+                        {name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {availableRecordPlans.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-muted-foreground">
+                  Plan
+                </span>
+                <Select
+                  value={plan}
+                  onValueChange={value =>
+                    navigate({
+                      search: prev => ({ ...prev, plan: value ?? 'all' }),
+                      replace: true
+                    })
+                  }
+                >
+                  <SelectTrigger className="min-w-48">
+                    <SelectValue>
+                      {(value: string) =>
+                        value === 'all' ? 'Todos los planes' : value
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos los planes</SelectItem>
+                    {availableRecordPlans.map(name => (
                       <SelectItem key={name} value={name}>
                         {name}
                       </SelectItem>
@@ -703,7 +822,7 @@ function AtencionesPage() {
             )}
           </div>
 
-          {!openAttentionsAvailable ? (
+          {!attentionRecordsAvailable ? (
             <Card className="mt-4">
               <CardContent className="text-sm text-muted-foreground">
                 Todavia no se descargo ningun archivo de atenciones. Dispara un
@@ -715,7 +834,7 @@ function AtencionesPage() {
               </CardContent>
             </Card>
           ) : (
-            <OpenAttentionsTable records={openAttentions} />
+            <AttentionRecordsTable records={filteredAttentionRecords} />
           )}
         </TabsContent>
       </Tabs>
