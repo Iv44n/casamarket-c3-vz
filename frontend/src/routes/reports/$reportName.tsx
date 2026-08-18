@@ -3,6 +3,7 @@ import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react'
 import { Badge } from '#/components/ui/badge'
 import { buttonVariants } from '#/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '#/components/ui/card'
+import { Skeleton } from '#/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableRow } from '#/components/ui/table'
 import { cn } from '#/lib/utils'
 import { getReportRows, getReportSummary } from '#/server/reports.functions'
@@ -70,7 +71,15 @@ function ReportDetail() {
       <div className="flex items-center gap-3">
         <h1 className="text-2xl font-bold tracking-tight">{reportName}</h1>
         {summaryPromise && (
-          <Await promise={summaryPromise} fallback={null}>
+          <Await
+            promise={summaryPromise}
+            fallback={
+              <div className="flex gap-2">
+                <Skeleton className="h-5 w-16 rounded-full" />
+                <Skeleton className="h-5 w-20 rounded-full" />
+              </div>
+            }
+          >
             {summary =>
               summary && (
                 <div className="flex gap-2">

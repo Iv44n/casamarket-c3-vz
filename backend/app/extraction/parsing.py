@@ -4,6 +4,15 @@ from pathlib import Path
 import openpyxl
 
 from ..c3 import downloads
+from . import store
+
+_STORE_BACKED_REPORTS = {
+    "attention",
+    "outboundattention",
+    "callincoming",
+    "calloutgoing",
+    "transfer",
+}
 
 
 def parse_csv(path: Path) -> list[dict]:
@@ -11,7 +20,7 @@ def parse_csv(path: Path) -> list[dict]:
         return [dict(row) for row in csv.DictReader(handle)]
 
 
-def _parse_file(path: Path) -> list[dict]:
+def parse_path(path: Path) -> list[dict]:
     return parse_csv(path) if path.suffix.lower() == ".csv" else parse_xlsx(path)
 
 
@@ -38,14 +47,21 @@ def parse_report(name: str) -> list[dict] | None:
     path = downloads.latest_file(name)
     if path is None:
         return None
-    return _parse_file(path)
+    return parse_path(path)
 
 
 def parse_report_history(name: str) -> list[dict] | None:
+    if name in _STORE_BACKED_REPORTS:
+        conn = store.get_connection()
+        try:
+            return store.history_rows(conn, name)
+        finally:
+            conn.close()
+
     paths = downloads.all_files(name)
     if not paths:
         return None
     records = []
     for path in paths:
-        records.extend(_parse_file(path))
+        records.extend(parse_path(path))
     return records

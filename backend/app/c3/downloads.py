@@ -28,6 +28,7 @@ class DownloadJob:
     endpoint: str
     params: dict = field(default_factory=dict)
     file_date: date = field(default_factory=config.hoy)
+    file_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -122,15 +123,103 @@ def _transfer_job(target_date: date | None = None) -> DownloadJob:
 def build_jobs() -> list[DownloadJob]:
     jobs = [_attention_job(name) for name in reports.EXPORT_MECHANISMS]
     jobs += [_call_job(name) for name in reports.CALL_EXPORT_MECHANISMS]
-    jobs.append(_contacts_job())
     jobs.append(_transfer_job())
     return jobs
+
+
+def build_contacts_sync_jobs() -> list[DownloadJob]:
+    return [_contacts_job()]
 
 
 def build_backfill_jobs(target_date: date) -> list[DownloadJob]:
     jobs = [_attention_job(name, target_date) for name in reports.EXPORT_MECHANISMS]
     jobs += [_call_job(name, target_date) for name in reports.CALL_EXPORT_MECHANISMS]
     jobs.append(_transfer_job(target_date))
+    return jobs
+
+
+def _historical_label(date_init: date, date_end: date) -> str:
+    return f"historical_{date_init.isoformat()}_to_{date_end.isoformat()}"
+
+
+def _attention_job_historical(name: str, date_init: date, date_end: date) -> DownloadJob:
+    mechanism = reports.EXPORT_MECHANISMS[name]
+    params = {
+        "date_init": f"{date_init.isoformat()} 00:00",
+        "date_end": f"{date_end.isoformat()} 23:59",
+        "agent": "",
+        "campaign": "",
+        "attention_id": "",
+        "number": "",
+        "whatsapp_number_id": "",
+        "status": "",
+        "type": mechanism.type_param_value,
+        "condition": "",
+        "message": "",
+        "vip_only": "false",
+        "labels": "",
+        "with_form": 1,
+    }
+    return DownloadJob(
+        name=name,
+        endpoint=mechanism.export_endpoint,
+        params=params,
+        file_date=date_end,
+        file_label=_historical_label(date_init, date_end),
+    )
+
+
+def _call_job_historical(name: str, date_init: date, date_end: date) -> DownloadJob:
+    mechanism = reports.CALL_EXPORT_MECHANISMS[name]
+    params = {
+        "date_init": f"{date_init.isoformat()} 00:00",
+        "date_end": f"{date_end.isoformat()} 23:59",
+        "agent": "",
+        "campaign": "",
+        "linkedid": "",
+        "number": "",
+        "disposition": "",
+        "typeExport": mechanism.type_export_value,
+        "labels": "",
+        "from_whatsapp": "",
+        "with": mechanism.selected_with,
+        **mechanism.extra_params,
+    }
+    return DownloadJob(
+        name=name,
+        endpoint=reports.CALLS_EXPORT_ENDPOINT,
+        params=params,
+        file_date=date_end,
+        file_label=_historical_label(date_init, date_end),
+    )
+
+
+def _transfer_job_historical(date_init: date, date_end: date) -> DownloadJob:
+    params = {
+        "date_init": f"{date_init.isoformat()} 00:00",
+        "date_end": f"{date_end.isoformat()} 23:59",
+        **reports.TRANSFER_EXPORT_DEFAULT_PARAMS,
+    }
+    return DownloadJob(
+        name="transfer",
+        endpoint=reports.TRANSFER_EXPORT_ENDPOINT,
+        params=params,
+        file_date=date_end,
+        file_label=_historical_label(date_init, date_end),
+    )
+
+
+def build_historical_jobs(date_init: date, date_end: date) -> list[DownloadJob]:
+    jobs = [
+        _attention_job_historical(name, date_init, date_end)
+        for name in reports.EXPORT_MECHANISMS
+    ]
+    jobs += [
+        _call_job_historical(name, date_init, date_end)
+        for name in reports.CALL_EXPORT_MECHANISMS
+    ]
+    jobs.append(_transfer_job_historical(date_init, date_end))
+    jobs.append(_contacts_job())
     return jobs
 
 
@@ -179,8 +268,9 @@ def run_job(client: httpx.Client, job: DownloadJob) -> DownloadResult:
 
     filename = _filename_from_response(response, fallback="export")
 
+    label = job.file_label if job.file_label is not None else job.file_date.isoformat()
     config.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
-    dest = config.DOWNLOADS_DIR / f"{job.name}_{job.file_date.isoformat()}_{filename}"
+    dest = config.DOWNLOADS_DIR / f"{job.name}_{label}_{filename}"
     dest.write_bytes(response.content)
 
     return DownloadResult(

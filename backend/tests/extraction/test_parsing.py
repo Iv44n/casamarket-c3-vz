@@ -1,11 +1,12 @@
 import os
+import sqlite3
 from pathlib import Path
 
 import openpyxl
 import pytest
 
 from app import config
-from app.extraction import parsing
+from app.extraction import parsing, store
 
 
 def _write_workbook(path: Path, sheets: dict[str, list[tuple]]) -> None:
@@ -108,21 +109,49 @@ def test_parse_report_history_returns_none_when_nothing_downloaded_yet(
 ):
     monkeypatch.setattr(config, "DOWNLOADS_DIR", tmp_path)
 
-    assert parsing.parse_report_history("attention") is None
+    assert parsing.parse_report_history("contacts") is None
 
 
-def test_parse_report_history_concatenates_every_days_file_oldest_first(
+def test_parse_report_history_reads_contacts_from_flat_files_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(config, "DOWNLOADS_DIR", tmp_path)
-    older = tmp_path / "attention_2026-08-13_export.xlsx"
-    newer = tmp_path / "attention_2026-08-14_export.xlsx"
-    _write_workbook(older, {"Campaña A": [("Nombre",), ("Ana",)]})
-    _write_workbook(newer, {"Campaña A": [("Nombre",), ("Luis",)]})
+    older = tmp_path / "contacts_2026-08-13_export.xlsx"
+    newer = tmp_path / "contacts_2026-08-14_export.xlsx"
+    _write_workbook(older, {"Hoja": [("Nombre",), ("Ana",)]})
+    _write_workbook(newer, {"Hoja": [("Nombre",), ("Luis",)]})
     older_time = newer.stat().st_mtime - 100
     os.utime(older, (older_time, older_time))
 
-    assert parsing.parse_report_history("attention") == [
+    assert parsing.parse_report_history("contacts") == [
         {"Nombre": "Ana"},
         {"Nombre": "Luis"},
     ]
+
+
+def test_parse_report_history_reads_dated_reports_from_the_store(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    conn = sqlite3.connect(":memory:")
+    store._init_schema(conn)
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [{"ID atención": "1", "Estado": "Abierta"}],
+        observed_at="2026-08-13T00:00:00",
+    )
+    monkeypatch.setattr(store, "get_connection", lambda: conn)
+
+    assert parsing.parse_report_history("attention") == [
+        {"ID atención": "1", "Estado": "Abierta"}
+    ]
+
+
+def test_parse_report_history_returns_none_for_dated_reports_with_nothing_ingested(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    conn = sqlite3.connect(":memory:")
+    store._init_schema(conn)
+    monkeypatch.setattr(store, "get_connection", lambda: conn)
+
+    assert parsing.parse_report_history("attention") is None

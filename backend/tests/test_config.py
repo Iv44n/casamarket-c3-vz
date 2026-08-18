@@ -10,6 +10,8 @@ from app import config
 def clean_credential_env(monkeypatch: pytest.MonkeyPatch):
     for key in config._CREDENTIAL_KEYS:
         monkeypatch.delenv(key, raising=False)
+    for key in config._TURSO_KEYS:
+        monkeypatch.delenv(key, raising=False)
 
 
 def test_project_root_is_the_repo_root_not_app():
@@ -103,3 +105,40 @@ def test_load_credentials_base_url_from_process_env(
     creds = config.load_credentials(env_path=tmp_path / "no-existe.env")
 
     assert creds.base_url == "https://from-env.example"
+
+
+def test_load_turso_config_missing_file_raises(tmp_path: Path):
+    with pytest.raises(RuntimeError, match="TURSO_DATABASE_URL"):
+        config.load_turso_config(env_path=tmp_path / "no-existe.env")
+
+
+def test_load_turso_config_missing_token_raises(tmp_path: Path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("TURSO_DATABASE_URL=libsql://x.turso.io\n")
+
+    with pytest.raises(RuntimeError, match="TURSO_AUTH_TOKEN"):
+        config.load_turso_config(env_path=env_file)
+
+
+def test_load_turso_config_success(tmp_path: Path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "TURSO_DATABASE_URL=libsql://x.turso.io\nTURSO_AUTH_TOKEN=secreto\n"
+    )
+
+    turso = config.load_turso_config(env_path=env_file)
+
+    assert turso.database_url == "libsql://x.turso.io"
+    assert turso.auth_token == "secreto"
+
+
+def test_load_turso_config_reads_from_process_env_when_file_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("TURSO_DATABASE_URL", "libsql://env.turso.io")
+    monkeypatch.setenv("TURSO_AUTH_TOKEN", "envtoken")
+
+    turso = config.load_turso_config(env_path=tmp_path / "no-existe.env")
+
+    assert turso.database_url == "libsql://env.turso.io"
+    assert turso.auth_token == "envtoken"

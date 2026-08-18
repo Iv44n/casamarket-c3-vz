@@ -56,6 +56,7 @@ dependencies = [
     { name = "lxml" },
     { name = "openpyxl" },
     { name = "python-dotenv" },
+    { name = "turso-serverless" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -73,6 +74,7 @@ requires-dist = [
     { name = "lxml", specifier = ">=6.1.1" },
     { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "turso-serverless", specifier = ">=0.1.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32.0" },
 ]
 
@@ -470,6 +472,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/53/a3/1585216310e344e8102c22482f6060c7a6ea0322b63e026372e6dcefcfd6/truststore-0.10.4.tar.gz", hash = "sha256:9d91bd436463ad5e4ee4aba766628dd6cd7010cf3e2461756b3303710eebc301", size = 26169, upload-time = "2025-08-12T18:49:02.73Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/19/97/56608b2249fe206a67cd573bc93cd9896e1efb9e98bce9c163bcdc704b88/truststore-0.10.4-py3-none-any.whl", hash = "sha256:adaeaecf1cbb5f4de3b1959b42d41f6fab57b2b1666adb59e89cb0b53361d981", size = 18660, upload-time = "2025-08-12T18:49:01.46Z" },
+]
+
+[[package]]
+name = "turso-serverless"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8b/d7/81399012ea295f21e9dd8e35b6de5630c4f98be9edaf222de754c5ee2581/turso_serverless-0.1.0.tar.gz", hash = "sha256:36fdcc55b7f88e270a014e418c6220bb9f48da5087469f3dfacc68e56be05509", size = 15547, upload-time = "2026-07-27T07:16:49.747Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3e/c4/f49cec34e7924cabae06da5548153aeb7278f2f73ad995d1435ec98e4b22/turso_serverless-0.1.0-py3-none-any.whl", hash = "sha256:6a45e7f7c66ed5831f940bf40c45c02f1a0021be102bd9abff8e5899fa79c107", size = 12433, upload-time = "2026-07-27T07:16:48.54Z" },
 ]
 
 [[package]]

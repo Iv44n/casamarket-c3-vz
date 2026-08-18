@@ -44,7 +44,7 @@ src/
       index.tsx              the 5 known report names
       $reportName.tsx         a report's rows -- validateSearch, loader, streaming (see below)
     status.tsx              extraction run status + manual refresh button + auto-refresh settings +
-                             a separate manual trigger for the dedicated massive-cycle route
+                             backfill/contacts-sync/historical-backfill cards
   components/
     ui/                      shadcn-generated, vendored -- see "UI (shadcn)" below
     theme-provider.tsx        light/dark/system, copied from ../../RCTM_WEB's pattern
@@ -285,20 +285,6 @@ status/data. **This is a real, consequential action** -- it makes the backend lo
 auto-refresh on with a short interval) just to test the UI; the read-only routes (`/reports/*`) are
 enough to verify the frontend/backend wiring.
 
-**The massive/async "reporte masivo" cycle is a deliberately separate, manual-only mutation** --
-`triggerMassiveRefresh`/`getMassiveExtractionStatus` (`server/reports.functions.ts`) proxy to the
-backend's dedicated `POST /extraction/massive/refresh` / `GET /extraction/massive/status`
-(`backend/CLAUDE.md`'s "Massive export is a dedicated route" note has the full why). Surfaced only
-via `status.tsx`'s `MassiveRefreshCard` and its own "Ejecutar paso" button -- **`triggerRefresh` and
-`AutoRefreshProvider` never call it**. This used to be bundled into the regular refresh (every
-`POST /extraction/refresh` call, including every automatic auto-refresh tick, also advanced the
-massive cycle and could queue a new hours-long job on the live site with nobody having asked for it
-right then); splitting it out means the default, frequent, automatic refresh only ever does the fast
-5 direct downloads, and the slow, queue-and-wait massive export only runs when a person deliberately
-clicks for it. If a future need ever wants the massive cycle to advance on its own again, give it its
-own separate (and much longer) interval in `AutoRefreshProvider` rather than folding it back into the
-existing one.
-
 **`/atenciones`'s per-day filter reads history, not the latest snapshot** (`routes/atenciones.tsx`,
 `lib/date-filter.ts`): the `date` search param (`'YYYY-MM-DD' | 'all'`) is a `loaderDeps`, so changing
 it re-runs the loader, which calls `getAttentionsAnalytics`/`getIncidentAnalytics` with that date.
@@ -334,8 +320,8 @@ the selected day (`triggerRefresh` has no concept of "which day", see the note b
 label reflects which action will actually run (`"Refresh ahora"` vs `` `Backfill ${date}` ``) so this
 isn't a hidden behavior switch.
 
-**Backfilling one past day is a separate, manual-only mutation, same posture as the massive
-cycle** -- `triggerBackfill`/`getBackfillStatus` (`server/reports.functions.ts`) proxy to the
+**Backfilling one past day is a separate, manual-only mutation** --
+`triggerBackfill`/`getBackfillStatus` (`server/reports.functions.ts`) proxy to the
 backend's dedicated `POST /extraction/backfill` / `GET /extraction/backfill/status`
 (`backend/CLAUDE.md`'s "Backfilling a past day" note has the full why, including that contacts is
 deliberately excluded -- its export has no date range at all). Surfaced two ways: `status.tsx`'s
@@ -343,17 +329,6 @@ deliberately excluded -- its export has no date range at all). Surfaced two ways
 as of the note above, `/atenciones`'s "Refresh ahora" button when a specific day is selected there.
 Both eventually call the same server function -- there's no separate "atenciones backfill" codepath,
 just a different caller choosing when to invoke it.
-
-**Downloaded files are listable and deletable from `/status`** (`status.tsx`'s
-`DownloadedFilesCard`, `getDownloadedFiles`/`deleteFile` in `server/reports.functions.ts`): proxies to
-the backend's `GET /extraction/files` / `DELETE /extraction/files/{filename}`
-(`backend/CLAUDE.md`'s `routers/files.py` note). Exists because nothing ever prunes old daily
-snapshots on its own (see the per-day filter note above -- they accumulate forever, on purpose, since
-`/atenciones`'s history read depends on them staying around) -- this is the manual way to see what's
-piled up and remove a specific day/report's file, e.g. one that turned out empty or wrong before
-re-running a backfill for it. Deleting asks `window.confirm()` first (a real, irreversible disk
-delete) rather than installing a dedicated dialog component for a single confirm -- deliberately
-minimal, not an oversight.
 
 **Client-side auto-refresh** (`components/auto-refresh-provider.tsx`,
 `lib/auto-refresh-settings.ts`) -- **this is what replaced the backend's scheduler**. The backend

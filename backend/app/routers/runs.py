@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..extraction import state
-from ..schemas import BackfillRunSummary, MassiveRunSummary, NoRunsYet, RunSummary
+from ..schemas import BackfillRunSummary, HistoricalBackfillStatus, NoRunsYet, RunSummary
 
 router = APIRouter(prefix="/extraction", tags=["extraction"])
 
@@ -32,24 +32,6 @@ def status() -> RunSummary | NoRunsYet:
     return run
 
 
-@router.post("/massive/refresh")
-def massive_refresh() -> MassiveRunSummary:
-    try:
-        return state.run_massive_extraction()
-    except state.AlreadyRunningError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except (RuntimeError, httpx.HTTPError) as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-
-@router.get("/massive/status")
-def massive_status() -> MassiveRunSummary | NoRunsYet:
-    run = state.last_massive_run()
-    if run is None:
-        return NoRunsYet()
-    return run
-
-
 @router.post("/backfill")
 def backfill(request: BackfillRequest) -> BackfillRunSummary:
     try:
@@ -66,3 +48,34 @@ def backfill_status() -> BackfillRunSummary | NoRunsYet:
     if run is None:
         return NoRunsYet()
     return run
+
+
+@router.post("/contacts/sync")
+def contacts_sync() -> RunSummary:
+    try:
+        return state.run_contacts_sync()
+    except state.AlreadyRunningError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (RuntimeError, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/contacts/sync/status")
+def contacts_sync_status() -> RunSummary | NoRunsYet:
+    run = state.last_contacts_sync_run()
+    if run is None:
+        return NoRunsYet()
+    return run
+
+
+@router.post("/historical/backfill", status_code=202)
+def historical_backfill() -> HistoricalBackfillStatus:
+    try:
+        return state.start_historical_backfill()
+    except state.AlreadyRunningError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/historical/backfill/status")
+def historical_backfill_status() -> HistoricalBackfillStatus:
+    return state.historical_backfill_status()

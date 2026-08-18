@@ -20,14 +20,10 @@ checking that decision first. Unit tests exist (`tests/`, pytest, no live networ
 **Security gap, read before deploying beyond localhost**: there is currently **no authentication on
 this API**. `POST /extraction/refresh` and `GET /data/{report_name}` (which serves parsed customer
 PII -- contacts, WhatsApp attentions, calls) are open to anyone who can reach the port. So is
-`DELETE /extraction/files/{filename}` (`routers/files.py`) -- a real, irreversible delete of a
-downloaded snapshot off disk, with nothing but the filename-shape check standing between an
-anonymous caller and any of those files -- and `POST /extraction/backfill`, which like
-`POST /extraction/refresh` logs into the live `casamarket.c3.pe` and runs real downloads, just for
-whatever past day an anonymous caller asks for. CORS is wide open (`allow_origins=["*"]`) to make
-local frontend development frictionless. Add auth (and narrow CORS) before this server is reachable
-from
-anywhere but a trusted local/internal network.
+`POST /extraction/backfill`, which like `POST /extraction/refresh` logs into the live
+`casamarket.c3.pe` and runs real downloads, just for whatever past day an anonymous caller asks for.
+CORS is wide open (`allow_origins=["*"]`) to make local frontend development frictionless. Add auth
+(and narrow CORS) before this server is reachable from anywhere but a trusted local/internal network.
 
 ## Tooling
 
@@ -85,38 +81,28 @@ app/
     reports.py           hardcoded knowledge of how each report's export works (3 mechanism families)
     downloads.py          builds each export request from reports.py + config, saves the file,
                            finds the latest saved file for a report name (latest_file())
-    massive.py             async "generar reporte masivo" cycle for WhatsApp attentions (see below)
 
   extraction/         orchestrating a full run and tracking its result. Grows when extraction gets
                        MORE STATEFUL (Fase 2 of ANALYTICS_PLAN.md: a persistent history/DB instead of
                        "just the latest file") -- that logic is additive here, it doesn't change what
                        c3/ or routers/ know.
-    service.py           orchestrates a run -- `run_all()`/`run()` for the 5 daily downloads,
-                          `run_massive_cycle()`/`run_massive()` for one massive-cycle step, kept
-                          deliberately SEPARATE (see "Massive export is a dedicated route" below);
-                          named service.py, not extraction.py, so it doesn't clash with the package
-                          name it lives in
+    service.py           orchestrates a run -- `run_all()`/`run()` for the 5 daily downloads; named
+                          service.py, not extraction.py, so it doesn't clash with the package name it
+                          lives in
     parsing.py            parses a downloaded .xlsx into list[dict] for the /data endpoints
-    state.py               in-memory last-run caches (one for downloads, one for the massive cycle)
-                            + a shared threading.Lock (concurrent refresh calls -- manual, or the
-                            frontend's auto-refresh interval, possibly from more than one browser
-                            tab -- never overlap)
+    state.py               in-memory last-run cache + a shared threading.Lock (concurrent refresh
+                            calls -- manual, or the frontend's auto-refresh interval, possibly from
+                            more than one browser tab -- never overlap)
 
   routers/            the HTTP surface. Grows when a NEW ENDPOINT is added -- one file per resource,
                        same shape FastAPI's own "Bigger Applications" tutorial recommends.
     runs.py             POST /extraction/refresh, GET /extraction/status (the 5 daily downloads) plus
-                        POST /extraction/massive/refresh, GET /extraction/massive/status (the
-                        dedicated massive-cycle pair), plus POST /extraction/backfill,
-                        GET /extraction/backfill/status (re-fetch one past day for the 4 dated
-                        families -- see "Backfilling a past day" below) -- named runs.py (not
-                        extraction.py) to avoid clashing with the extraction/ package above; the
-                        actual API prefix (`/extraction/...`) is unchanged
+                        POST /extraction/backfill, GET /extraction/backfill/status (re-fetch one past
+                        day for the 4 dated families -- see "Backfilling a past day" below) -- named
+                        runs.py (not extraction.py) to avoid clashing with the extraction/ package
+                        above; the actual API prefix (`/extraction/...`) is unchanged
     data.py              GET /data/{report_name} -- parsed rows from the latest download, plus
                          GET /data/{report_name}/history -- every downloaded day's rows concatenated
-    files.py              GET /extraction/files -- lists every downloaded file on disk (report name,
-                          date, filename, size), DELETE /extraction/files/{filename} to remove one --
-                          `KNOWN_REPORTS` is imported from data.py (promoted from that module's own
-                          private `_KNOWN_REPORTS`, now shared across both routers)
 ```
 
 `tests/` mirrors this exactly: `tests/c3/`, `tests/extraction/`, `tests/routers/`, plus
@@ -178,11 +164,12 @@ symmetric**:
   today. Simplest of the three: no direction, no button-variant dropdown.
 
 All three have a separate, unrelated **async** path too (a `-massive`/`calls/massive` endpoint -> a
-job queued for later pickup, can take hours). For calls and contacts it's still **not implemented**
--- only the synchronous direct-download path is. For atenciones, the async path *is* implemented --
-see **Async massive export** below. `recon/rutas_reportes.md` maps 25+ other C3 report routes that
-aren't implemented at all yet -- new ones belong in `c3/`, following this same reverse-engineering
-approach (read the page's JS, don't guess).
+job queued for later pickup, can take hours) -- **not implemented** for any of the three families
+right now: this backend used to implement it for atenciones (`c3/massive.py`, a dedicated
+"generar reporte masivo" cycle), but that feature was removed (2026-08-18) since it wasn't needed for
+the moment -- see the git history if it needs to come back. `recon/rutas_reportes.md` maps 25+ other
+C3 report routes that aren't implemented at all yet -- new ones belong in `c3/`, following this same
+reverse-engineering approach (read the page's JS, don't guess).
 
 Of each export's button variants, only **`FORM`** ("Incluir formulario") is in scope -- a deliberate,
 user-confirmed narrowing, not a technical constraint. `selected_download_type` /
@@ -210,12 +197,18 @@ Built in two steps, specifically so the caller can report exactly what's happeni
 - `run_job(client, job)` -- does the actual GET, times it with `time.monotonic()`, sniffs for an
   HTML response (means login/server error, not the expected file), rejects empty bodies, writes to
   `config.DOWNLOADS_DIR`, and returns a `DownloadResult` carrying `status_code`, `size_bytes`,
-  `content_type`, and `elapsed_seconds`.
+  `content_type`, and `elapsed_seconds`. Passes `params=job.params or None`, not `params=job.params`
+  bare -- a real httpx footgun confirmed live on 2026-08-13: `client.get(url, params={})`
+  **replaces** the URL's existing query string, even with an empty dict, which would silently strip
+  the signature off a presigned URL (e.g. one with `?X-Amz-Signature=...` already in it) and turn a
+  valid signed request into an unsigned one (`403 Forbidden`). If a future job's `endpoint` is ever a
+  pre-built URL with its own query string, this is why `params` can't just be `job.params`.
 - `latest_file(name)` -- the most recently modified already-downloaded file for a report name (used
   by `extraction/parsing.py`, in turn used by `/data/{report_name}`). Matches
   `f"{name}_20??-??-??_*"`, not a bare `f"{name}_*"`: the latter would also match
-  `attention_masivo_*` (the async zip from `massive.py`) when looking up `"attention"` -- both share
-  the `attention_` prefix but are unrelated reports.
+  `attention_historical_2026-05-20_to_2026-08-18_*` (a wide-range historical backfill file, named
+  after its date range, not a single day) when looking up `"attention"` -- both share the
+  `attention_` prefix but are unrelated snapshots.
 - `all_files(name)` -- every downloaded file for a report name, oldest first (same glob as
   `latest_file`, just not reduced to the single newest). Used by `parse_report_history()` below to
   reconstruct multi-day history from daily snapshots that already exist on disk, instead of widening
@@ -228,40 +221,22 @@ of `JobOutcome`). `run(creds=None, transport=None)` adds login + closing the cli
 `POST /extraction/refresh`, whether that call came from a manual click or the frontend's
 auto-refresh timer.
 
-**Massive export is a dedicated route, not part of the regular refresh.** `run_all()`/`run()` used
-to also advance one step of `massive.run_cycle(client)` at the end -- meaning every automatic
-refresh (by default every few minutes, see `frontend/CLAUDE.md`'s auto-refresh provider) would queue
-or advance an hours-long async job on the live `casamarket.c3.pe` site, with nobody having asked for
-it that specific time. That's backwards from what a scheduled, frequent refresh should do, so the
-massive step was split out into its own function (`run_massive_cycle(client)`/`run_massive(creds=
-None, transport=None)`, same shape as `run_all()`/`run()`) and its own HTTP pair,
-`POST /extraction/massive/refresh` / `GET /extraction/massive/status` (`routers/runs.py`), tracked in
-its own `extraction/state.py` cache (`_last_massive_run`/`run_massive_extraction()`/
-`last_massive_run()`) separate from the regular run's. Nothing calls the massive pair
-automatically -- today the only caller is a manual button on the frontend's `/status` page
-(`frontend/src/routes/status.tsx`'s `MassiveRefreshCard`). If a future need calls for the massive
-cycle to advance on its own cadence again, that belongs on its own separate (and much longer)
-interval, not bundled back into the regular refresh.
-
 **Backfilling a past day** (`c3/downloads.py`, `extraction/service.py`/`state.py`,
 `routers/runs.py`): the regular refresh only ever requests "today" from C3 (see the Downloads note
-above), so if a day's file is missing/wrong -- deleted via `DELETE /extraction/files/{filename}`
-(`routers/files.py`), or the refresh simply didn't run that day -- there's no way to get it back
-*except* asking C3 for that specific day again. `POST /extraction/backfill` (body: `{"date":
-"YYYY-MM-DD"}`) does exactly that, for the 4 dated families only (`downloads.build_backfill_jobs`) --
-**not contacts**, whose export has no date range at all (see `_contacts_job`), so a "backfill" of it
-would just save today's roster mislabeled as a past day, which is wrong, not merely redundant.
-`DownloadJob` gained a `file_date` field for this: normally `config.hoy()` (a regular refresh's file
-is still named after today, unchanged), but a backfill job sets it to the requested past day so
-`run_job()` names the saved file after *that* day, not today -- otherwise `all_files()`/
-`parse_report_history()` would file the re-fetched data under the wrong day. Same
-locking/single-flight discipline as the regular and massive runs (shares `extraction/state.py`'s one
-`threading.Lock` -- a backfill can't run concurrently with either), its own summary type
+above), so if a day's file is missing/wrong, or the refresh simply didn't run that day -- there's no
+way to get it back *except* asking C3 for that specific day again. `POST /extraction/backfill` (body:
+`{"date": "YYYY-MM-DD"}`) does exactly that, for the 4 dated families only
+(`downloads.build_backfill_jobs`) -- **not contacts**, whose export has no date range at all (see
+`_contacts_job`), so a "backfill" of it would just save today's roster mislabeled as a past day,
+which is wrong, not merely redundant. `DownloadJob` gained a `file_date` field for this: normally
+`config.hoy()` (a regular refresh's file is still named after today, unchanged), but a backfill job
+sets it to the requested past day so `run_job()` names the saved file after *that* day, not today --
+otherwise `all_files()`/`parse_report_history()` would file the re-fetched data under the wrong day.
+Same locking/single-flight discipline as the regular run (shares `extraction/state.py`'s one
+`threading.Lock` -- a backfill can't run concurrently with it), its own summary type
 (`BackfillRunSummary`, adds `target_date` to `RunSummary`'s shape) and its own last-run cache
-(`_last_backfill_run`/`run_backfill()`/`last_backfill_run()`), same reasoning as the massive pair
-being kept separate from the regular run's cache. Nothing calls this automatically -- it's a manual,
-one-day-at-a-time action from the frontend's `/status` page, same posture as the massive cycle's
-button.
+(`_last_backfill_run`/`run_backfill()`/`last_backfill_run()`). Nothing calls this automatically --
+it's a manual, one-day-at-a-time action from the frontend's `/status` page.
 
 **Parsing** (`extraction/parsing.py`): `parse_xlsx(path)` concatenates **every sheet** in the
 workbook into one `list[dict]`, using each sheet's own first row as its header. This matters because
@@ -280,55 +255,16 @@ for why: the dashboard needs more than just today, but the raw `/reports/$report
 only ever shows the latest snapshot, unchanged). No dedup across days: each day's export already
 only covers that single day's `date_init`/`date_end` window, so consecutive files can't overlap.
 
-**Async massive export** (`c3/massive.py`): "Generar reporte masivo" for attention/outboundattention
-is encolar-y-recoger-despues, not request-and-save. `GET .../attentions-massive` (same params as the
-FORM job but `with_form=0`) queues a job; the system's own UI warns it "puede demorar incluso varias
-horas". `GET /user/report_general/get_massives` lists all massive jobs (any report family, not just
-these two) -- **it needs `Accept: application/json`**, since it's a Vue/SPA route that otherwise
-serves the page's HTML instead of JSON.
-
-The hard constraint driving this module's design: **a `get_massives` record has no field
-distinguishing `attention` (INBOUND) from `outboundattention` (OUTBOUND)** -- only `channel:
-"WHATSAPP"` for both. Neither exposes the original filter/direction. The only correct way to
-handle both directions is to never have more than one in flight and remember which one ourselves --
-hence `config.MASSIVE_STATE_FILE` (`state/massive_attentions.json`), **the one piece of persistent
-state the extraction logic owns**; everything else in `config.py`/`c3/session.py`/`c3/downloads.py`
-is stateless by design (`extraction/state.py`'s in-memory last-run cache is a separate, server-only,
-restart-losable thing -- don't confuse the two, despite the similar names).
-
-`run_cycle(client)` advances exactly one step per call:
-
-- no state file -> trigger `attention` (starts the cycle)
-- tracked job still `PENDING`/`PROCESSING` -> do nothing, report it's still going
-- tracked job `COMPLETED` -> download it (reusing `downloads.run_job`), clear the state, and
-  trigger the *other* direction -- this is where the alternation happens
-- tracked job `FAILED` (or vanished from the listing entirely -- e.g. expired) -> clear the state
-  and retrigger the **same** direction, so a transient failure doesn't silently skip it forever
-
-`describe(cycle)` turns a `CycleResult` into a sentence -- used by `extraction/state.py`'s run
-summary.
-
-**Gotcha confirmed live on 2026-08-13**: once `COMPLETED`, `download_url` isn't on `casamarket.c3.pe`
-at all -- it's a presigned S3 URL (`sfo3.digitaloceanspaces.com`) with the signature *in the query
-string*. `downloads.run_job` downloads it by reusing the same `DownloadJob`/`run_job` machinery with
-`params={}`. That surfaced a real httpx footgun: `client.get(url, params={})` **replaces** the URL's
-existing query string, even with an empty dict -- silently stripping the signature and turning a
-valid presigned request into an unsigned one (`403 Forbidden`). Fixed in `run_job` by passing
-`params=job.params or None`. If `run_job` ever grows another caller with a pre-built URL, remember
-this.
-
 **The server** (`main.py` / `extraction/state.py` / `routers/`) -- **no scheduler lives here**:
 
 - `extraction/state.py` holds `_last_run` (a plain `RunSummary`, lost on restart -- it's a
-  convenience cache for `GET /extraction/status`, not persistent state) and `_last_massive_run` (a
-  `MassiveRunSummary`, same deal for `GET /extraction/massive/status`), plus a single `threading.Lock`
-  shared by `run_extraction()` and `run_massive_extraction()`. The lock is real (not `asyncio.Lock`)
-  because concurrent refresh calls genuinely happen on different threads via FastAPI's threadpool --
-  a manual click and the frontend's auto-refresh timer landing at the same moment, or two browser
-  tabs each running their own timer -- and both downloads and the massive cycle log into the same
-  C3 session mechanism and touch `config.MASSIVE_STATE_FILE`, so letting any two runs overlap
-  (regular/regular, regular/massive, or massive/massive) could corrupt that shared state. If the lock
-  is already held, either function raises `AlreadyRunningError` immediately rather than queuing (a
+  convenience cache for `GET /extraction/status`, not persistent state), plus a single
+  `threading.Lock` shared by every run function (`run_extraction()`, `run_backfill()`, etc). The lock
+  is real (not `asyncio.Lock`) because concurrent refresh calls genuinely happen on different threads
+  via FastAPI's threadpool -- a manual click and the frontend's auto-refresh timer landing at the same
+  moment, or two browser tabs each running their own timer -- and letting any two runs overlap could
+  corrupt shared state (the same C3 session mechanism, or the downloaded files on disk). If the lock
+  is already held, the run function raises `AlreadyRunningError` immediately rather than queuing (a
   normal run takes seconds, not worth making a caller wait).
 - `routers/runs.py`: `POST /extraction/refresh` runs `state.run_extraction()` (the 5 daily
   downloads only) and maps `AlreadyRunningError` -> 409, any other `RuntimeError`/`httpx.HTTPError`
@@ -336,34 +272,18 @@ this.
   known summary, or `NoRunsYet` if the server hasn't completed a run since it started. Nothing on
   this server decides *when* refresh runs -- that's entirely the caller's choice, currently the
   frontend's auto-refresh provider (`frontend/CLAUDE.md`) plus the manual button on `/status`.
-  `POST /extraction/massive/refresh` / `GET /extraction/massive/status` are the separate, dedicated
-  pair for the massive cycle (see "Massive export is a dedicated route" above) -- same error mapping,
-  own summary type (`MassiveRunSummary`), own cache, and (unlike the pair above) no automatic caller
-  at all today.
 - `routers/data.py`: `GET /data/{report_name}` validates the name against the 5 known tabular
-  reports (`attention`, `outboundattention`, `callincoming`, `calloutgoing`, `contacts` -- not the
-  massive zip, which isn't tabular), 404s on an unknown name or on no file downloaded yet, otherwise
-  returns `parsing.parse_report(name)` as JSON. `GET /data/{report_name}/history` is the same
-  validation over `parsing.parse_report_history(name)` instead -- every downloaded day's file for that
-  report, concatenated (see that function's docstring for why no dedup is needed).
-- `routers/files.py`: lets a caller see and prune what's actually sitting in `DOWNLOADS_DIR`, since
-  nothing ever deletes an old daily snapshot on its own and they accumulate forever (frontend's
-  `/status` page surfaces this -- see `frontend/CLAUDE.md`). `GET /extraction/files` lists every file
-  matching the known `{report}_{YYYY-MM-DD}_...` naming convention (built from the same
-  `KNOWN_REPORTS` set `data.py` validates against), skipping anything else that might be in that
-  directory (the massive zips, a `.~lock.*` file left by someone having the .xlsx open in a desktop
-  app, etc) -- each entry carries `report_name`/`date`/`filename`/`size_bytes`, `filename` being the
-  identifier the delete route below takes. `DELETE /extraction/files/{filename}` re-validates that
-  same filename shape before touching disk (400 if it doesn't match) and 404s if the file's already
-  gone; a literal slash in `{filename}` never even reaches the handler -- Starlette's default path
-  converter for a single path segment doesn't match `/`, encoded or not, so a `../` traversal attempt
-  is rejected at the routing layer before this router's own regex check would run.
+  reports (`attention`, `outboundattention`, `callincoming`, `calloutgoing`, `contacts`), 404s on an
+  unknown name or on no file downloaded yet, otherwise returns `parsing.parse_report(name)` as JSON.
+  `GET /data/{report_name}/history` is the same validation over `parsing.parse_report_history(name)`
+  instead -- every downloaded day's file for that report, concatenated (see that function's
+  docstring for why no dedup is needed).
 
 **Following FastAPI's own docs** (fastapi.tiangolo.com), deliberately, this project:
 
 - Uses `-> ReturnType` return annotations (not `response_model=`) for `/extraction/*`, backed by
-  Pydantic models in `schemas.py` (`JobSummary`, `RunSummary`, `MassiveRunSummary`, `NoRunsYet`) --
-  see "Bigger Applications" (routers with `prefix`/`tags` on the `APIRouter` itself) and "Response
+  Pydantic models in `schemas.py` (`JobSummary`, `RunSummary`, `NoRunsYet`) -- see "Bigger
+  Applications" (routers with `prefix`/`tags` on the `APIRouter` itself) and "Response
   Model" tutorials. `/data/{report_name}` stays `list[dict]` on purpose: its columns come from each
   `.xlsx`'s real header row (see `extraction/parsing.py`) and vary by report, so a fixed schema would
   silently drop columns instead of validating anything real.
@@ -418,8 +338,8 @@ directory's root. Deployment target is Render's native Docker support (a Render 
 `Dockerfile` directly and runs the resulting container) -- **no `docker-compose.yml`**: one existed
 briefly for local orchestration, but Render doesn't read compose files at all (it only builds the
 Dockerfile and runs the image), so it was dead weight and got removed. Built and smoke-tested live
-(`docker build` + `docker run` against the real image, confirmed `GET /extraction/status`/`GET
-/extraction/massive/status` respond, the container reports `healthy`, and both the default port and
+(`docker build` + `docker run` against the real image, confirmed `GET /extraction/status` responds,
+the container reports `healthy`, and both the default port and
 a Render-style overridden `$PORT` work with a clean `exec`-based SIGTERM shutdown) on 2026-08-14.
 
 - **Base image**: `python:3.14-slim-bookworm` for both stages, with the standalone `uv`/`uvx`
@@ -449,36 +369,45 @@ a Render-style overridden `$PORT` work with a clean `exec`-based SIGTERM shutdow
   build` prints for this line (a generic, can't-tell-you-used-`exec` lint, not a real issue here --
   confirmed live with `docker top` that uvicorn itself is PID 1, and `docker stop` shuts it down
   cleanly in ~0.5s instead of hanging out to the SIGKILL timeout).
-- **`downloads/`/`state/` are declared `VOLUME`s in the Dockerfile, but that alone does NOT give
-  persistence on Render** -- they're this app's only runtime writes (the latest `.xlsx` per report,
-  and `state/massive_attentions.json`, see the "Path gotcha" and "Async massive export" notes above),
-  and Render's filesystem is ephemeral by default: anything written there is gone on the next deploy
-  or restart unless a Render **persistent Disk** is explicitly attached and mounted at `/app/downloads`
-  and `/app/state`. `VOLUME` here is honored by plain `docker run`/local Docker (an anonymous volume
-  survives container recreation with the same image), but don't assume it does anything on Render
-  without also configuring that Disk there.
+- **`downloads/` is declared a `VOLUME` in the Dockerfile, but that alone does NOT give persistence
+  on Render** -- it's this app's only remaining local runtime write (the latest `.xlsx`/`.csv` per
+  report, see the "Path gotcha" note above), and Render's filesystem is ephemeral by default: anything
+  written there is gone on the next deploy or restart unless a Render **persistent Disk** is
+  explicitly attached and mounted at `/app/downloads`. `VOLUME` here is honored by plain
+  `docker run`/local Docker (an anonymous volume survives container recreation with the same image),
+  but don't assume it does anything on Render without also configuring that Disk there. There's no
+  `state/` directory/volume anymore -- the historical/contacts data that used to need local persistent
+  state (`config.MASSIVE_STATE_FILE`, before the massive-report feature was removed) now lives in
+  Turso (`app/extraction/store.py`), a remote database reached over the network with its own
+  credentials (see below), not a local file needing a Disk.
 - **Credentials: Render's normal "Environment Variables" dashboard section works** -- set
-  `C3_USERNAME`/`C3_PASSWORD` (and optionally `C3_BASE_URL`) there like any other Render service.
-  This wasn't always true: `config.py`'s `load_credentials()` used to read only a literal `.env`
-  *file* and ignore process env vars entirely, which meant Render's plain env vars silently did
-  nothing (confirmed live on 2026-08-14) and the only working option was Render's **Secret Files**
-  feature pointed at `/app/.env`. `load_credentials()` was changed the same day to also read
-  `os.environ` (see the "pydantic-settings" note above for the merge order) specifically so the
-  ordinary env-var path works -- Secret Files still work too if preferred, but aren't required
-  anymore.
+  `C3_USERNAME`/`C3_PASSWORD` (and optionally `C3_BASE_URL`) there like any other Render service, plus
+  `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` for the historical-data store (`config.load_turso_config()`,
+  same merge-order/fallback behavior as `load_credentials()` below -- without these two, anything that
+  touches the store, e.g. the regular refresh's upsert step or the historical backfill, fails at that
+  point rather than at startup). This wasn't always true for the C3 pair: `config.py`'s
+  `load_credentials()` used to read only a literal `.env` *file* and ignore process env vars entirely,
+  which meant Render's plain env vars silently did nothing (confirmed live on 2026-08-14) and the only
+  working option was Render's **Secret Files** feature pointed at `/app/.env`. `load_credentials()`
+  was changed the same day to also read `os.environ` (see the "pydantic-settings" note above for the
+  merge order) specifically so the ordinary env-var path works -- Secret Files still work too if
+  preferred, but aren't required anymore.
 - **Healthcheck hits `GET /extraction/status` with plain `urllib`** (no curl/wget installed in the
   image on purpose, keeps it minimal) -- that route always returns 200 (a real summary, or
   `{"status": "no_runs_yet"}` before the first run) with no side effects, so it's a safe, cheap
   target even on a freshly started container that hasn't extracted anything yet. Reads `$PORT` too,
   same reasoning as `CMD`.
 - **Exactly one process, always** -- no `--reload` (dev-only) and deliberately no
-  `--workers`/multiple replicas either. `extraction/state.py`'s last-run caches and the refresh
-  `threading.Lock` are plain in-memory process state (see "The server" above); a second worker
-  process or container replica would get its own independent copy of both, so two refreshes could
-  overlap (the exact corruption the lock exists to prevent) and `GET /extraction/status` could
-  answer from whichever instance happened to handle that particular request. Don't scale this
-  service horizontally (Render's autoscaling / multiple instances included) without moving that state
-  somewhere shared (Redis, a DB row) first.
+  `--workers`/multiple replicas either. `extraction/state.py`'s last-run caches, the refresh
+  `threading.Lock`, and the historical backfill's background-thread status (`_historical_backfill_
+  status`, polled by the frontend while it runs) are all plain in-memory process state (see "The
+  server" above); a second worker process or container replica would get its own independent copy of
+  all three, so two refreshes could overlap (the exact corruption the lock exists to prevent),
+  `GET /extraction/status` could answer from whichever instance happened to handle that particular
+  request, and a historical backfill started on one worker would look stuck at `"idle"`/never progress
+  if the next status poll happens to land on a different worker. Don't scale this service horizontally
+  (Render's autoscaling / multiple instances included) without moving that state somewhere shared
+  (Redis, a DB row) first.
 - **Still no auth, still wide-open CORS** (see the security note near the top of this file) -- this
   Docker work doesn't change that, and deploying to a public Render URL makes it reachable from the
   entire internet instead of just a local/internal network. Put a reverse proxy + auth layer in front

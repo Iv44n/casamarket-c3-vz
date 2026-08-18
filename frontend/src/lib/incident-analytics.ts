@@ -29,6 +29,7 @@ export const INCIDENT_DETAIL_FIELD: Record<
     campana: string
     estado: string
     hora: string
+    horaFinal: string
     tiempo: string[]
   }
 > = {
@@ -38,6 +39,7 @@ export const INCIDENT_DETAIL_FIELD: Record<
     campana: 'Campaña',
     estado: 'Estado',
     hora: 'Hora registro',
+    horaFinal: 'Hora final',
     tiempo: ['Tiempo de atención']
   },
   outboundattention: {
@@ -46,6 +48,7 @@ export const INCIDENT_DETAIL_FIELD: Record<
     campana: 'Campaña',
     estado: 'Estado',
     hora: 'Hora registro',
+    horaFinal: 'Hora final',
     tiempo: ['Tiempo de atención']
   },
   calloutgoing: {
@@ -54,6 +57,7 @@ export const INCIDENT_DETAIL_FIELD: Record<
     campana: 'Campaña',
     estado: 'Estado',
     hora: 'Hora',
+    horaFinal: 'Hora final',
     tiempo: ['Hablado llamada', 'Total llamada']
   }
 }
@@ -167,6 +171,7 @@ export function deriveIncidentAnalytics(
         estado: normalizeIncidentField(row[detailField.estado], ''),
         fecha: stringField(row[dateField]),
         hora: stringField(row[detailField.hora]),
+        horaFinal: stringField(row[detailField.horaFinal]),
         tiempoSegundos: parseDurationToSeconds(
           firstNonEmptyValue(row, detailField.tiempo)
         )

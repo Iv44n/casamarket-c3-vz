@@ -1,4 +1,5 @@
 import os
+import sqlite3
 from pathlib import Path
 
 import openpyxl
@@ -7,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app import config
+from app.extraction import store
 
 
 @pytest.fixture
@@ -56,20 +58,39 @@ def test_get_report_404s_when_nothing_downloaded_yet(client: TestClient):
     assert response.status_code == 404
 
 
-def test_get_report_history_concatenates_every_downloaded_day(
+def test_get_report_history_concatenates_every_downloaded_day_for_contacts(
     client: TestClient, tmp_path: Path
 ):
-    older = tmp_path / "attention_2026-08-13_export.xlsx"
-    newer = tmp_path / "attention_2026-08-14_export.xlsx"
+    older = tmp_path / "contacts_2026-08-13_export.xlsx"
+    newer = tmp_path / "contacts_2026-08-14_export.xlsx"
     _write_xlsx(older, [("Nombre",), ("Ana",)])
     _write_xlsx(newer, [("Nombre",), ("Luis",)])
     older_time = newer.stat().st_mtime - 100
     os.utime(older, (older_time, older_time))
 
-    response = client.get("/data/attention/history")
+    response = client.get("/data/contacts/history")
 
     assert response.status_code == 200
     assert response.json() == [{"Nombre": "Ana"}, {"Nombre": "Luis"}]
+
+
+def test_get_report_history_reads_dated_reports_from_the_store(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    store._init_schema(conn)
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [{"ID atención": "1", "Estado": "Abierta"}],
+        observed_at="2026-08-13T00:00:00",
+    )
+    monkeypatch.setattr(store, "get_connection", lambda: conn)
+
+    response = client.get("/data/attention/history")
+
+    assert response.status_code == 200
+    assert response.json() == [{"ID atención": "1", "Estado": "Abierta"}]
 
 
 def test_get_report_history_404s_for_unknown_report_name(client: TestClient):

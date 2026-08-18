@@ -1,9 +1,9 @@
 import type {
   BackfillRunSummary,
   BackfillStatus,
-  DownloadedFile,
+  ContactsSyncStatus,
   ExtractionStatus,
-  MassiveExtractionStatus,
+  HistoricalBackfillStatus,
   ReportRow
 } from './schemas'
 
@@ -45,39 +45,6 @@ export async function triggerExtractionRefresh(): Promise<ExtractionStatus> {
   })
   return response.json()
 }
-export async function fetchMassiveExtractionStatus(): Promise<MassiveExtractionStatus> {
-  const response = await backendFetch('/extraction/massive/status')
-  return response.json()
-}
-export async function triggerMassiveExtractionRefresh(): Promise<MassiveExtractionStatus> {
-  const response = await backendFetch('/extraction/massive/refresh', {
-    method: 'POST'
-  })
-  return response.json()
-}
-export async function fetchDownloadedFiles(): Promise<DownloadedFile[]> {
-  const response = await backendFetch('/extraction/files')
-  return response.json()
-}
-export async function deleteDownloadedFile(filename: string): Promise<void> {
-  const path = `/extraction/files/${encodeURIComponent(filename)}`
-  const response = await fetch(`${BASE_URL}${path}`, { method: 'DELETE' })
-  if (!response.ok) {
-    throw new Error(
-      `C3 backend ${path} responded ${response.status}: ${await response.text()}`
-    )
-  }
-}
-export async function fetchDownloadedFile(filename: string): Promise<Response> {
-  const path = `/extraction/files/${encodeURIComponent(filename)}`
-  const response = await fetch(`${BASE_URL}${path}`)
-  if (!response.ok) {
-    throw new Error(
-      `C3 backend ${path} responded ${response.status}: ${await response.text()}`
-    )
-  }
-  return response
-}
 export async function fetchBackfillStatus(): Promise<BackfillStatus> {
   const response = await backendFetch('/extraction/backfill/status')
   return response.json()
@@ -89,6 +56,26 @@ export async function triggerBackfillExtraction(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ date })
+  })
+  return response.json()
+}
+export async function fetchContactsSyncStatus(): Promise<ContactsSyncStatus> {
+  const response = await backendFetch('/extraction/contacts/sync/status')
+  return response.json()
+}
+export async function triggerContactsSync(): Promise<ContactsSyncStatus> {
+  const response = await backendFetch('/extraction/contacts/sync', {
+    method: 'POST'
+  })
+  return response.json()
+}
+export async function fetchHistoricalBackfillStatus(): Promise<HistoricalBackfillStatus> {
+  const response = await backendFetch('/extraction/historical/backfill/status')
+  return response.json()
+}
+export async function triggerHistoricalBackfill(): Promise<HistoricalBackfillStatus> {
+  const response = await backendFetch('/extraction/historical/backfill', {
+    method: 'POST'
   })
   return response.json()
 }

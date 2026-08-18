@@ -11,9 +11,6 @@ export type ReportName = (typeof REPORT_NAMES)[number]
 export const reportNameSchema = z.object({
   reportName: z.enum(REPORT_NAMES)
 })
-export const deleteFileSchema = z.object({
-  filename: z.string().min(1)
-})
 export const reportSearchSchema = z.object({
   page: z.number().int().min(1).default(1),
   pageSize: z.number().int().min(1).max(200).default(50)
@@ -163,6 +160,7 @@ export type IncidentRecord = {
   estado: string
   fecha: string
   hora: string
+  horaFinal: string
   tiempoSegundos: number | null
 }
 export type IncidentAnalytics = {
@@ -183,13 +181,6 @@ export type RunSummary = {
   ok: boolean
   jobs: JobSummary[]
 }
-export type MassiveRunSummary = {
-  started_at: string
-  finished_at: string
-  ok: boolean
-  massive: string | null
-  massive_error: string | null
-}
 export type BackfillRunSummary = {
   started_at: string
   finished_at: string
@@ -201,11 +192,20 @@ export type NoRunsYet = {
   status: 'no_runs_yet'
 }
 export type ExtractionStatus = RunSummary | NoRunsYet
-export type MassiveExtractionStatus = MassiveRunSummary | NoRunsYet
 export type BackfillStatus = BackfillRunSummary | NoRunsYet
-export type DownloadedFile = {
-  report_name: ReportName
-  date: string
-  filename: string
-  size_bytes: number
+export type ContactsSyncStatus = RunSummary | NoRunsYet
+export type HistoricalRunSummary = {
+  started_at: string
+  finished_at: string
+  ok: boolean
+  window_days: number
+  jobs: JobSummary[]
+}
+export type HistoricalBackfillPhase = 'idle' | 'running' | 'done' | 'error'
+export type HistoricalBackfillStatus = {
+  phase: HistoricalBackfillPhase
+  started_at: string | null
+  finished_at: string | null
+  result: HistoricalRunSummary | null
+  error: string | null
 }

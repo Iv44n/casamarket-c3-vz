@@ -1,4 +1,4 @@
-import { ClockIcon, UserIcon } from 'lucide-react'
+import { CircleCheckIcon, ClockIcon, UserIcon } from 'lucide-react'
 import { useState } from 'react'
 import {
   CHART_AXIS_LABEL_FONT_SIZE,
@@ -33,6 +33,12 @@ function TicketList({ items }: { items: IncidentRecord[] }) {
                 ? '—'
                 : formatSecondsAsDuration(item.tiempoSegundos)}
             </span>
+            {item.horaFinal && (
+              <span className="inline-flex items-center gap-1">
+                <CircleCheckIcon className="size-3" />
+                Cerrado {item.horaFinal}
+              </span>
+            )}
             <span className="inline-flex items-center gap-1">
               <UserIcon className="size-3" />
               {item.agente || 'Sin agente'}

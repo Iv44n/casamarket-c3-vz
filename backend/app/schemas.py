@@ -18,14 +18,6 @@ class RunSummary(BaseModel):
     jobs: list[JobSummary]
 
 
-class MassiveRunSummary(BaseModel):
-    started_at: str
-    finished_at: str
-    ok: bool
-    massive: str | None
-    massive_error: str | None
-
-
 class BackfillRunSummary(BaseModel):
     started_at: str
     finished_at: str
@@ -34,12 +26,21 @@ class BackfillRunSummary(BaseModel):
     jobs: list[JobSummary]
 
 
+class HistoricalRunSummary(BaseModel):
+    started_at: str
+    finished_at: str
+    ok: bool
+    window_days: int
+    jobs: list[JobSummary]
+
+
+class HistoricalBackfillStatus(BaseModel):
+    phase: Literal["idle", "running", "done", "error"] = "idle"
+    started_at: str | None = None
+    finished_at: str | None = None
+    result: HistoricalRunSummary | None = None
+    error: str | None = None
+
+
 class NoRunsYet(BaseModel):
     status: Literal["no_runs_yet"] = "no_runs_yet"
-
-
-class DownloadedFile(BaseModel):
-    report_name: str
-    date: str
-    filename: str
-    size_bytes: int

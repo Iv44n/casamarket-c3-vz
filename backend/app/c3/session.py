@@ -20,10 +20,12 @@ def _extract_token(html: str) -> str:
 
 
 def login(
-    creds: config.Credentials, transport: httpx.BaseTransport | None = None
+    creds: config.Credentials,
+    transport: httpx.BaseTransport | None = None,
+    timeout: float = 30.0,
 ) -> httpx.Client:
     client = httpx.Client(
-        base_url=creds.base_url, follow_redirects=True, timeout=30.0, transport=transport
+        base_url=creds.base_url, follow_redirects=True, timeout=timeout, transport=transport
     )
 
     login_page = client.get(config.LOGIN_PATH)

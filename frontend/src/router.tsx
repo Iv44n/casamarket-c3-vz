@@ -1,11 +1,13 @@
 import { createRouter as createTanStackRouter } from '@tanstack/react-router'
+import { RoutePending } from '#/components/route-pending'
 import { routeTree } from './routeTree.gen'
 export function getRouter() {
   const router = createTanStackRouter({
     routeTree,
     scrollRestoration: true,
     defaultPreload: 'intent',
-    defaultPreloadStaleTime: 0
+    defaultPreloadStaleTime: 0,
+    defaultPendingComponent: RoutePending
   })
   return router
 }

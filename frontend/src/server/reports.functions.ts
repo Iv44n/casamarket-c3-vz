@@ -11,17 +11,16 @@ import {
   INCIDENT_SOURCE_REPORTS
 } from '#/lib/incident-analytics'
 import {
-  deleteDownloadedFile,
   fetchBackfillStatus,
-  fetchDownloadedFile,
-  fetchDownloadedFiles,
+  fetchContactsSyncStatus,
   fetchExtractionStatus,
-  fetchMassiveExtractionStatus,
+  fetchHistoricalBackfillStatus,
   fetchReportRows,
   fetchReportRowsHistory,
   triggerBackfillExtraction,
+  triggerContactsSync,
   triggerExtractionRefresh,
-  triggerMassiveExtractionRefresh
+  triggerHistoricalBackfill
 } from './backend.server'
 import type {
   AttentionDirection,
@@ -35,7 +34,6 @@ import type {
 import {
   backfillRequestSchema,
   dateFilterSchema,
-  deleteFileSchema,
   reportNameSchema
 } from './schemas'
 
@@ -357,45 +355,6 @@ export const triggerRefresh = createServerFn({ method: 'POST' }).handler(
   }
 )
 
-export const getMassiveExtractionStatus = createServerFn({
-  method: 'GET'
-}).handler(async () => {
-  return fetchMassiveExtractionStatus()
-})
-
-export const triggerMassiveRefresh = createServerFn({ method: 'POST' }).handler(
-  async () => {
-    return triggerMassiveExtractionRefresh()
-  }
-)
-
-export const getDownloadedFiles = createServerFn({ method: 'GET' }).handler(
-  async () => {
-    return fetchDownloadedFiles()
-  }
-)
-
-export const deleteFile = createServerFn({ method: 'POST' })
-  .validator(deleteFileSchema)
-  .handler(async ({ data }) => {
-    await deleteDownloadedFile(data.filename)
-  })
-
-export const downloadFile = createServerFn({ method: 'GET' })
-  .validator(deleteFileSchema)
-  .handler(async ({ data }) => {
-    const backendResponse = await fetchDownloadedFile(data.filename)
-    const body = await backendResponse.arrayBuffer()
-    return new Response(body, {
-      headers: {
-        'Content-Type':
-          backendResponse.headers.get('content-type') ??
-          'application/octet-stream',
-        'Content-Disposition': `attachment; filename="${data.filename}"`
-      }
-    })
-  })
-
 export const getBackfillStatus = createServerFn({ method: 'GET' }).handler(
   async () => {
     return fetchBackfillStatus()
@@ -407,3 +366,27 @@ export const triggerBackfill = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     return triggerBackfillExtraction(data.date)
   })
+
+export const getContactsSyncStatus = createServerFn({ method: 'GET' }).handler(
+  async () => {
+    return fetchContactsSyncStatus()
+  }
+)
+
+export const triggerContactsSyncRun = createServerFn({
+  method: 'POST'
+}).handler(async () => {
+  return triggerContactsSync()
+})
+
+export const getHistoricalBackfillStatus = createServerFn({
+  method: 'GET'
+}).handler(async () => {
+  return fetchHistoricalBackfillStatus()
+})
+
+export const triggerHistoricalBackfillRun = createServerFn({
+  method: 'POST'
+}).handler(async () => {
+  return triggerHistoricalBackfill()
+})

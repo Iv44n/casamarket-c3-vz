@@ -59,13 +59,15 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# downloads/ and state/ are this app's only writes at runtime (the latest
-# .xlsx per report, and state/massive_attentions.json -- see CLAUDE.md's
-# "Path gotcha" and "the one piece of persistent state" notes). Declared as
-# volumes so a redeploy (new container, same image) doesn't silently lose
-# already-downloaded reports or the massive-cycle tracking state.
-RUN mkdir -p /app/downloads /app/state && chown -R app:app /app/downloads /app/state
-VOLUME ["/app/downloads", "/app/state"]
+# downloads/ is this app's only local write at runtime (the latest .xlsx/.csv
+# per report -- see CLAUDE.md's "Path gotcha" note). Declared as a volume so a
+# redeploy (new container, same image) doesn't silently lose already-
+# downloaded reports. There's no state/ directory anymore -- the historical/
+# contacts data lives in Turso (app/extraction/store.py), a remote database
+# reached over the network via TURSO_DATABASE_URL/TURSO_AUTH_TOKEN, not a
+# local file that would need its own Disk.
+RUN mkdir -p /app/downloads && chown -R app:app /app/downloads
+VOLUME ["/app/downloads"]
 
 USER app
 
