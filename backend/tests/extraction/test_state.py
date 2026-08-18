@@ -1,4 +1,5 @@
 import datetime
+import sqlite3
 import time
 from pathlib import Path
 
@@ -7,6 +8,16 @@ import pytest
 from app.c3 import downloads
 from app.extraction import service, state, store
 from app.schemas import HistoricalBackfillStatus
+
+
+@pytest.fixture(autouse=True)
+def isolated_sync_status_store(monkeypatch: pytest.MonkeyPatch):
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    store._init_schema(conn)
+    monkeypatch.setattr(store, "get_connection", lambda: conn)
+    state._hydrated_kinds.clear()
+    yield
+    state._hydrated_kinds.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -113,6 +124,68 @@ def test_run_extraction_releases_the_lock_even_if_extraction_run_raises(
 
     assert not state._lock.locked()
     assert state.last_run() is None
+
+
+def test_run_extraction_persists_the_summary_to_the_store(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(service, "run", lambda: _fake_run(ok=True))
+
+    summary = state.run_extraction()
+
+    conn = store.get_connection()
+    saved = store.load_sync_status(conn, state._KIND_LAST_RUN)
+    assert saved == summary.model_dump(mode="json")
+
+
+def test_last_run_hydrates_from_the_store_after_a_simulated_restart(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(service, "run", lambda: _fake_run(ok=True))
+    state.run_extraction()
+
+    state._last_run = None
+    state._hydrated_kinds.clear()
+
+    hydrated = state.last_run()
+
+    assert hydrated is not None
+    assert hydrated.ok is True
+
+
+def test_last_run_only_attempts_to_hydrate_once_per_process(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    real_get_connection = store.get_connection
+    calls = []
+
+    def counting_get_connection():
+        calls.append(1)
+        return real_get_connection()
+
+    monkeypatch.setattr(store, "get_connection", counting_get_connection)
+
+    assert state.last_run() is None
+    assert state.last_run() is None
+
+    assert len(calls) == 1
+
+
+def test_run_extraction_still_succeeds_if_persisting_to_the_store_fails(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setattr(service, "run", lambda: _fake_run(ok=True))
+    monkeypatch.setattr(
+        store,
+        "get_connection",
+        lambda: (_ for _ in ()).throw(RuntimeError("TURSO_DATABASE_URL no configurado")),
+    )
+
+    with caplog.at_level("WARNING", logger="app.extraction.state"):
+        summary = state.run_extraction()
+
+    assert summary.ok is True
+    assert state.last_run() == summary
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("No se pudo persistir" in m for m in warnings)
 
 
 @pytest.fixture(autouse=True)
@@ -387,3 +460,20 @@ def test_start_historical_backfill_raises_already_running_if_lock_held(
 
 def test_historical_backfill_status_defaults_to_idle():
     assert state.historical_backfill_status().phase == "idle"
+
+
+def test_historical_backfill_status_hydrates_from_the_store_after_a_simulated_restart(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(service, "run_historical_backfill", lambda: _fake_run(ok=True))
+    state.start_historical_backfill()
+    _wait_until_not_running()
+
+    state._historical_backfill_status = HistoricalBackfillStatus()
+    state._hydrated_kinds.clear()
+
+    hydrated = state.historical_backfill_status()
+
+    assert hydrated.phase == "done"
+    assert hydrated.result is not None
+    assert hydrated.result.ok is True

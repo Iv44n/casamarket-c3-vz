@@ -10,7 +10,7 @@ from ..schemas import (
     JobSummary,
     RunSummary,
 )
-from . import service
+from . import service, store
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,42 @@ _last_run: RunSummary | None = None
 _last_backfill_run: BackfillRunSummary | None = None
 _last_contacts_sync_run: RunSummary | None = None
 _historical_backfill_status = HistoricalBackfillStatus()
+
+_KIND_LAST_RUN = "last_run"
+_KIND_LAST_BACKFILL_RUN = "last_backfill_run"
+_KIND_LAST_CONTACTS_SYNC_RUN = "last_contacts_sync_run"
+_KIND_HISTORICAL_BACKFILL_STATUS = "historical_backfill_status"
+
+_hydrated_kinds: set[str] = set()
+
+
+def _persist_sync_status(kind: str, status) -> None:
+    try:
+        conn = store.get_connection()
+        store.save_sync_status(
+            conn, kind, status.model_dump(mode="json"), datetime.now(config.TZ).isoformat()
+        )
+    except Exception as exc:
+        logger.warning("No se pudo persistir el estado '%s' en la DB -- %s", kind, exc)
+
+
+def _hydrate_once(kind: str, model):
+    if kind in _hydrated_kinds:
+        return None
+    _hydrated_kinds.add(kind)
+    try:
+        conn = store.get_connection()
+        data = store.load_sync_status(conn, kind)
+    except Exception as exc:
+        logger.warning("No se pudo leer el estado '%s' desde la DB -- %s", kind, exc)
+        return None
+    if data is None:
+        return None
+    try:
+        return model.model_validate(data)
+    except Exception as exc:
+        logger.warning("Estado '%s' guardado en la DB tiene forma invalida -- %s", kind, exc)
+        return None
 
 
 class AlreadyRunningError(RuntimeError):
@@ -89,11 +125,17 @@ def run_extraction() -> RunSummary:
         jobs=[_job_summary(o) for o in run.jobs],
     )
     _last_run = summary
+    _persist_sync_status(_KIND_LAST_RUN, summary)
     logger.info("Refresh regular: terminado (ok=%s)", summary.ok)
     return summary
 
 
 def last_run() -> RunSummary | None:
+    global _last_run
+    if _last_run is None:
+        loaded = _hydrate_once(_KIND_LAST_RUN, RunSummary)
+        if loaded is not None:
+            _last_run = loaded
     return _last_run
 
 
@@ -118,11 +160,17 @@ def run_backfill(target_date: date) -> BackfillRunSummary:
         jobs=[_job_summary(o) for o in run.jobs],
     )
     _last_backfill_run = summary
+    _persist_sync_status(_KIND_LAST_BACKFILL_RUN, summary)
     logger.info("%s: terminado (ok=%s)", label, summary.ok)
     return summary
 
 
 def last_backfill_run() -> BackfillRunSummary | None:
+    global _last_backfill_run
+    if _last_backfill_run is None:
+        loaded = _hydrate_once(_KIND_LAST_BACKFILL_RUN, BackfillRunSummary)
+        if loaded is not None:
+            _last_backfill_run = loaded
     return _last_backfill_run
 
 
@@ -145,11 +193,17 @@ def run_contacts_sync() -> RunSummary:
         jobs=[_job_summary(o) for o in run.jobs],
     )
     _last_contacts_sync_run = summary
+    _persist_sync_status(_KIND_LAST_CONTACTS_SYNC_RUN, summary)
     logger.info("Sync de contactos: terminado (ok=%s)", summary.ok)
     return summary
 
 
 def last_contacts_sync_run() -> RunSummary | None:
+    global _last_contacts_sync_run
+    if _last_contacts_sync_run is None:
+        loaded = _hydrate_once(_KIND_LAST_CONTACTS_SYNC_RUN, RunSummary)
+        if loaded is not None:
+            _last_contacts_sync_run = loaded
     return _last_contacts_sync_run
 
 
@@ -163,19 +217,24 @@ def _run_historical_backfill_worker(started_at: str) -> None:
         run = service.run_historical_backfill()
     except Exception as exc:
         logger.warning("Backfill historico: fallo antes de completar -- %s", exc)
-        _historical_backfill_status = HistoricalBackfillStatus(
+        error_status = HistoricalBackfillStatus(
             phase="error",
             started_at=started_at,
             finished_at=datetime.now(config.TZ).isoformat(),
             error=str(exc),
         )
+        _persist_sync_status(_KIND_HISTORICAL_BACKFILL_STATUS, error_status)
+        # el flip del global va al final -- es la señal que polling externo (incluida
+        # `_wait_until_not_running` en los tests) usa para saber que ya no hay nada mas
+        # pendiente, persistencia incluida.
+        _historical_backfill_status = error_status
         _lock.release()
         return
 
     _log_job_outcomes("Backfill historico", run.jobs)
 
     finished_at = datetime.now(config.TZ).isoformat()
-    _historical_backfill_status = HistoricalBackfillStatus(
+    done_status = HistoricalBackfillStatus(
         phase="done",
         started_at=started_at,
         finished_at=finished_at,
@@ -187,7 +246,9 @@ def _run_historical_backfill_worker(started_at: str) -> None:
             jobs=[_job_summary(o) for o in run.jobs],
         ),
     )
+    _persist_sync_status(_KIND_HISTORICAL_BACKFILL_STATUS, done_status)
     logger.info("Backfill historico: terminado (ok=%s)", run.ok)
+    _historical_backfill_status = done_status
     _lock.release()
 
 
@@ -200,6 +261,7 @@ def start_historical_backfill() -> HistoricalBackfillStatus:
     started_at = datetime.now(config.TZ).isoformat()
     running_status = HistoricalBackfillStatus(phase="running", started_at=started_at)
     _historical_backfill_status = running_status
+    _persist_sync_status(_KIND_HISTORICAL_BACKFILL_STATUS, running_status)
     threading.Thread(
         target=_run_historical_backfill_worker, args=(started_at,), daemon=True
     ).start()
@@ -207,4 +269,9 @@ def start_historical_backfill() -> HistoricalBackfillStatus:
 
 
 def historical_backfill_status() -> HistoricalBackfillStatus:
+    global _historical_backfill_status
+    if _historical_backfill_status.phase == "idle":
+        loaded = _hydrate_once(_KIND_HISTORICAL_BACKFILL_STATUS, HistoricalBackfillStatus)
+        if loaded is not None:
+            _historical_backfill_status = loaded
     return _historical_backfill_status

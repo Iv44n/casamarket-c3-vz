@@ -87,6 +87,12 @@ CREATE TABLE IF NOT EXISTS contacts_snapshot (
     row_json      TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_contacts_snapshot_captured_at ON contacts_snapshot(captured_at);
+
+CREATE TABLE IF NOT EXISTS sync_status (
+    kind         TEXT PRIMARY KEY,
+    status_json  TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
 """
 
 
@@ -326,3 +332,23 @@ def history_rows(conn: DBConnection, report_name: str) -> list[dict] | None:
     cursor = conn.execute(f"SELECT row_json FROM {table} ORDER BY {order_by}")
     rows = [json.loads(row[0]) for row in cursor.fetchall()]
     return rows or None
+
+
+def save_sync_status(
+    conn: DBConnection, kind: str, status: dict, updated_at: str
+) -> None:
+    conn.execute(
+        "INSERT INTO sync_status (kind, status_json, updated_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(kind) DO UPDATE SET "
+        "status_json=excluded.status_json, updated_at=excluded.updated_at",
+        (kind, json.dumps(status, default=str), updated_at),
+    )
+    conn.commit()
+
+
+def load_sync_status(conn: DBConnection, kind: str) -> dict | None:
+    cursor = conn.execute(
+        "SELECT status_json FROM sync_status WHERE kind = ?", (kind,)
+    )
+    row = cursor.fetchone()
+    return json.loads(row[0]) if row is not None else None
