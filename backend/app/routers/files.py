@@ -1,6 +1,7 @@
 import re
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 
 from .. import config
 from ..schemas import DownloadedFile
@@ -8,8 +9,15 @@ from .data import KNOWN_REPORTS
 
 router = APIRouter(prefix="/extraction/files", tags=["extraction"])
 
+# `(?:_masivo)?` matches c3/massive.py's `_download` job names (e.g.
+# "attention_masivo") so the reporte masivo's zip shows up alongside the
+# regular daily downloads instead of being invisible in this listing.
+# `[^/]+` (not `.+`) keeps a path-traversal filename from ever reconstructing
+# to somewhere outside DOWNLOADS_DIR in delete_file below.
 _FILENAME_RE = re.compile(
-    r"^(?P<name>" + "|".join(sorted(KNOWN_REPORTS)) + r")_(?P<date>\d{4}-\d{2}-\d{2})_[^/]+$"
+    r"^(?P<name>"
+    + "|".join(sorted(KNOWN_REPORTS))
+    + r")(?:_masivo)?_(?P<date>\d{4}-\d{2}-\d{2})_[^/]+$"
 )
 
 
@@ -37,6 +45,21 @@ def _list_downloaded_files() -> list[DownloadedFile]:
 @router.get("")
 def list_files() -> list[DownloadedFile]:
     return _list_downloaded_files()
+
+
+@router.get("/{filename}")
+def download_file(filename: str) -> FileResponse:
+    if not _FILENAME_RE.match(filename):
+        raise HTTPException(
+            status_code=400, detail=f"Nombre de archivo invalido: {filename!r}"
+        )
+
+    path = config.DOWNLOADS_DIR / filename
+    if not path.is_file():
+        raise HTTPException(
+            status_code=404, detail=f"Archivo no encontrado: {filename!r}"
+        )
+    return FileResponse(path, filename=filename)
 
 
 @router.delete("/{filename}")

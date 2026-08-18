@@ -13,6 +13,7 @@ import {
 import {
   deleteDownloadedFile,
   fetchBackfillStatus,
+  fetchDownloadedFile,
   fetchDownloadedFiles,
   fetchExtractionStatus,
   fetchMassiveExtractionStatus,
@@ -378,6 +379,21 @@ export const deleteFile = createServerFn({ method: 'POST' })
   .validator(deleteFileSchema)
   .handler(async ({ data }) => {
     await deleteDownloadedFile(data.filename)
+  })
+
+export const downloadFile = createServerFn({ method: 'GET' })
+  .validator(deleteFileSchema)
+  .handler(async ({ data }) => {
+    const backendResponse = await fetchDownloadedFile(data.filename)
+    const body = await backendResponse.arrayBuffer()
+    return new Response(body, {
+      headers: {
+        'Content-Type':
+          backendResponse.headers.get('content-type') ??
+          'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${data.filename}"`
+      }
+    })
   })
 
 export const getBackfillStatus = createServerFn({ method: 'GET' }).handler(

@@ -68,6 +68,16 @@ export async function deleteDownloadedFile(filename: string): Promise<void> {
     )
   }
 }
+export async function fetchDownloadedFile(filename: string): Promise<Response> {
+  const path = `/extraction/files/${encodeURIComponent(filename)}`
+  const response = await fetch(`${BASE_URL}${path}`)
+  if (!response.ok) {
+    throw new Error(
+      `C3 backend ${path} responded ${response.status}: ${await response.text()}`
+    )
+  }
+  return response
+}
 export async function fetchBackfillStatus(): Promise<BackfillStatus> {
   const response = await backendFetch('/extraction/backfill/status')
   return response.json()

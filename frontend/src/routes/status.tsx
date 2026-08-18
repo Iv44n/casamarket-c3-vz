@@ -1,6 +1,6 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
-import { RefreshCwIcon, Trash2Icon } from 'lucide-react'
+import { DownloadIcon, RefreshCwIcon, Trash2Icon } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useAutoRefresh } from '#/components/auto-refresh-provider'
@@ -36,6 +36,7 @@ import type { IntervalUnit } from '#/lib/auto-refresh-settings'
 import { cn } from '#/lib/utils'
 import {
   deleteFile,
+  downloadFile,
   getBackfillStatus,
   getDownloadedFiles,
   getExtractionStatus,
@@ -125,7 +126,9 @@ function formatBytes(bytes: number): string {
 function DownloadedFilesCard({ files }: { files: DownloadedFile[] }) {
   const router = useRouter()
   const removeFile = useServerFn(deleteFile)
+  const fetchFileDownload = useServerFn(downloadFile)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [downloading, setDownloading] = useState<string | null>(null)
   const sorted = [...files].sort(
     (a, b) =>
       b.date.localeCompare(a.date) || a.report_name.localeCompare(b.report_name)
@@ -147,6 +150,25 @@ function DownloadedFilesCard({ files }: { files: DownloadedFile[] }) {
       toast.error(err instanceof Error ? err.message : String(err))
     } finally {
       setDeleting(null)
+    }
+  }
+  async function handleDownload(filename: string) {
+    setDownloading(filename)
+    try {
+      const response = await fetchFileDownload({ data: { filename } })
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDownloading(null)
     }
   }
   return (
@@ -188,6 +210,19 @@ function DownloadedFilesCard({ files }: { files: DownloadedFile[] }) {
                   </TableCell>
                   <TableCell>{formatBytes(file.size_bytes)}</TableCell>
                   <TableCell className="text-right">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Descargar ${file.filename}`}
+                      disabled={downloading === file.filename}
+                      onClick={() => handleDownload(file.filename)}
+                    >
+                      <DownloadIcon
+                        className={cn(
+                          downloading === file.filename && 'animate-pulse'
+                        )}
+                      />
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon-sm"
