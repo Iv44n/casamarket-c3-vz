@@ -73,9 +73,18 @@ export async function fetchHistoricalBackfillStatus(): Promise<HistoricalBackfil
   const response = await backendFetch('/extraction/historical/backfill/status')
   return response.json()
 }
-export async function triggerHistoricalBackfill(): Promise<HistoricalBackfillStatus> {
+export async function triggerHistoricalBackfill(dateRange?: {
+  dateInit: string
+  dateEnd: string
+}): Promise<HistoricalBackfillStatus> {
   const response = await backendFetch('/extraction/historical/backfill', {
-    method: 'POST'
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(
+      dateRange
+        ? { date_init: dateRange.dateInit, date_end: dateRange.dateEnd }
+        : {}
+    )
   })
   return response.json()
 }

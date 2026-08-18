@@ -1,6 +1,6 @@
 import logging
 import threading
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from .. import config
 from ..schemas import (
@@ -207,14 +207,17 @@ def last_contacts_sync_run() -> RunSummary | None:
     return _last_contacts_sync_run
 
 
-def _run_historical_backfill_worker(started_at: str) -> None:
+def _run_historical_backfill_worker(
+    started_at: str, date_init: date, date_end: date
+) -> None:
     global _historical_backfill_status
     logger.info(
-        "Backfill historico: corriendo (ventana de %d dias)",
-        config.HISTORICAL_BACKFILL_WINDOW_DAYS,
+        "Backfill historico: corriendo (%s a %s)",
+        date_init.isoformat(),
+        date_end.isoformat(),
     )
     try:
-        run = service.run_historical_backfill()
+        run = service.run_historical_backfill(date_init, date_end)
     except Exception as exc:
         logger.warning("Backfill historico: fallo antes de completar -- %s", exc)
         error_status = HistoricalBackfillStatus(
@@ -242,7 +245,8 @@ def _run_historical_backfill_worker(started_at: str) -> None:
             started_at=started_at,
             finished_at=finished_at,
             ok=run.ok,
-            window_days=config.HISTORICAL_BACKFILL_WINDOW_DAYS,
+            date_init=date_init.isoformat(),
+            date_end=date_end.isoformat(),
             jobs=[_job_summary(o) for o in run.jobs],
         ),
     )
@@ -252,18 +256,31 @@ def _run_historical_backfill_worker(started_at: str) -> None:
     _lock.release()
 
 
-def start_historical_backfill() -> HistoricalBackfillStatus:
+def start_historical_backfill(
+    date_init: date | None = None, date_end: date | None = None
+) -> HistoricalBackfillStatus:
     global _historical_backfill_status
     if not _lock.acquire(blocking=False):
         raise AlreadyRunningError("Ya hay una extraccion en curso.")
 
-    logger.info("Backfill historico: iniciando en background")
+    resolved_end = date_end or config.hoy()
+    resolved_init = date_init or (
+        resolved_end - timedelta(days=config.HISTORICAL_BACKFILL_WINDOW_DAYS)
+    )
+
+    logger.info(
+        "Backfill historico: iniciando en background (%s a %s)",
+        resolved_init.isoformat(),
+        resolved_end.isoformat(),
+    )
     started_at = datetime.now(config.TZ).isoformat()
     running_status = HistoricalBackfillStatus(phase="running", started_at=started_at)
     _historical_backfill_status = running_status
     _persist_sync_status(_KIND_HISTORICAL_BACKFILL_STATUS, running_status)
     threading.Thread(
-        target=_run_historical_backfill_worker, args=(started_at,), daemon=True
+        target=_run_historical_backfill_worker,
+        args=(started_at, resolved_init, resolved_end),
+        daemon=True,
     ).start()
     return running_status
 

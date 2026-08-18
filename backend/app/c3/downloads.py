@@ -219,7 +219,6 @@ def build_historical_jobs(date_init: date, date_end: date) -> list[DownloadJob]:
         for name in reports.CALL_EXPORT_MECHANISMS
     ]
     jobs.append(_transfer_job_historical(date_init, date_end))
-    jobs.append(_contacts_job())
     return jobs
 
 

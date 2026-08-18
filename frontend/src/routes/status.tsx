@@ -1,11 +1,13 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
-import { RefreshCwIcon } from 'lucide-react'
+import { CalendarIcon, RefreshCwIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import type { DateRange } from 'react-day-picker'
 import { toast } from 'sonner'
 import { useAutoRefresh } from '#/components/auto-refresh-provider'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
+import { Calendar } from '#/components/ui/calendar'
 import {
   Card,
   CardContent,
@@ -16,6 +18,11 @@ import {
 import { Field, FieldLabel } from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger
+} from '#/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -238,6 +245,12 @@ function ContactsSyncCard({
   )
 }
 const HISTORICAL_BACKFILL_POLL_MS = 3000
+function toIsoDateLocal(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
 function HistoricalBackfillCard({
   initialStatus
 }: {
@@ -247,6 +260,7 @@ function HistoricalBackfillCard({
   const startBackfill = useServerFn(triggerHistoricalBackfillRun)
   const getStatus = useServerFn(getHistoricalBackfillStatus)
   const [status, setStatus] = useState(initialStatus)
+  const [range, setRange] = useState<DateRange | undefined>()
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     if (status.phase !== 'running') return
@@ -261,17 +275,29 @@ function HistoricalBackfillCard({
       if (timeoutRef.current) clearTimeout(timeoutRef.current)
     }
   }, [status, getStatus, router])
+  const hasCustomRange = Boolean(range?.from && range?.to)
   async function handleStart() {
+    const rangeLabel =
+      range?.from && range?.to
+        ? `desde ${toIsoDateLocal(range.from)} hasta ${toIsoDateLocal(range.to)}`
+        : 'los ultimos 90 dias (el maximo permitido)'
     if (
       !window.confirm(
-        'Esto le pide a C3 los ultimos 90 dias (el maximo permitido) para ' +
-          '5 reportes y puede tardar varios minutos. Pensado para correr una ' +
-          'sola vez en la vida de la app -- ¿continuar?'
+        `Esto le pide a C3 ${rangeLabel} para 5 reportes y puede tardar ` +
+          'varios minutos. ¿continuar?'
       )
     ) {
       return
     }
-    const next = await startBackfill()
+    const next = await startBackfill({
+      data:
+        range?.from && range?.to
+          ? {
+              dateInit: toIsoDateLocal(range.from),
+              dateEnd: toIsoDateLocal(range.to)
+            }
+          : {}
+    })
     setStatus(next)
   }
   const isRunning = status.phase === 'running'
@@ -279,24 +305,50 @@ function HistoricalBackfillCard({
     <Card className="mt-4">
       <CardHeader className="flex-row items-center justify-between">
         <div>
-          <CardTitle>Backfill historico (90 dias, una sola vez)</CardTitle>
+          <CardTitle>Backfill historico</CardTitle>
           <CardDescription>
-            Carga inicial del historico persistente: pide a C3 un rango amplio
-            (hasta el limite de 3 meses que C3 permite) para atenciones,
+            Carga inicial del historico persistente: pide a C3 un rango de
+            fechas (hasta el limite de 3 meses que C3 permite) para atenciones,
             llamadas y transferencias, y hace upsert por ID en la base historica
             -- asi un caso que se cierra dias despues de creado queda con su
-            estado real, no congelado en el dia que se creo. Despues de esta
-            corrida el historico se sigue llenando solo con el refresh normal de
-            cada 5 minutos, sin nada mas que tocar aca.
+            estado real, no congelado en el dia que se creo. Sin un rango
+            elegido usa los ultimos 90 dias por defecto. Despues de esta corrida
+            el historico se sigue llenando solo con el refresh normal de cada 5
+            minutos, sin nada mas que tocar aca.
           </CardDescription>
         </div>
-        <Button onClick={handleStart} disabled={isRunning} variant="secondary">
-          <RefreshCwIcon
-            data-icon="inline-start"
-            className={cn(isRunning && 'animate-spin')}
-          />
-          {isRunning ? 'Corriendo...' : 'Iniciar backfill'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Popover>
+            <PopoverTrigger
+              render={<Button variant="outline" disabled={isRunning} />}
+            >
+              <CalendarIcon data-icon="inline-start" />
+              {hasCustomRange && range?.from && range?.to
+                ? `${toIsoDateLocal(range.from)} — ${toIsoDateLocal(range.to)}`
+                : 'Ultimos 90 dias'}
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0">
+              <Calendar
+                mode="range"
+                numberOfMonths={2}
+                selected={range}
+                onSelect={setRange}
+                disabled={{ after: new Date() }}
+              />
+            </PopoverContent>
+          </Popover>
+          <Button
+            onClick={handleStart}
+            disabled={isRunning}
+            variant="secondary"
+          >
+            <RefreshCwIcon
+              data-icon="inline-start"
+              className={cn(isRunning && 'animate-spin')}
+            />
+            {isRunning ? 'Corriendo...' : 'Iniciar backfill'}
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         <p className="text-sm text-muted-foreground">

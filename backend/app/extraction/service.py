@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 import httpx
 
@@ -110,10 +110,7 @@ def run_historical_jobs(
             ingest_error = None
             try:
                 rows = parsing.parse_path(result.path)
-                if job.name == "contacts":
-                    ingest_result = store.insert_contacts_snapshot(conn, rows, observed_at)
-                else:
-                    ingest_result = store.upsert_report_rows(conn, job.name, rows, observed_at)
+                ingest_result = store.upsert_report_rows(conn, job.name, rows, observed_at)
             except Exception as exc:
                 ingest_error = str(exc)
             outcomes.append(
@@ -212,9 +209,10 @@ def run_contacts_sync(
 
 
 def run_historical_backfill(
+    date_init: date,
+    date_end: date,
     creds: config.Credentials | None = None,
     transport: httpx.BaseTransport | None = None,
-    window_days: int = config.HISTORICAL_BACKFILL_WINDOW_DAYS,
     conn: store.DBConnection | None = None,
 ) -> ExtractionRun:
     creds = creds or config.load_credentials()
@@ -222,8 +220,6 @@ def run_historical_backfill(
         creds, transport=transport, timeout=config.HISTORICAL_CLIENT_TIMEOUT_SECONDS
     )
     try:
-        date_end = config.hoy()
-        date_init = date_end - timedelta(days=window_days)
         return run_historical_jobs(client, date_init, date_end, conn=conn)
     finally:
         client.close()

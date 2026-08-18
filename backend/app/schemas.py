@@ -30,7 +30,8 @@ class HistoricalRunSummary(BaseModel):
     started_at: str
     finished_at: str
     ok: bool
-    window_days: int
+    date_init: str
+    date_end: str
     jobs: list[JobSummary]
 
 

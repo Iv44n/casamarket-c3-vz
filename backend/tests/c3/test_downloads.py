@@ -299,7 +299,7 @@ def test_all_files_ignores_other_report_names_and_historical_backfill_files(
     assert downloads.all_files("attention") == []
 
 
-def test_build_historical_jobs_covers_the_five_dated_families_plus_contacts():
+def test_build_historical_jobs_covers_only_the_five_dated_families():
     date_init = datetime.date(2026, 5, 20)
     date_end = datetime.date(2026, 8, 18)
 
@@ -311,8 +311,16 @@ def test_build_historical_jobs_covers_the_five_dated_families_plus_contacts():
         "callincoming",
         "calloutgoing",
         "transfer",
-        "contacts",
     }
+
+
+def test_build_historical_jobs_never_includes_contacts():
+    date_init = datetime.date(2026, 5, 20)
+    date_end = datetime.date(2026, 8, 18)
+
+    jobs = downloads.build_historical_jobs(date_init, date_end)
+
+    assert "contacts" not in {job.name for job in jobs}
 
 
 def test_build_historical_jobs_requests_the_wide_range_not_a_single_day():
@@ -322,25 +330,19 @@ def test_build_historical_jobs_requests_the_wide_range_not_a_single_day():
     jobs = downloads.build_historical_jobs(date_init, date_end)
 
     for job in jobs:
-        if job.name == "contacts":
-            assert "date_init" not in job.params
-            continue
         assert job.params["date_init"] == "2026-05-20 00:00"
         assert job.params["date_end"] == "2026-08-18 23:59"
 
 
-def test_build_historical_jobs_labels_files_with_the_range_not_contacts():
+def test_build_historical_jobs_labels_files_with_the_range():
     date_init = datetime.date(2026, 5, 20)
     date_end = datetime.date(2026, 8, 18)
 
     jobs = downloads.build_historical_jobs(date_init, date_end)
 
     for job in jobs:
-        if job.name == "contacts":
-            assert job.file_label is None
-        else:
-            assert job.file_label == "historical_2026-05-20_to_2026-08-18"
-            assert job.file_date == date_end
+        assert job.file_label == "historical_2026-05-20_to_2026-08-18"
+        assert job.file_date == date_end
 
 
 def test_run_job_uses_file_label_instead_of_file_date_when_set(isolated_downloads_dir):

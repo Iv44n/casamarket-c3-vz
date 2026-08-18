@@ -14,6 +14,11 @@ class BackfillRequest(BaseModel):
     date: date
 
 
+class HistoricalBackfillRequest(BaseModel):
+    date_init: date | None = None
+    date_end: date | None = None
+
+
 @router.post("/refresh")
 def refresh() -> RunSummary:
     try:
@@ -69,9 +74,17 @@ def contacts_sync_status() -> RunSummary | NoRunsYet:
 
 
 @router.post("/historical/backfill", status_code=202)
-def historical_backfill() -> HistoricalBackfillStatus:
+def historical_backfill(
+    request: HistoricalBackfillRequest | None = None,
+) -> HistoricalBackfillStatus:
+    date_init = request.date_init if request else None
+    date_end = request.date_end if request else None
+    if date_init is not None and date_end is not None and date_init > date_end:
+        raise HTTPException(
+            status_code=422, detail="date_init no puede ser posterior a date_end."
+        )
     try:
-        return state.start_historical_backfill()
+        return state.start_historical_backfill(date_init=date_init, date_end=date_end)
     except state.AlreadyRunningError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

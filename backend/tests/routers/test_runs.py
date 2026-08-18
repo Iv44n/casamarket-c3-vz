@@ -39,7 +39,8 @@ _HISTORICAL_STATUS_DONE = HistoricalBackfillStatus(
         started_at="2026-08-13T06:00:00-05:00",
         finished_at="2026-08-13T06:05:00-05:00",
         ok=True,
-        window_days=90,
+        date_init="2026-05-15",
+        date_end="2026-08-13",
         jobs=[],
     ),
 )
@@ -231,7 +232,11 @@ def test_contacts_sync_status_returns_the_last_run_summary(
 def test_historical_backfill_returns_202_and_the_running_status(
     monkeypatch: pytest.MonkeyPatch, client: TestClient
 ):
-    monkeypatch.setattr(state, "start_historical_backfill", lambda: _HISTORICAL_STATUS_RUNNING)
+    monkeypatch.setattr(
+        state,
+        "start_historical_backfill",
+        lambda date_init=None, date_end=None: _HISTORICAL_STATUS_RUNNING,
+    )
 
     response = client.post("/extraction/historical/backfill")
 
@@ -239,10 +244,43 @@ def test_historical_backfill_returns_202_and_the_running_status(
     assert response.json() == _HISTORICAL_STATUS_RUNNING.model_dump()
 
 
+def test_historical_backfill_passes_through_a_custom_date_range(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+):
+    seen = []
+    monkeypatch.setattr(
+        state,
+        "start_historical_backfill",
+        lambda date_init=None, date_end=None: (
+            seen.append((date_init, date_end)),
+            _HISTORICAL_STATUS_RUNNING,
+        )[1],
+    )
+
+    response = client.post(
+        "/extraction/historical/backfill",
+        json={"date_init": "2026-05-01", "date_end": "2026-06-01"},
+    )
+
+    assert response.status_code == 202
+    assert seen == [(datetime.date(2026, 5, 1), datetime.date(2026, 6, 1))]
+
+
+def test_historical_backfill_422s_when_date_init_is_after_date_end(
+    client: TestClient,
+):
+    response = client.post(
+        "/extraction/historical/backfill",
+        json={"date_init": "2026-06-01", "date_end": "2026-05-01"},
+    )
+
+    assert response.status_code == 422
+
+
 def test_historical_backfill_returns_409_when_already_running(
     monkeypatch: pytest.MonkeyPatch, client: TestClient
 ):
-    def boom():
+    def boom(date_init=None, date_end=None):
         raise state.AlreadyRunningError("ya hay una extraccion en curso")
 
     monkeypatch.setattr(state, "start_historical_backfill", boom)

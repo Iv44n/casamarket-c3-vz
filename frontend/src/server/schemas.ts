@@ -54,6 +54,10 @@ export function todayIsoDate(): string {
 export const backfillRequestSchema = z.object({
   date: z.string().regex(ISO_DATE_REGEX)
 })
+export const historicalBackfillRequestSchema = z.object({
+  dateInit: z.string().regex(ISO_DATE_REGEX).optional(),
+  dateEnd: z.string().regex(ISO_DATE_REGEX).optional()
+})
 
 export const INCIDENT_CATEGORIES = [
   'tipo',
@@ -161,6 +165,7 @@ export type IncidentRecord = {
   fecha: string
   hora: string
   horaFinal: string
+  fechaFinal: string
   tiempoSegundos: number | null
 }
 export type IncidentAnalytics = {
@@ -198,7 +203,8 @@ export type HistoricalRunSummary = {
   started_at: string
   finished_at: string
   ok: boolean
-  window_days: number
+  date_init: string
+  date_end: string
   jobs: JobSummary[]
 }
 export type HistoricalBackfillPhase = 'idle' | 'running' | 'done' | 'error'

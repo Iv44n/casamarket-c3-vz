@@ -30,6 +30,7 @@ export const INCIDENT_DETAIL_FIELD: Record<
     estado: string
     hora: string
     horaFinal: string
+    fechaFinal: string
     tiempo: string[]
   }
 > = {
@@ -40,6 +41,7 @@ export const INCIDENT_DETAIL_FIELD: Record<
     estado: 'Estado',
     hora: 'Hora registro',
     horaFinal: 'Hora final',
+    fechaFinal: 'Fecha final',
     tiempo: ['Tiempo de atención']
   },
   outboundattention: {
@@ -49,6 +51,7 @@ export const INCIDENT_DETAIL_FIELD: Record<
     estado: 'Estado',
     hora: 'Hora registro',
     horaFinal: 'Hora final',
+    fechaFinal: 'Fecha final',
     tiempo: ['Tiempo de atención']
   },
   calloutgoing: {
@@ -58,6 +61,7 @@ export const INCIDENT_DETAIL_FIELD: Record<
     estado: 'Estado',
     hora: 'Hora',
     horaFinal: 'Hora final',
+    fechaFinal: 'Fecha final',
     tiempo: ['Hablado llamada', 'Total llamada']
   }
 }
@@ -172,6 +176,7 @@ export function deriveIncidentAnalytics(
         fecha: stringField(row[dateField]),
         hora: stringField(row[detailField.hora]),
         horaFinal: stringField(row[detailField.horaFinal]),
+        fechaFinal: stringField(row[detailField.fechaFinal]),
         tiempoSegundos: parseDurationToSeconds(
           firstNonEmptyValue(row, detailField.tiempo)
         )

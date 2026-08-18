@@ -36,7 +36,8 @@ function TicketList({ items }: { items: IncidentRecord[] }) {
             {item.horaFinal && (
               <span className="inline-flex items-center gap-1">
                 <CircleCheckIcon className="size-3" />
-                Cerrado {item.horaFinal}
+                Cerrado {item.fechaFinal && `${item.fechaFinal} `}
+                {item.horaFinal}
               </span>
             )}
             <span className="inline-flex items-center gap-1">

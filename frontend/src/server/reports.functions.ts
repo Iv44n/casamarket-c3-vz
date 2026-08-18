@@ -34,6 +34,7 @@ import type {
 import {
   backfillRequestSchema,
   dateFilterSchema,
+  historicalBackfillRequestSchema,
   reportNameSchema
 } from './schemas'
 
@@ -387,6 +388,12 @@ export const getHistoricalBackfillStatus = createServerFn({
 
 export const triggerHistoricalBackfillRun = createServerFn({
   method: 'POST'
-}).handler(async () => {
-  return triggerHistoricalBackfill()
 })
+  .validator(historicalBackfillRequestSchema)
+  .handler(async ({ data }) => {
+    return triggerHistoricalBackfill(
+      data.dateInit && data.dateEnd
+        ? { dateInit: data.dateInit, dateEnd: data.dateEnd }
+        : undefined
+    )
+  })

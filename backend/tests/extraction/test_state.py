@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from app import config
 from app.c3 import downloads
 from app.extraction import service, state, store
 from app.schemas import HistoricalBackfillStatus
@@ -388,7 +389,9 @@ def _wait_until_not_running(timeout: float = 2.0) -> None:
 def test_start_historical_backfill_sets_phase_running_immediately(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(service, "run_historical_backfill", lambda: _fake_run(ok=True))
+    monkeypatch.setattr(
+        service, "run_historical_backfill", lambda date_init, date_end: _fake_run(ok=True)
+    )
 
     status = state.start_historical_backfill()
 
@@ -400,7 +403,9 @@ def test_start_historical_backfill_sets_phase_running_immediately(
 def test_start_historical_backfill_eventually_reaches_done_with_the_summary(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(service, "run_historical_backfill", lambda: _fake_run(ok=True))
+    monkeypatch.setattr(
+        service, "run_historical_backfill", lambda date_init, date_end: _fake_run(ok=True)
+    )
 
     state.start_historical_backfill()
     _wait_until_not_running()
@@ -409,14 +414,42 @@ def test_start_historical_backfill_eventually_reaches_done_with_the_summary(
     assert status.phase == "done"
     assert status.result is not None
     assert status.result.ok is True
-    assert status.result.window_days == 90
+    assert status.result.date_end == config.hoy().isoformat()
+    assert status.result.date_init == (
+        config.hoy() - datetime.timedelta(days=config.HISTORICAL_BACKFILL_WINDOW_DAYS)
+    ).isoformat()
     assert not state._lock.locked()
+
+
+def test_start_historical_backfill_uses_the_given_date_range_instead_of_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    seen = []
+    monkeypatch.setattr(
+        service,
+        "run_historical_backfill",
+        lambda date_init, date_end: (seen.append((date_init, date_end)), _fake_run(ok=True))[
+            1
+        ],
+    )
+
+    state.start_historical_backfill(
+        date_init=datetime.date(2026, 5, 1), date_end=datetime.date(2026, 6, 1)
+    )
+    _wait_until_not_running()
+
+    assert seen == [(datetime.date(2026, 5, 1), datetime.date(2026, 6, 1))]
+    status = state.historical_backfill_status()
+    assert status.result.date_init == "2026-05-01"
+    assert status.result.date_end == "2026-06-01"
 
 
 def test_start_historical_backfill_logs_start_per_job_result_and_end(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ):
-    monkeypatch.setattr(service, "run_historical_backfill", lambda: _fake_run(ok=True))
+    monkeypatch.setattr(
+        service, "run_historical_backfill", lambda date_init, date_end: _fake_run(ok=True)
+    )
 
     with caplog.at_level("INFO", logger="app.extraction.state"):
         state.start_historical_backfill()
@@ -432,7 +465,7 @@ def test_start_historical_backfill_logs_start_per_job_result_and_end(
 def test_start_historical_backfill_reaches_error_phase_if_service_raises(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    def boom():
+    def boom(date_init, date_end):
         raise RuntimeError("login failed")
 
     monkeypatch.setattr(service, "run_historical_backfill", boom)
@@ -449,7 +482,9 @@ def test_start_historical_backfill_reaches_error_phase_if_service_raises(
 def test_start_historical_backfill_raises_already_running_if_lock_held(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(service, "run_historical_backfill", lambda: _fake_run(ok=True))
+    monkeypatch.setattr(
+        service, "run_historical_backfill", lambda date_init, date_end: _fake_run(ok=True)
+    )
     state._lock.acquire()
     try:
         with pytest.raises(state.AlreadyRunningError):
@@ -465,7 +500,9 @@ def test_historical_backfill_status_defaults_to_idle():
 def test_historical_backfill_status_hydrates_from_the_store_after_a_simulated_restart(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(service, "run_historical_backfill", lambda: _fake_run(ok=True))
+    monkeypatch.setattr(
+        service, "run_historical_backfill", lambda date_init, date_end: _fake_run(ok=True)
+    )
     state.start_historical_backfill()
     _wait_until_not_running()
 
