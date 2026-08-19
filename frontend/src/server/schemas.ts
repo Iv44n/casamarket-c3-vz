@@ -53,6 +53,33 @@ export function todayIsoDate(): string {
     parts.find(p => p.type === type)?.value ?? ''
   return `${part('year')}-${part('month')}-${part('day')}`
 }
+// Demand heatmap's own date filter defaults to the current week (Monday-Sunday);
+// the user picks any custom range from there via a calendar, same as the page's
+// own date filter -- including a range spanning several weeks at once.
+function pad2(value: number): string {
+  return String(value).padStart(2, '0')
+}
+function formatIsoDateUtc(date: Date): string {
+  return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`
+}
+function addDaysIso(isoDate: string, days: number): string {
+  const [year, month, day] = isoDate.split('-').map(Number)
+  return formatIsoDateUtc(
+    new Date(Date.UTC(year, month - 1, day) + days * 24 * 60 * 60 * 1000)
+  )
+}
+function mondayOfWeek(isoDate: string): string {
+  const [year, month, day] = isoDate.split('-').map(Number)
+  const jsDayOfWeek = new Date(Date.UTC(year, month - 1, day)).getUTCDay()
+  const isoDayOfWeek = jsDayOfWeek === 0 ? 7 : jsDayOfWeek // 1=Mon..7=Sun
+  return addDaysIso(isoDate, -(isoDayOfWeek - 1))
+}
+function defaultDemandWeekStart(): string {
+  return mondayOfWeek(todayIsoDate())
+}
+function defaultDemandWeekEnd(): string {
+  return addDaysIso(defaultDemandWeekStart(), 6)
+}
 export const backfillRequestSchema = z.object({
   date: z.string().regex(ISO_DATE_REGEX)
 })
@@ -89,7 +116,9 @@ export const attentionsSearchSchema = z.object({
   campana: z.string().default('all'),
   plan: z.string().default('all'),
   date: dateFilterValue.default(todayIsoDate),
-  dateEnd: dateEndValue
+  dateEnd: dateEndValue,
+  demandDate: dateFilterValue.default(defaultDemandWeekStart),
+  demandDateEnd: dateEndValue.default(defaultDemandWeekEnd)
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
 export type EstadosFilter = AttentionsSearch['estados']
@@ -154,6 +183,17 @@ export type AttentionRecord = {
 export type AttentionsAnalytics = {
   incoming: DirectionAnalytics
   outgoing: DirectionAnalytics
+}
+export type DemandBucketCount = {
+  dayOfWeek: number
+  hour: number
+  direction: AttentionDirection
+  estado: string
+  count: number
+}
+export type DemandAnalytics = {
+  available: boolean
+  buckets: DemandBucketCount[]
 }
 export type IncidentRecord = {
   categoryOrder: IncidentCategory[]

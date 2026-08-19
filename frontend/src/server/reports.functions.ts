@@ -1,5 +1,6 @@
 import { createServerFn } from '@tanstack/react-start'
 import {
+  epochMsToLimaDate,
   filterRowsByDate,
   parseLimaDateTime,
   parseLimaIsoDateTime
@@ -25,6 +26,8 @@ import {
 import type {
   AttentionDirection,
   AttentionsAnalytics,
+  DemandAnalytics,
+  DemandBucketCount,
   DirectionAnalytics,
   IncidentAnalytics,
   ReportRow,
@@ -123,6 +126,18 @@ export const getReportSummary = createServerFn({ method: 'GET' })
     }
   })
 
+function parseStartEpochMs(row: ReportRow): number | null {
+  return (
+    parseLimaDateTime(row['Fecha inicio'], row['Hora inicio']) ??
+    parseLimaDateTime(row['Fecha registro'], row['Hora registro'])
+  )
+}
+function estadoKeyOf(row: ReportRow): string {
+  const estado = row.Estado
+  return typeof estado === 'string' && estado.trim() !== ''
+    ? estado
+    : 'Sin estado'
+}
 function deriveDirectionAnalytics(
   rows: ReportRow[] | null,
   direction: AttentionDirection,
@@ -155,9 +170,7 @@ function deriveDirectionAnalytics(
   const attentionRecords: DirectionAnalytics['attentionRecords'] = []
 
   for (const row of rows) {
-    const estado = row.Estado
-    const estadoKey =
-      typeof estado === 'string' && estado.trim() !== '' ? estado : 'Sin estado'
+    const estadoKey = estadoKeyOf(row)
     statusCounts.set(estadoKey, (statusCounts.get(estadoKey) ?? 0) + 1)
     const agente = row.Agente
     const agenteKey =
@@ -214,9 +227,7 @@ function deriveDirectionAnalytics(
         ? String(idAtencionRaw)
         : ''
     const cliente = row['Nombre de cliente']
-    const startEpochMs =
-      parseLimaDateTime(row['Fecha inicio'], row['Hora inicio']) ??
-      parseLimaDateTime(row['Fecha registro'], row['Hora registro'])
+    const startEpochMs = parseStartEpochMs(row)
     const closeEpochMs = parseLimaDateTime(
       row['Fecha final'],
       row['Hora final']
@@ -346,6 +357,76 @@ export const getAttentionsAnalytics = createServerFn({ method: 'GET' })
         transfersById,
         contactsByPhone
       )
+    }
+  })
+
+function aggregateDemandBuckets(
+  rows: ReportRow[] | null,
+  direction: AttentionDirection
+): DemandBucketCount[] {
+  if (rows === null) return []
+  // Keyed by dayOfWeek*24+hour (0-167) -> estado -> count, avoiding string-concat
+  // keys that could collide if an estado value ever contained the separator.
+  const counts = new Map<number, Map<string, number>>()
+  for (const row of rows) {
+    const startEpochMs = parseStartEpochMs(row)
+    if (startEpochMs === null) continue
+    const estadoKey = estadoKeyOf(row)
+    const limaDate = epochMsToLimaDate(startEpochMs)
+    const slot = limaDate.getUTCDay() * 24 + limaDate.getUTCHours()
+    const slotCounts = counts.get(slot) ?? new Map<string, number>()
+    slotCounts.set(estadoKey, (slotCounts.get(estadoKey) ?? 0) + 1)
+    counts.set(slot, slotCounts)
+  }
+  const buckets: DemandBucketCount[] = []
+  for (const [slot, slotCounts] of counts) {
+    for (const [estado, count] of slotCounts) {
+      buckets.push({
+        dayOfWeek: Math.floor(slot / 24),
+        hour: slot % 24,
+        direction,
+        estado,
+        count
+      })
+    }
+  }
+  return buckets
+}
+
+export const getDemandAnalytics = createServerFn({ method: 'GET' })
+  .validator(dateFilterSchema)
+  .handler(async ({ data }): Promise<DemandAnalytics> => {
+    const { dateFrom, dateTo } = toHistoryDateRange(data.date, data.dateEnd)
+    const [attentionRows, outboundRows] = await Promise.all([
+      fetchReportRowsHistory('attention', dateFrom, dateTo),
+      fetchReportRowsHistory('outboundattention', dateFrom, dateTo)
+    ])
+    return {
+      available: attentionRows !== null || outboundRows !== null,
+      buckets: [
+        ...aggregateDemandBuckets(
+          attentionRows === null
+            ? null
+            : filterRowsByDate(
+                attentionRows,
+                ATTENTION_DATE_FIELD,
+                data.date,
+                data.dateEnd
+              ),
+          'incoming'
+        ),
+        ...aggregateDemandBuckets(
+          outboundRows === null
+            ? null
+            : filterRowsByDate(
+                outboundRows,
+                ATTENTION_DATE_FIELD,
+                data.date,
+                data.dateEnd
+              ),
+          'outgoing'
+        )
+      ]
     }
   })
 

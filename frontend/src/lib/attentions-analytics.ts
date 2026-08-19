@@ -3,6 +3,7 @@ import {
   type AttentionDirection,
   type AttentionFilter,
   type AttentionsAnalytics,
+  type DemandAnalytics,
   DIRECTION_REPORT_NAME,
   type EstadosFilter
 } from '#/server/schemas'
@@ -281,4 +282,75 @@ export function describeAvailability(
     }
   }
   return { blockedMessage: null, advisoryMessage: null }
+}
+export const DEMAND_DAY_LABELS: { dayOfWeek: number; label: string }[] = [
+  { dayOfWeek: 1, label: 'Lun' },
+  { dayOfWeek: 2, label: 'Mar' },
+  { dayOfWeek: 3, label: 'Mié' },
+  { dayOfWeek: 4, label: 'Jue' },
+  { dayOfWeek: 5, label: 'Vie' },
+  { dayOfWeek: 6, label: 'Sáb' },
+  { dayOfWeek: 0, label: 'Dom' }
+]
+export const DEMAND_HOURS = Array.from({ length: 24 }, (_, hour) => hour)
+export const DEMAND_LEVELS = ['bajo', 'medio', 'alto', 'pico'] as const
+export type DemandLevel = 'none' | (typeof DEMAND_LEVELS)[number]
+export const DEMAND_LEVEL_LABEL: Record<
+  (typeof DEMAND_LEVELS)[number],
+  string
+> = {
+  bajo: 'Bajo',
+  medio: 'Medio',
+  alto: 'Alto',
+  pico: 'Pico'
+}
+export type DemandHeatmapCell = {
+  dayOfWeek: number
+  hour: number
+  count: number
+  level: DemandLevel
+}
+export type DemandHeatmapRow = {
+  dayOfWeek: number
+  label: string
+  cells: DemandHeatmapCell[]
+}
+export type DemandHeatmap = {
+  rows: DemandHeatmapRow[]
+  total: number
+}
+export function buildDemandHeatmap(
+  demand: DemandAnalytics,
+  filter: AttentionFilter,
+  estadosFilter: EstadosFilter
+): DemandHeatmap {
+  const counts = new Map<string, number>()
+  let total = 0
+  for (const bucket of demand.buckets) {
+    if (filter !== 'all' && bucket.direction !== filter) continue
+    if (!estadoAllowed(bucket.estado, estadosFilter)) continue
+    const key = `${bucket.dayOfWeek}:${bucket.hour}`
+    counts.set(key, (counts.get(key) ?? 0) + bucket.count)
+    total += bucket.count
+  }
+  // Quantile-by-unique-value binning: robust to skewed/tied distributions,
+  // unlike raw value thresholds which degenerate when many cells share a count.
+  const uniqueSorted = [...new Set(counts.values())].sort((a, b) => a - b)
+  const levelByCount = new Map<number, DemandLevel>()
+  uniqueSorted.forEach((value, i) => {
+    const bucket = Math.min(3, Math.floor((i * 4) / uniqueSorted.length))
+    levelByCount.set(value, DEMAND_LEVELS[bucket])
+  })
+  function levelFor(count: number): DemandLevel {
+    return count <= 0 ? 'none' : (levelByCount.get(count) ?? 'bajo')
+  }
+  const rows = DEMAND_DAY_LABELS.map(({ dayOfWeek, label }) => ({
+    dayOfWeek,
+    label,
+    cells: DEMAND_HOURS.map(hour => {
+      const count = counts.get(`${dayOfWeek}:${hour}`) ?? 0
+      return { dayOfWeek, hour, count, level: levelFor(count) }
+    })
+  }))
+  return { rows, total }
 }

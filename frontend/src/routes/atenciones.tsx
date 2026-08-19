@@ -1,23 +1,17 @@
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
-import {
-  CalendarIcon,
-  ChevronDownIcon,
-  RefreshCwIcon,
-  XIcon
-} from 'lucide-react'
+import { ChevronDownIcon, RefreshCwIcon } from 'lucide-react'
 import { useState } from 'react'
-import type { DateRange } from 'react-day-picker'
-import { es } from 'react-day-picker/locale'
 import { toast } from 'sonner'
 import { AgentWorkloadChart } from '#/components/agent-workload-chart'
 import { AttentionRecordsTable } from '#/components/attention-records-table'
 import { CampaignWorkloadChart } from '#/components/campaign-workload-chart'
+import { DateRangeFilter } from '#/components/date-range-filter'
+import { DemandHeatmapChart } from '#/components/demand-heatmap-chart'
 import { IncidentHierarchy } from '#/components/incident-hierarchy'
 import { StatusDonutChart } from '#/components/status-donut-chart'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
-import { Calendar } from '#/components/ui/calendar'
 import {
   Card,
   CardAction,
@@ -34,11 +28,6 @@ import {
 } from '#/components/ui/dropdown-menu'
 import { Label } from '#/components/ui/label'
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger
-} from '#/components/ui/popover'
-import {
   Select,
   SelectContent,
   SelectItem,
@@ -49,6 +38,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 import {
   buildAgentRanking,
   buildCampaignRanking,
+  buildDemandHeatmap,
   buildStatusChartData,
   buildTopClosers,
   describeAvailability,
@@ -62,6 +52,7 @@ import {
 import { cn } from '#/lib/utils'
 import {
   getAttentionsAnalytics,
+  getDemandAnalytics,
   getIncidentAnalytics,
   triggerBackfill,
   triggerRefresh
@@ -114,38 +105,33 @@ const UNKNOWN_PLAN_LABEL = 'Sin plan'
 function planLabel(plan: string) {
   return plan.trim() === '' ? UNKNOWN_PLAN_LABEL : plan
 }
-function toIsoDateLocal(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/
-function parseIsoDateLocal(value: string): Date | undefined {
-  const match = ISO_DATE.exec(value)
-  if (!match) return undefined
-  const [, year, month, day] = match
-  return new Date(Number(year), Number(month) - 1, Number(day))
-}
 export const Route = createFileRoute('/atenciones')({
   ssr: 'data-only',
   validateSearch: attentionsSearchSchema,
   loaderDeps: ({ search }) => ({
     date: search.date,
-    dateEnd: search.dateEnd
+    dateEnd: search.dateEnd,
+    demandDate: search.demandDate,
+    demandDateEnd: search.demandDateEnd
   }),
   loader: async ({ deps }) => {
-    const [attentions, incidents] = await Promise.all([
+    const [attentions, incidents, demand] = await Promise.all([
       getAttentionsAnalytics({ data: deps }),
-      getIncidentAnalytics({ data: deps })
+      getIncidentAnalytics({ data: deps }),
+      getDemandAnalytics({
+        data: { date: deps.demandDate, dateEnd: deps.demandDateEnd }
+      })
     ])
-    return { attentions, incidents }
+    return { attentions, incidents, demand }
   },
   component: AtencionesPage
 })
 function AtencionesPage() {
-  const { attentions: analytics, incidents: incidentAnalytics } =
-    Route.useLoaderData()
+  const {
+    attentions: analytics,
+    incidents: incidentAnalytics,
+    demand: demandAnalytics
+  } = Route.useLoaderData()
   const {
     direction,
     agentLimit,
@@ -156,7 +142,9 @@ function AtencionesPage() {
     campana,
     plan,
     date,
-    dateEnd
+    dateEnd,
+    demandDate,
+    demandDateEnd
   } = Route.useSearch()
   const navigate = Route.useNavigate()
   const router = useRouter()
@@ -168,6 +156,7 @@ function AtencionesPage() {
   const agents = buildAgentRanking(analytics, direction, agentLimit, estados)
   const topClosers = buildTopClosers(analytics)
   const campaigns = buildCampaignRanking(analytics, direction, estados)
+  const demandHeatmap = buildDemandHeatmap(demandAnalytics, direction, estados)
   const { blockedMessage, advisoryMessage } = describeAvailability(
     analytics,
     direction
@@ -215,40 +204,6 @@ function AtencionesPage() {
   const isRangeSelected = date !== 'all' && Boolean(dateEnd) && dateEnd !== date
   const isPastDaySelected =
     date !== 'all' && !isRangeSelected && date !== todayIsoDate()
-  const committedRange: DateRange | undefined =
-    date === 'all'
-      ? undefined
-      : {
-          from: parseIsoDateLocal(date),
-          to: dateEnd ? parseIsoDateLocal(dateEnd) : parseIsoDateLocal(date)
-        }
-  const [pendingRange, setPendingRange] = useState<DateRange | undefined>(
-    committedRange
-  )
-  function commitDateRange(from: Date, to: Date) {
-    const fromIso = toIsoDateLocal(from)
-    const toIso = toIsoDateLocal(to)
-    navigate({
-      search: prev => ({
-        ...prev,
-        date: fromIso,
-        dateEnd: toIso !== fromIso ? toIso : undefined
-      }),
-      replace: true
-    })
-  }
-  function handlePendingRangeSelect(next: DateRange | undefined) {
-    setPendingRange(next)
-    if (!next?.from) {
-      navigate({
-        search: prev => ({ ...prev, date: 'all', dateEnd: undefined }),
-        replace: true
-      })
-      return
-    }
-    if (!next.to) return
-    commitDateRange(next.from, next.to)
-  }
   async function handleRefresh() {
     setPending(true)
     try {
@@ -301,58 +256,20 @@ function AtencionesPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1">
-            <Popover
-              onOpenChange={open => {
-                if (open) setPendingRange(committedRange)
-              }}
-            >
-              <PopoverTrigger
-                render={<Button variant="outline" className="font-normal" />}
-              >
-                <CalendarIcon data-icon="inline-start" />
-                {date === 'all'
-                  ? 'Elegir fecha'
-                  : isRangeSelected
-                    ? `${date} — ${dateEnd}`
-                    : date}
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0">
-                <Calendar
-                  mode="range"
-                  numberOfMonths={2}
-                  resetOnSelect
-                  selected={pendingRange}
-                  onSelect={handlePendingRangeSelect}
-                  disabled={{ after: new Date() }}
-                  locale={es}
-                />
-                <p className="px-3 pb-2 text-xs text-muted-foreground">
-                  Elegi el primer y el segundo dia para un rango, o el mismo dia
-                  dos veces para un solo dia.
-                </p>
-              </PopoverContent>
-            </Popover>
-            {date !== 'all' && (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Quitar filtro de fecha"
-                onClick={() =>
-                  navigate({
-                    search: prev => ({
-                      ...prev,
-                      date: 'all',
-                      dateEnd: undefined
-                    }),
-                    replace: true
-                  })
-                }
-              >
-                <XIcon />
-              </Button>
-            )}
-          </div>
+          <DateRangeFilter
+            date={date}
+            dateEnd={dateEnd}
+            onChange={(newDate, newDateEnd) =>
+              navigate({
+                search: prev => ({
+                  ...prev,
+                  date: newDate,
+                  dateEnd: newDateEnd
+                }),
+                replace: true
+              })
+            }
+          />
 
           {view === 'resumen' && (
             <>
@@ -595,6 +512,54 @@ function AtencionesPage() {
                           agents={agents}
                           onAgentClick={goToAgentIncidents}
                         />
+                      )}
+                    </CardContent>
+                  </Card>
+                </section>
+
+                <section
+                  aria-label="Mapa de calor de demanda"
+                  className="flex flex-col lg:col-span-2"
+                >
+                  <Card size="sm" className="flex h-full flex-col">
+                    <CardHeader className="shrink-0 gap-0.5">
+                      <CardTitle className="text-base font-medium text-muted-foreground">
+                        Mapa de calor de demanda
+                      </CardTitle>
+                      <CardDescription className="text-sm">
+                        Volumen de tickets por día de la semana y hora --
+                        identifica picos de capacidad. Elegi cualquier rango de
+                        fechas (puede abarcar varias semanas); usa su propio
+                        filtro, independiente del filtro de arriba.
+                      </CardDescription>
+                      <CardAction>
+                        <DateRangeFilter
+                          date={demandDate}
+                          dateEnd={demandDateEnd}
+                          onChange={(newDate, newDateEnd) =>
+                            navigate({
+                              search: prev => ({
+                                ...prev,
+                                demandDate: newDate,
+                                demandDateEnd:
+                                  newDateEnd ??
+                                  (newDate === 'all' ? demandDateEnd : newDate)
+                              }),
+                              replace: true,
+                              resetScroll: false
+                            })
+                          }
+                          clearLabel="Quitar filtro de fecha del mapa de calor"
+                        />
+                      </CardAction>
+                    </CardHeader>
+                    <CardContent className="flex flex-1 items-center">
+                      {demandHeatmap.total === 0 ? (
+                        <p className="text-sm text-muted-foreground">
+                          Sin registros.
+                        </p>
+                      ) : (
+                        <DemandHeatmapChart heatmap={demandHeatmap} />
                       )}
                     </CardContent>
                   </Card>

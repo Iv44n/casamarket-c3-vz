@@ -51,6 +51,10 @@ export function parseLimaDateTime(
   )
 }
 
+export function epochMsToLimaDate(epochMs: number): Date {
+  return new Date(epochMs - LIMA_UTC_OFFSET_MS)
+}
+
 export function parseLimaIsoDateTime(
   fecha: unknown,
   hora: unknown
