@@ -37,8 +37,10 @@ const dateFilterValue = z.union([
   z.string().regex(ISO_DATE_REGEX)
 ])
 export type DateFilter = z.infer<typeof dateFilterValue>
+const dateEndValue = z.string().regex(ISO_DATE_REGEX).optional()
 export const dateFilterSchema = z.object({
-  date: dateFilterValue.default('all')
+  date: dateFilterValue.default('all'),
+  dateEnd: dateEndValue
 })
 export function todayIsoDate(): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -86,7 +88,8 @@ export const attentionsSearchSchema = z.object({
   agente: z.string().default('all'),
   campana: z.string().default('all'),
   plan: z.string().default('all'),
-  date: dateFilterValue.default(todayIsoDate)
+  date: dateFilterValue.default(todayIsoDate),
+  dateEnd: dateEndValue
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
 export type EstadosFilter = AttentionsSearch['estados']

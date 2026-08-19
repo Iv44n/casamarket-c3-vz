@@ -16,9 +16,16 @@ function toIsoDate(value: unknown): string | null {
 export function filterRowsByDate<T extends ReportRow>(
   rows: T[],
   dateField: string,
-  date: DateFilter
+  date: DateFilter,
+  dateEnd?: string
 ): T[] {
   if (date === 'all') return rows
+  if (dateEnd && dateEnd !== date) {
+    return rows.filter(row => {
+      const rowDate = toIsoDate(row[dateField])
+      return rowDate !== null && rowDate >= date && rowDate <= dateEnd
+    })
+  }
   return rows.filter(row => toIsoDate(row[dateField]) === date)
 }
 

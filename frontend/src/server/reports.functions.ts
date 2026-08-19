@@ -311,7 +311,12 @@ export const getAttentionsAnalytics = createServerFn({ method: 'GET' })
       incoming: deriveDirectionAnalytics(
         attentionRows === null
           ? null
-          : filterRowsByDate(attentionRows, ATTENTION_DATE_FIELD, data.date),
+          : filterRowsByDate(
+              attentionRows,
+              ATTENTION_DATE_FIELD,
+              data.date,
+              data.dateEnd
+            ),
         'incoming',
         transfersById,
         contactsByPhone
@@ -319,7 +324,12 @@ export const getAttentionsAnalytics = createServerFn({ method: 'GET' })
       outgoing: deriveDirectionAnalytics(
         outboundRows === null
           ? null
-          : filterRowsByDate(outboundRows, ATTENTION_DATE_FIELD, data.date),
+          : filterRowsByDate(
+              outboundRows,
+              ATTENTION_DATE_FIELD,
+              data.date,
+              data.dateEnd
+            ),
         'outgoing',
         transfersById,
         contactsByPhone
@@ -337,7 +347,8 @@ export const getIncidentAnalytics = createServerFn({ method: 'GET' })
         return filterRowsByDate(
           rows,
           INCIDENT_DATE_FIELD[reportName],
-          data.date
+          data.date,
+          data.dateEnd
         )
       })
     )

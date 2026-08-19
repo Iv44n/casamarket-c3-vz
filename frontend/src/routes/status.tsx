@@ -44,6 +44,7 @@ import {
   triggerRefresh
 } from '#/server/reports.functions'
 import type { HistoricalBackfillStatus } from '#/server/schemas'
+import { es } from 'react-day-picker/locale'
 export const Route = createFileRoute('/status')({
   ssr: 'data-only',
   loader: async () => ({
@@ -159,12 +160,30 @@ function BackfillCard({
           </CardDescription>
         </div>
         <div className="flex items-center gap-2">
-          <Input
-            type="date"
-            value={date}
-            onValueChange={setDate}
-            className="w-40"
-          />
+          <Popover>
+            <PopoverTrigger
+              render={
+                <Button
+                  variant="outline"
+                  className="w-40 justify-start font-normal"
+                />
+              }
+            >
+              <CalendarIcon data-icon="inline-start" />
+              {date || 'Elegir fecha'}
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0">
+              <Calendar
+                mode="single"
+                selected={date ? parseIsoDateLocal(date) : undefined}
+                onSelect={selected =>
+                  setDate(selected ? toIsoDateLocal(selected) : '')
+                }
+                disabled={{ after: new Date() }}
+                locale={es}
+              />
+            </PopoverContent>
+          </Popover>
           <Button
             onClick={handleBackfill}
             disabled={pending}
@@ -251,6 +270,13 @@ function toIsoDateLocal(date: Date): string {
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/
+function parseIsoDateLocal(value: string): Date | undefined {
+  const match = ISO_DATE.exec(value)
+  if (!match) return undefined
+  const [, year, month, day] = match
+  return new Date(Number(year), Number(month) - 1, Number(day))
+}
 function HistoricalBackfillCard({
   initialStatus
 }: {
@@ -331,6 +357,7 @@ function HistoricalBackfillCard({
               <Calendar
                 mode="range"
                 numberOfMonths={2}
+                resetOnSelect
                 selected={range}
                 onSelect={setRange}
                 disabled={{ after: new Date() }}
