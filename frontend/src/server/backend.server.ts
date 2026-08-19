@@ -28,12 +28,26 @@ export async function fetchReportRows(
   return response.json()
 }
 
+const inFlightHistoryFetches = new Map<string, Promise<ReportRow[] | null>>()
+
 export async function fetchReportRowsHistory(
-  reportName: string
+  reportName: string,
+  dateFrom?: string,
+  dateTo?: string
 ): Promise<ReportRow[] | null> {
-  const response = await backendFetch(`/data/${reportName}/history`)
-  if (response.status === 404) return null
-  return response.json()
+  const params = new URLSearchParams()
+  if (dateFrom) params.set('date_from', dateFrom)
+  if (dateTo) params.set('date_to', dateTo)
+  const query = params.toString()
+  const path = `/data/${reportName}/history${query ? `?${query}` : ''}`
+  const existing = inFlightHistoryFetches.get(path)
+  if (existing) return existing
+  const promise = (async () => {
+    const response = await backendFetch(path)
+    return response.status === 404 ? null : await response.json()
+  })().finally(() => inFlightHistoryFetches.delete(path))
+  inFlightHistoryFetches.set(path, promise)
+  return promise
 }
 export async function fetchExtractionStatus(): Promise<ExtractionStatus> {
   const response = await backendFetch('/extraction/status')

@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import type { DateRange } from 'react-day-picker'
+import { es } from 'react-day-picker/locale'
 import { toast } from 'sonner'
 import { AgentWorkloadChart } from '#/components/agent-workload-chart'
 import { AttentionRecordsTable } from '#/components/attention-records-table'
@@ -17,7 +18,6 @@ import { StatusDonutChart } from '#/components/status-donut-chart'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import { Calendar } from '#/components/ui/calendar'
-import { es } from "react-day-picker/locale"
 import {
   Card,
   CardAction,

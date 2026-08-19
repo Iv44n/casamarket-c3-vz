@@ -3,6 +3,7 @@ import { useServerFn } from '@tanstack/react-start'
 import { CalendarIcon, RefreshCwIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { DateRange } from 'react-day-picker'
+import { es } from 'react-day-picker/locale'
 import { toast } from 'sonner'
 import { useAutoRefresh } from '#/components/auto-refresh-provider'
 import { Badge } from '#/components/ui/badge'
@@ -44,7 +45,6 @@ import {
   triggerRefresh
 } from '#/server/reports.functions'
 import type { HistoricalBackfillStatus } from '#/server/schemas'
-import { es } from 'react-day-picker/locale'
 export const Route = createFileRoute('/status')({
   ssr: 'data-only',
   loader: async () => ({

@@ -147,6 +147,27 @@ def test_parse_report_history_reads_dated_reports_from_the_store(
     ]
 
 
+def test_parse_report_history_forwards_a_date_range_to_the_store(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    conn = sqlite3.connect(":memory:")
+    store._init_schema(conn)
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [
+            {"ID atención": "in_range", "Fecha registro": "18/08/2026"},
+            {"ID atención": "out_of_range", "Fecha registro": "01/09/2026"},
+        ],
+        observed_at="2026-08-19T00:00:00",
+    )
+    monkeypatch.setattr(store, "get_connection", lambda: conn)
+
+    result = parsing.parse_report_history("attention", "2026-08-18", "2026-08-18")
+
+    assert [row["ID atención"] for row in result] == ["in_range"]
+
+
 def test_parse_report_history_returns_none_for_dated_reports_with_nothing_ingested(
     monkeypatch: pytest.MonkeyPatch,
 ):

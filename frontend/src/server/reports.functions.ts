@@ -295,13 +295,25 @@ function deriveDirectionAnalytics(
   }
 }
 
+function toHistoryDateRange(
+  date: string,
+  dateEnd: string | undefined
+): { dateFrom?: string; dateTo?: string } {
+  if (date === 'all') return {}
+  return { dateFrom: date, dateTo: dateEnd ?? date }
+}
+
 export const getAttentionsAnalytics = createServerFn({ method: 'GET' })
   .validator(dateFilterSchema)
   .handler(async ({ data }): Promise<AttentionsAnalytics> => {
+    const { dateFrom, dateTo } = toHistoryDateRange(data.date, data.dateEnd)
     const [attentionRows, outboundRows, transferRows, contactsRows] =
       await Promise.all([
-        fetchReportRowsHistory('attention'),
-        fetchReportRowsHistory('outboundattention'),
+        fetchReportRowsHistory('attention', dateFrom, dateTo),
+        fetchReportRowsHistory('outboundattention', dateFrom, dateTo),
+        // "transfer" se correlaciona por "Atención ID", no por dia -- filtrarlo por fecha
+        // podria descartar transferencias registradas justo despues de medianoche respecto a
+        // su atencion padre. No pasarle dateFrom/dateTo (ver backend/app/extraction/store.py).
         fetchReportRowsHistory('transfer'),
         fetchReportRows('contacts')
       ])
@@ -340,9 +352,10 @@ export const getAttentionsAnalytics = createServerFn({ method: 'GET' })
 export const getIncidentAnalytics = createServerFn({ method: 'GET' })
   .validator(dateFilterSchema)
   .handler(async ({ data }): Promise<IncidentAnalytics> => {
+    const { dateFrom, dateTo } = toHistoryDateRange(data.date, data.dateEnd)
     const rowSets = await Promise.all(
       INCIDENT_SOURCE_REPORTS.map(async reportName => {
-        const rows = await fetchReportRowsHistory(reportName)
+        const rows = await fetchReportRowsHistory(reportName, dateFrom, dateTo)
         if (rows === null) return null
         return filterRowsByDate(
           rows,

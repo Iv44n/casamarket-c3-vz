@@ -50,11 +50,13 @@ def parse_report(name: str) -> list[dict] | None:
     return parse_path(path)
 
 
-def parse_report_history(name: str) -> list[dict] | None:
+def parse_report_history(
+    name: str, date_from: str | None = None, date_to: str | None = None
+) -> list[dict] | None:
     if name in _STORE_BACKED_REPORTS:
         conn = store.get_connection()
         try:
-            return store.history_rows(conn, name)
+            return store.history_rows(conn, name, date_from, date_to)
         finally:
             conn.close()
 

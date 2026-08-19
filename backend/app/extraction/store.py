@@ -6,7 +6,42 @@ import turso_serverless
 
 from .. import config
 
-_SCHEMA = """
+# Reportes cuya columna de fecha de negocio se guarda como texto "DD/MM/YYYY" (extraccion
+# directa del XLSX, ver _upsert_by_pk). "transfer" queda afuera a proposito: su columna "fecha"
+# se guarda ya en ISO "YYYY-MM-DD" (formato distinto, confirmado corriendo un chequeo de datos en
+# vivo contra la Turso real) y de todos modos nunca se filtra por fecha en el llamador (transfer
+# se correlaciona por "Atención ID", no por dia -- filtrarlo podria descartar en silencio
+# transferencias registradas justo despues de medianoche respecto a su atencion padre).
+_HISTORY_DATE_COLUMN: dict[str, str] = {
+    "attention": "fecha_registro",
+    "outboundattention": "fecha_registro",
+    "callincoming": "fecha",
+    "calloutgoing": "fecha",
+}
+
+
+def _iso_date_expr(column: str) -> str:
+    """DD/MM/YYYY -> YYYY-MM-DD, con guarda contra valores mal formados. Un substr()/|| sin
+    guarda produciria silenciosamente una clave de orden incorrecta para cualquier otro string
+    de 10 caracteres (p.ej. un valor ya-ISO) -- GLOB descarta eso antes de intentar convertir.
+    Entrada que no calza -> NULL -> excluida de cualquier BETWEEN, igual que toIsoDate() en el
+    frontend hace hoy con fechas mal formadas. CREATE INDEX y WHERE deben usar EXACTAMENTE esta
+    misma expresion: el query planner de SQLite compara expression indexes de forma textual,
+    no algebraica."""
+    glob_pattern = "[0-9][0-9]/[0-9][0-9]/[0-9][0-9][0-9][0-9]"
+    return (
+        f"CASE WHEN {column} GLOB '{glob_pattern}' "
+        f"THEN substr({column}, 7, 4) || '-' || substr({column}, 4, 2) || '-' || substr({column}, 1, 2) "
+        f"ELSE NULL END"
+    )
+
+
+_DATE_RANGE_INDEXES = "\n".join(
+    f"CREATE INDEX IF NOT EXISTS idx_{table}_{column}_iso ON {table} ({_iso_date_expr(column)});"
+    for table, column in _HISTORY_DATE_COLUMN.items()
+)
+
+_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS attention (
     id_atencion     TEXT PRIMARY KEY,
     estado          TEXT,
@@ -93,6 +128,7 @@ CREATE TABLE IF NOT EXISTS sync_status (
     status_json  TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
+{_DATE_RANGE_INDEXES}
 """
 
 
@@ -147,12 +183,18 @@ class IngestResult:
     rows_skipped: int
 
 
+_schema_initialized = False
+
+
 def get_connection() -> turso_serverless.Connection:
+    global _schema_initialized
     turso_config = config.load_turso_config()
     conn = turso_serverless.connect(
         turso_config.database_url, auth_token=turso_config.auth_token
     )
-    _init_schema(conn)
+    if not _schema_initialized:
+        _init_schema(conn)
+        _schema_initialized = True
     return conn
 
 
@@ -326,10 +368,23 @@ _HISTORY_ORDER: dict[str, str] = {
 }
 
 
-def history_rows(conn: DBConnection, report_name: str) -> list[dict] | None:
+def history_rows(
+    conn: DBConnection,
+    report_name: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[dict] | None:
     table = report_name
     order_by = _HISTORY_ORDER[report_name]
-    cursor = conn.execute(f"SELECT row_json FROM {table} ORDER BY {order_by}")
+    date_column = _HISTORY_DATE_COLUMN.get(report_name)
+    if date_from is None or date_column is None:
+        cursor = conn.execute(f"SELECT row_json FROM {table} ORDER BY {order_by}")
+    else:
+        iso_expr = _iso_date_expr(date_column)
+        cursor = conn.execute(
+            f"SELECT row_json FROM {table} WHERE {iso_expr} BETWEEN ? AND ? ORDER BY {order_by}",
+            (date_from, date_to or date_from),
+        )
     rows = [json.loads(row[0]) for row in cursor.fetchall()]
     return rows or None
 

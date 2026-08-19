@@ -12,7 +12,7 @@
     "start": "bun run .output/server/index.mjs",
     "preview": "vite preview",
     "format": "biome format --write",
-    "lint": "biome lint --write",
+    "lint": "biome check --write",
     "check": "biome check",
     "typecheck": "tsc --noEmit"
   },
