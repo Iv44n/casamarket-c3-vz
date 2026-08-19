@@ -88,10 +88,6 @@ export function DateRangeFilter({
             disabled={{ after: new Date() }}
             locale={es}
           />
-          <p className="px-3 pb-2 text-xs text-muted-foreground">
-            Elegi el primer y el segundo dia para un rango -- puede abarcar
-            varias semanas -- o el mismo dia dos veces para un solo dia.
-          </p>
         </PopoverContent>
       </Popover>
       {date !== 'all' && (

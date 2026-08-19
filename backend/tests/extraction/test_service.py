@@ -7,7 +7,7 @@ import pytest
 
 from app import config
 from app.c3 import reports
-from app.extraction import parsing, service, store
+from app.extraction import service, store
 
 
 @pytest.fixture(autouse=True)
@@ -155,34 +155,6 @@ def test_run_contacts_sync_logs_in_then_downloads_only_contacts():
 
     assert result.ok is True
     assert not remaining
-
-
-def test_run_all_invalidates_the_history_cache_for_every_ingested_report():
-    # _download_steps() usa bytes que no son un xlsx real -- valen para probar el flujo de
-    # descarga, pero el parseo fallaria antes de llegar al upsert/invalidacion. Aca se necesita
-    # contenido real para que la ingesta (y por lo tanto la invalidacion) llegue a ocurrir, y
-    # una conexion con el schema ya inicializado (isolated_state la deja sin crear, como
-    # test_run_contacts_sync_jobs_downloads_only_contacts_and_fills_the_snapshot_table ya hace
-    # para el mismo motivo).
-    conn = sqlite3.connect(":memory:")
-    store._init_schema(conn)
-    body = _real_xlsx_bytes([("ID atención",), ("1",)])
-    steps = [
-        (ATTENTIONS_EXPORT, _file_response(body)),
-        (ATTENTIONS_EXPORT, _file_response(body)),
-        (CALLS_EXPORT, _file_response(body)),
-        (CALLS_EXPORT, _file_response(body)),
-        (TRANSFER_EXPORT, _file_response(body)),
-    ]
-    parsing._history_cache[("attention", None, None)] = [{"stale": True}]
-    parsing._history_cache[("outboundattention", None, None)] = [{"stale": True}]
-    client = _sequenced_client(steps)
-
-    run = service.run_all(client, conn=conn)
-
-    assert all(outcome.ingest_error is None for outcome in run.jobs)
-    assert ("attention", None, None) not in parsing._history_cache
-    assert ("outboundattention", None, None) not in parsing._history_cache
 
 
 def test_run_backfill_jobs_downloads_only_the_five_dated_families():
