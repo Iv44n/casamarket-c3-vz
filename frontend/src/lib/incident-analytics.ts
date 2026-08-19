@@ -205,3 +205,47 @@ export function groupIncidentsBy(
     .map(([label, items]) => ({ label, count: items.length, items }))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
 }
+export type IncidentTicketExport = {
+  descripcion: string
+  agente: string
+  campana: string
+  estado: string
+  fecha: string
+  hora: string
+  fechaFinal: string
+  horaFinal: string
+  tiempoSegundos: number | null
+}
+export type IncidentHierarchyNode = {
+  label: string
+  count: number
+  children?: IncidentHierarchyNode[]
+  tickets?: IncidentTicketExport[]
+}
+export function buildIncidentHierarchyTree(
+  records: IncidentRecord[],
+  chain: IncidentCategory[],
+  depth = 0
+): IncidentHierarchyNode[] {
+  const key = chain[depth]
+  const isLeaf = depth === chain.length - 1
+  return groupIncidentsBy(records, key).map(group => ({
+    label: group.label,
+    count: group.count,
+    ...(isLeaf
+      ? {
+          tickets: group.items.map(item => ({
+            descripcion: item.descripcion,
+            agente: item.agente,
+            campana: item.campana,
+            estado: item.estado,
+            fecha: item.fecha,
+            hora: item.hora,
+            fechaFinal: item.fechaFinal,
+            horaFinal: item.horaFinal,
+            tiempoSegundos: item.tiempoSegundos
+          }))
+        }
+      : { children: buildIncidentHierarchyTree(group.items, chain, depth + 1) })
+  }))
+}

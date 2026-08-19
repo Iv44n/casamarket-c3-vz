@@ -1,6 +1,11 @@
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
-import { ChevronDownIcon, RefreshCwIcon } from 'lucide-react'
+import {
+  ChevronDownIcon,
+  FileJsonIcon,
+  FileTextIcon,
+  RefreshCwIcon
+} from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { AgentWorkloadChart } from '#/components/agent-workload-chart'
@@ -44,11 +49,14 @@ import {
   describeAvailability,
   getAvailableEstados
 } from '#/lib/attentions-analytics'
+import { downloadBlob } from '#/lib/download-file'
 import {
+  buildIncidentHierarchyTree,
   INCIDENT_CATEGORY_COLOR,
   INCIDENT_CATEGORY_LABEL,
   pickDominantCategoryOrder
 } from '#/lib/incident-analytics'
+import { buildIncidentHierarchyPdf } from '#/lib/incident-hierarchy-pdf'
 import { cn } from '#/lib/utils'
 import {
   getAttentionsAnalytics,
@@ -243,6 +251,42 @@ function AtencionesPage() {
       }),
       replace: true
     })
+  }
+  const incidentExportChain = incidentCategoryOrder.slice(
+    incidentCategoryOrder.indexOf(activeIncidentCategory)
+  )
+  const incidentExportFilters = [
+    agente !== 'all' ? `Agente: ${agente}` : null,
+    campana !== 'all' ? `Campaña: ${campana}` : null
+  ].filter((part): part is string => part !== null)
+  function handleDownloadIncidentsJson() {
+    const payload = {
+      generadoEn: new Date().toISOString(),
+      categoria: activeIncidentCategory,
+      cadena: incidentExportChain,
+      total: incidentRecords.length,
+      filtros: { agente, campana },
+      arbol: buildIncidentHierarchyTree(incidentRecords, incidentExportChain)
+    }
+    downloadBlob(
+      new Blob([JSON.stringify(payload, null, 2)], {
+        type: 'application/json'
+      }),
+      `incidencias-${activeIncidentCategory}.json`
+    )
+  }
+  async function handleDownloadIncidentsPdf() {
+    try {
+      const blob = await buildIncidentHierarchyPdf({
+        title: `Escalera de incidencias -- ${INCIDENT_CATEGORY_LABEL[activeIncidentCategory]}`,
+        subtitle: `${incidentRecords.length} incidencias${incidentExportFilters.length ? ` -- ${incidentExportFilters.join(', ')}` : ''}`,
+        chain: incidentExportChain,
+        tree: buildIncidentHierarchyTree(incidentRecords, incidentExportChain)
+      })
+      downloadBlob(blob, `incidencias-${activeIncidentCategory}.pdf`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    }
   }
   return (
     <div>
@@ -682,14 +726,34 @@ function AtencionesPage() {
                     })
                   }
                 >
-                  <TabsList className="mb-4">
-                    {incidentCategoryOrder.map(cat => (
-                      <TabsTrigger key={cat} value={cat} className="gap-1.5">
-                        <CategorySwatch category={cat} />
-                        {INCIDENT_CATEGORY_LABEL[cat]}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <TabsList>
+                      {incidentCategoryOrder.map(cat => (
+                        <TabsTrigger key={cat} value={cat} className="gap-1.5">
+                          <CategorySwatch category={cat} />
+                          {INCIDENT_CATEGORY_LABEL[cat]}
+                        </TabsTrigger>
+                      ))}
+                    </TabsList>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleDownloadIncidentsJson}
+                      >
+                        <FileJsonIcon data-icon="inline-start" />
+                        JSON
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleDownloadIncidentsPdf}
+                      >
+                        <FileTextIcon data-icon="inline-start" />
+                        PDF
+                      </Button>
+                    </div>
+                  </div>
                   {incidentCategoryOrder.map((cat, index) => (
                     <TabsContent key={cat} value={cat}>
                       <IncidentHierarchy
