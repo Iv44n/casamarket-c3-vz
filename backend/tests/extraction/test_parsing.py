@@ -168,6 +168,83 @@ def test_parse_report_history_forwards_a_date_range_to_the_store(
     assert [row["ID atención"] for row in result] == ["in_range"]
 
 
+def _fresh_file_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """parse_report_history() cierra la conexion que recibe de get_connection() al final de
+    cada llamada (como en produccion, donde cada llamada abre una conexion turso_serverless
+    nueva) -- un ":memory:" compartido no sobrevive a ese close() en la segunda llamada. Un
+    archivo real si, dejando probar la cache con varias llamadas dentro de un mismo test."""
+    db_path = tmp_path / "history_cache_test.db"
+    setup_conn = sqlite3.connect(str(db_path))
+    store._init_schema(setup_conn)
+    setup_conn.close()
+    monkeypatch.setattr(store, "get_connection", lambda: sqlite3.connect(str(db_path)))
+    return db_path
+
+
+def _write_rows(db_path: Path, table: str, rows: list[dict], observed_at: str) -> None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        store.upsert_report_rows(conn, table, rows, observed_at)
+    finally:
+        conn.close()
+
+
+def test_parse_report_history_caches_a_dated_report_until_invalidated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    db_path = _fresh_file_db(tmp_path, monkeypatch)
+    _write_rows(db_path, "attention", [{"ID atención": "1"}], "2026-08-19T00:00:00")
+
+    first = parsing.parse_report_history("attention")
+    assert [row["ID atención"] for row in first] == ["1"]
+
+    # Escribir sin pasar por invalidate_history_cache simula una escritura que todavia no
+    # invalido la cache -- la siguiente lectura con los mismos parametros debe seguir
+    # devolviendo el resultado cacheado, no la fila nueva.
+    _write_rows(db_path, "attention", [{"ID atención": "2"}], "2026-08-19T00:01:00")
+    still_cached = parsing.parse_report_history("attention")
+    assert [row["ID atención"] for row in still_cached] == ["1"]
+
+    parsing.invalidate_history_cache("attention")
+    after_invalidate = parsing.parse_report_history("attention")
+    assert {row["ID atención"] for row in after_invalidate} == {"1", "2"}
+
+
+def test_parse_report_history_cache_is_keyed_by_date_range(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    db_path = _fresh_file_db(tmp_path, monkeypatch)
+    _write_rows(
+        db_path,
+        "attention",
+        [{"ID atención": "day18", "Fecha registro": "18/08/2026"}],
+        "2026-08-19T00:00:00",
+    )
+
+    day18 = parsing.parse_report_history("attention", "2026-08-18", "2026-08-18")
+    assert [row["ID atención"] for row in day18] == ["day18"]
+
+    # Un rango distinto para el mismo reporte es una entrada de cache distinta -- no debe
+    # devolver (ni bloquearse en) lo que ya se cacheo para el 18/08.
+    day19 = parsing.parse_report_history("attention", "2026-08-19", "2026-08-19")
+    assert day19 is None
+
+
+def test_invalidate_history_cache_only_clears_the_given_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    db_path = _fresh_file_db(tmp_path, monkeypatch)
+    _write_rows(db_path, "attention", [{"ID atención": "1"}], "2026-08-19T00:00:00")
+    _write_rows(db_path, "outboundattention", [{"ID atención": "1"}], "2026-08-19T00:00:00")
+    parsing.parse_report_history("attention")
+    parsing.parse_report_history("outboundattention")
+
+    parsing.invalidate_history_cache("attention")
+
+    assert ("attention", None, None) not in parsing._history_cache
+    assert ("outboundattention", None, None) in parsing._history_cache
+
+
 def test_parse_report_history_returns_none_for_dated_reports_with_nothing_ingested(
     monkeypatch: pytest.MonkeyPatch,
 ):

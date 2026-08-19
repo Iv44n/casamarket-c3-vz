@@ -37,6 +37,7 @@ def _ingest_if_dated_report(
         rows = parsing.parse_path(result.path)
         observed_at = datetime.now(config.TZ).isoformat()
         ingest_result = store.upsert_report_rows(conn, job.name, rows, observed_at)
+        parsing.invalidate_history_cache(job.name)
         return ingest_result, None
     except Exception as exc:
         return None, str(exc)
@@ -111,6 +112,7 @@ def run_historical_jobs(
             try:
                 rows = parsing.parse_path(result.path)
                 ingest_result = store.upsert_report_rows(conn, job.name, rows, observed_at)
+                parsing.invalidate_history_cache(job.name)
             except Exception as exc:
                 ingest_error = str(exc)
             outcomes.append(
