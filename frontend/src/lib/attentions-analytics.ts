@@ -363,18 +363,10 @@ export type DemandHeatmap = {
   rows: DemandHeatmapRow[]
   total: number
 }
-export function buildDemandHeatmap(
-  demand: DemandAnalytics,
-  filter: AttentionFilter,
-  estadosFilter: EstadosFilter,
-  agentesFilter: AgentesFilter
-): DemandHeatmap {
+export function buildDemandHeatmap(demand: DemandAnalytics): DemandHeatmap {
   const counts = new Map<string, number>()
   let total = 0
   for (const bucket of demand.buckets) {
-    if (filter !== 'all' && bucket.direction !== filter) continue
-    if (!estadoAllowed(bucket.estado, estadosFilter)) continue
-    if (!agenteAllowed(bucket.agente, agentesFilter)) continue
     const key = `${bucket.dayOfWeek}:${bucket.hour}`
     counts.set(key, (counts.get(key) ?? 0) + bucket.count)
     total += bucket.count

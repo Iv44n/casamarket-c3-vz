@@ -207,9 +207,6 @@ export type AttentionRecordsPage = {
 export type DemandBucketCount = {
   dayOfWeek: number
   hour: number
-  direction: AttentionDirection
-  estado: string
-  agente: string
   count: number
 }
 export type DemandAnalytics = {

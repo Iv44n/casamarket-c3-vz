@@ -325,12 +325,7 @@ function AtencionesPage() {
   )
   const topClosers = buildTopClosers(analytics, agentes)
   const campaigns = buildCampaignRanking(analytics, direction, estados, agentes)
-  const demandHeatmap = buildDemandHeatmap(
-    demandAnalytics,
-    direction,
-    estados,
-    agentes
-  )
+  const demandHeatmap = buildDemandHeatmap(demandAnalytics)
   const { blockedMessage, advisoryMessage } = describeAvailability(
     analytics,
     direction
@@ -534,14 +529,16 @@ function AtencionesPage() {
                     />
                   }
                 >
-                  {formatMultiSelectFilter(
-                    agentes,
-                    availableAgentes,
-                    'agentes'
-                  )}
-                  <ChevronDownIcon className="size-4 text-muted-foreground" />
+                  <span className="min-w-0 truncate">
+                    {formatMultiSelectFilter(
+                      agentes,
+                      availableAgentes,
+                      'agentes'
+                    )}
+                  </span>
+                  <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
+                <DropdownMenuContent align="end" className="min-w-64">
                   <MultiSelectQuickActions
                     onSelectAll={selectAllAgentes}
                     onSelectNone={selectNoAgentes}
@@ -549,11 +546,12 @@ function AtencionesPage() {
                   {availableAgentes.map(agenteName => (
                     <Label
                       key={agenteName}
-                      className="cursor-default rounded-xl px-3 py-2 font-normal hover:bg-accent"
+                      className="cursor-default items-start rounded-xl px-3 py-2 font-normal hover:bg-accent"
                     >
                       <Checkbox
                         checked={isAgenteChecked(agenteName)}
                         onCheckedChange={() => toggleAgente(agenteName)}
+                        className="mt-0.5"
                       />
                       {agenteName}
                     </Label>
@@ -599,12 +597,14 @@ function AtencionesPage() {
                       />
                     }
                   >
-                    {formatMultiSelectFilter(
-                      estados,
-                      availableEstados,
-                      'estados'
-                    )}
-                    <ChevronDownIcon className="size-4 text-muted-foreground" />
+                    <span className="min-w-0 truncate">
+                      {formatMultiSelectFilter(
+                        estados,
+                        availableEstados,
+                        'estados'
+                      )}
+                    </span>
+                    <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     <MultiSelectQuickActions
@@ -816,10 +816,12 @@ function AtencionesPage() {
                           >
                             <Badge
                               variant="secondary"
-                              className="cursor-pointer"
+                              className="max-w-56 cursor-pointer"
                             >
-                              Top cerrando: {topClosers[0].agente} (
-                              {topClosers[0].count})
+                              <span className="min-w-0 truncate">
+                                Top cerrando: {topClosers[0].agente} (
+                                {topClosers[0].count})
+                              </span>
                             </Badge>
                           </button>
                         </CardAction>
@@ -1054,12 +1056,14 @@ function AtencionesPage() {
                     />
                   }
                 >
-                  {formatMultiSelectFilter(
-                    estados,
-                    availableEstados,
-                    'estados'
-                  )}
-                  <ChevronDownIcon className="size-4 text-muted-foreground" />
+                  <span className="min-w-0 truncate">
+                    {formatMultiSelectFilter(
+                      estados,
+                      availableEstados,
+                      'estados'
+                    )}
+                  </span>
+                  <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start">
                   {availableEstados.map(estado => (

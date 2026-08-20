@@ -392,43 +392,21 @@ export const getAttentionRecordsPage = createServerFn({ method: 'GET' })
     }
   })
 
-function aggregateDemandBuckets(
-  rows: ReportRow[] | null,
-  direction: AttentionDirection
-): DemandBucketCount[] {
+function aggregateDemandBuckets(rows: ReportRow[] | null): DemandBucketCount[] {
   if (rows === null) return []
-  const counts = new Map<number, Map<string, Map<string, number>>>()
+  const counts = new Map<number, number>()
   for (const row of rows) {
     const startEpochMs = parseStartEpochMs(row)
     if (startEpochMs === null) continue
-    const estadoKey = estadoKeyOf(row)
-    const agenteKey = agenteKeyOf(row)
     const limaDate = epochMsToLimaDate(startEpochMs)
     const slot = limaDate.getUTCDay() * 24 + limaDate.getUTCHours()
-    const agenteCounts =
-      counts.get(slot) ?? new Map<string, Map<string, number>>()
-    const estadoCounts =
-      agenteCounts.get(agenteKey) ?? new Map<string, number>()
-    estadoCounts.set(estadoKey, (estadoCounts.get(estadoKey) ?? 0) + 1)
-    agenteCounts.set(agenteKey, estadoCounts)
-    counts.set(slot, agenteCounts)
+    counts.set(slot, (counts.get(slot) ?? 0) + 1)
   }
-  const buckets: DemandBucketCount[] = []
-  for (const [slot, agenteCounts] of counts) {
-    for (const [agente, estadoCounts] of agenteCounts) {
-      for (const [estado, count] of estadoCounts) {
-        buckets.push({
-          dayOfWeek: Math.floor(slot / 24),
-          hour: slot % 24,
-          direction,
-          estado,
-          agente,
-          count
-        })
-      }
-    }
-  }
-  return buckets
+  return [...counts].map(([slot, count]) => ({
+    dayOfWeek: Math.floor(slot / 24),
+    hour: slot % 24,
+    count
+  }))
 }
 
 export const getDemandAnalytics = createServerFn({ method: 'GET' })
@@ -450,8 +428,7 @@ export const getDemandAnalytics = createServerFn({ method: 'GET' })
                 ATTENTION_DATE_FIELD,
                 data.date,
                 data.dateEnd
-              ),
-          'incoming'
+              )
         ),
         ...aggregateDemandBuckets(
           outboundRows === null
@@ -461,8 +438,7 @@ export const getDemandAnalytics = createServerFn({ method: 'GET' })
                 ATTENTION_DATE_FIELD,
                 data.date,
                 data.dateEnd
-              ),
-          'outgoing'
+              )
         )
       ]
     }
