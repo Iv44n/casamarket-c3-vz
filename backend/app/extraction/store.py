@@ -511,7 +511,7 @@ class AttentionRecordsPage:
 def _attention_where(
     estados: list[str] | None,
     campana: str | None,
-    agente: str | None,
+    agentes: list[str] | None,
     date_from: str | None,
     date_to: str | None,
 ) -> tuple[str, list]:
@@ -532,10 +532,15 @@ def _attention_where(
         campana_norm = _norm_expr("campana", "Sin campaña")
         clauses.append(f"{campana_norm} = ?")
         params.append(campana)
-    if agente and agente != "all":
-        agente_norm = _norm_expr("agente", "Sin agente", ("", "-"))
-        clauses.append(f"{agente_norm} = ?")
-        params.append(agente)
+    if agentes is not None:
+        if len(agentes) == 0:
+            # Mismo espiritu que la guarda de estados=[] arriba.
+            clauses.append("1=0")
+        else:
+            agente_norm = _norm_expr("agente", "Sin agente", ("", "-"))
+            placeholders = ", ".join("?" for _ in agentes)
+            clauses.append(f"{agente_norm} IN ({placeholders})")
+            params.extend(agentes)
     if date_from:
         iso_expr = _iso_date_expr("fecha_registro")
         clauses.append(f"{iso_expr} BETWEEN ? AND ?")
@@ -565,14 +570,14 @@ def attention_records_page(
     direction: str = "all",
     estados: list[str] | None = None,
     campana: str | None = None,
-    agente: str | None = None,
+    agentes: list[str] | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     page: int = 1,
     page_size: int = 50,
 ) -> AttentionRecordsPage:
     branches = _DIRECTION_TABLES[direction]
-    where_sql, where_params = _attention_where(estados, campana, agente, date_from, date_to)
+    where_sql, where_params = _attention_where(estados, campana, agentes, date_from, date_to)
     inner_sql = " UNION ALL ".join(
         _branch_sql(table, label, where_sql) for table, label in branches
     )

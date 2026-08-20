@@ -356,16 +356,20 @@ function toAttentionRecord(
 export const getAttentionRecordsPage = createServerFn({ method: 'GET' })
   .validator(attentionRecordsPageRequestSchema)
   .handler(async ({ data }): Promise<AttentionRecordsPage> => {
-    if (data.estados !== 'all' && data.estados.length === 0) {
+    if (
+      (data.estados !== 'all' && data.estados.length === 0) ||
+      (data.agentes !== 'all' && data.agentes.length === 0)
+    ) {
       return { total: 0, staleCount: 0, records: [], availablePlans: [] }
     }
+
     const { dateFrom, dateTo } = toHistoryDateRange(data.date, data.dateEnd)
     const [page, contactsRows] = await Promise.all([
       fetchAttentionRecordsPage({
         direction: data.direction,
         estados: data.estados,
         campana: data.campana,
-        agente: data.agente,
+        agentes: data.agentes,
         dateFrom,
         dateTo,
         page: data.page,
@@ -393,29 +397,35 @@ function aggregateDemandBuckets(
   direction: AttentionDirection
 ): DemandBucketCount[] {
   if (rows === null) return []
-  // Keyed by dayOfWeek*24+hour (0-167) -> estado -> count, avoiding string-concat
-  // keys that could collide if an estado value ever contained the separator.
-  const counts = new Map<number, Map<string, number>>()
+  const counts = new Map<number, Map<string, Map<string, number>>>()
   for (const row of rows) {
     const startEpochMs = parseStartEpochMs(row)
     if (startEpochMs === null) continue
     const estadoKey = estadoKeyOf(row)
+    const agenteKey = agenteKeyOf(row)
     const limaDate = epochMsToLimaDate(startEpochMs)
     const slot = limaDate.getUTCDay() * 24 + limaDate.getUTCHours()
-    const slotCounts = counts.get(slot) ?? new Map<string, number>()
-    slotCounts.set(estadoKey, (slotCounts.get(estadoKey) ?? 0) + 1)
-    counts.set(slot, slotCounts)
+    const agenteCounts =
+      counts.get(slot) ?? new Map<string, Map<string, number>>()
+    const estadoCounts =
+      agenteCounts.get(agenteKey) ?? new Map<string, number>()
+    estadoCounts.set(estadoKey, (estadoCounts.get(estadoKey) ?? 0) + 1)
+    agenteCounts.set(agenteKey, estadoCounts)
+    counts.set(slot, agenteCounts)
   }
   const buckets: DemandBucketCount[] = []
-  for (const [slot, slotCounts] of counts) {
-    for (const [estado, count] of slotCounts) {
-      buckets.push({
-        dayOfWeek: Math.floor(slot / 24),
-        hour: slot % 24,
-        direction,
-        estado,
-        count
-      })
+  for (const [slot, agenteCounts] of counts) {
+    for (const [agente, estadoCounts] of agenteCounts) {
+      for (const [estado, count] of estadoCounts) {
+        buckets.push({
+          dayOfWeek: Math.floor(slot / 24),
+          hour: slot % 24,
+          direction,
+          estado,
+          agente,
+          count
+        })
+      }
     }
   }
   return buckets

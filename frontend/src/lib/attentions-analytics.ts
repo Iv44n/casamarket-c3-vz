@@ -1,4 +1,5 @@
 import {
+  type AgentesFilter,
   type AgentLimit,
   type AttentionDirection,
   type AttentionFilter,
@@ -29,23 +30,43 @@ export function getAvailableEstados(analytics: AttentionsAnalytics): string[] {
 function estadoAllowed(estado: string, estadosFilter: EstadosFilter): boolean {
   return estadosFilter === 'all' || estadosFilter.includes(estado)
 }
+function agenteAllowed(agente: string, agentesFilter: AgentesFilter): boolean {
+  return agentesFilter === 'all' || agentesFilter.includes(agente)
+}
 export type StatusChartSlice = {
   id: string
   estado: string
   direction: AttentionDirection | null
   count: number
 }
+
+function filteredEstadoTotals(
+  direction: AttentionsAnalytics[AttentionDirection],
+  estadosFilter: EstadosFilter,
+  agentesFilter: AgentesFilter
+): { estado: string; count: number }[] {
+  const totals = new Map<string, number>()
+  for (const { agente, estado, count } of direction.agentCounts) {
+    if (!estadoAllowed(estado, estadosFilter)) continue
+    if (!agenteAllowed(agente, agentesFilter)) continue
+    totals.set(estado, (totals.get(estado) ?? 0) + count)
+  }
+  return [...totals.entries()].map(([estado, count]) => ({ estado, count }))
+}
 export function buildStatusChartData(
   analytics: AttentionsAnalytics,
   filter: AttentionFilter,
-  estadosFilter: EstadosFilter
+  estadosFilter: EstadosFilter,
+  agentesFilter: AgentesFilter
 ): {
   total: number
   slices: StatusChartSlice[]
 } {
   if (filter !== 'all') {
-    const statusCounts = analytics[filter].statusCounts.filter(({ estado }) =>
-      estadoAllowed(estado, estadosFilter)
+    const statusCounts = filteredEstadoTotals(
+      analytics[filter],
+      estadosFilter,
+      agentesFilter
     )
     return {
       total: statusCounts.reduce((sum, { count }) => sum + count, 0),
@@ -58,14 +79,14 @@ export function buildStatusChartData(
     }
   }
   const incomingByEstado = new Map(
-    analytics.incoming.statusCounts
-      .filter(({ estado }) => estadoAllowed(estado, estadosFilter))
-      .map(({ estado, count }) => [estado, count])
+    filteredEstadoTotals(analytics.incoming, estadosFilter, agentesFilter).map(
+      ({ estado, count }) => [estado, count]
+    )
   )
   const outgoingByEstado = new Map(
-    analytics.outgoing.statusCounts
-      .filter(({ estado }) => estadoAllowed(estado, estadosFilter))
-      .map(({ estado, count }) => [estado, count])
+    filteredEstadoTotals(analytics.outgoing, estadosFilter, agentesFilter).map(
+      ({ estado, count }) => [estado, count]
+    )
   )
   const estados = [
     ...new Set([...incomingByEstado.keys(), ...outgoingByEstado.keys()])
@@ -112,7 +133,8 @@ export function buildAgentRanking(
   analytics: AttentionsAnalytics,
   filter: AttentionFilter,
   limit: AgentLimit,
-  estadosFilter: EstadosFilter
+  estadosFilter: EstadosFilter,
+  agentesFilter: AgentesFilter
 ): AgentBarDatum[] {
   const directions =
     filter === 'incoming'
@@ -131,6 +153,9 @@ export function buildAgentRanking(
       if (!estadoAllowed(estado, estadosFilter)) {
         continue
       }
+      if (!agenteAllowed(agente, agentesFilter)) {
+        continue
+      }
       const estadoCounts = merged.get(agente) ?? new Map<string, number>()
       estadoCounts.set(estado, (estadoCounts.get(estado) ?? 0) + count)
       merged.set(agente, estadoCounts)
@@ -142,6 +167,9 @@ export function buildAgentRanking(
       count
     } of direction.agentCampaignCounts) {
       if (!estadoAllowed(estado, estadosFilter)) {
+        continue
+      }
+      if (!agenteAllowed(agente, agentesFilter)) {
         continue
       }
       const campanaCounts =
@@ -156,6 +184,9 @@ export function buildAgentRanking(
       sampleCount
     } of direction.agentAttentionSeconds) {
       if (!estadoAllowed(estado, estadosFilter)) {
+        continue
+      }
+      if (!agenteAllowed(agente, agentesFilter)) {
         continue
       }
       const current = attentionMerged.get(agente) ?? {
@@ -197,12 +228,14 @@ export type TopCloserDatum = {
 }
 const TOP_CLOSERS_LIMIT = 5
 export function buildTopClosers(
-  analytics: AttentionsAnalytics
+  analytics: AttentionsAnalytics,
+  agentesFilter: AgentesFilter
 ): TopCloserDatum[] {
   const merged = new Map<string, number>()
   for (const direction of [analytics.incoming, analytics.outgoing]) {
     for (const { agente, estado, count } of direction.agentCounts) {
       if (estado !== 'Cerrada') continue
+      if (!agenteAllowed(agente, agentesFilter)) continue
       merged.set(agente, (merged.get(agente) ?? 0) + count)
     }
   }
@@ -219,7 +252,8 @@ export type CampaignBarDatum = {
 export function buildCampaignRanking(
   analytics: AttentionsAnalytics,
   filter: AttentionFilter,
-  estadosFilter: EstadosFilter
+  estadosFilter: EstadosFilter,
+  agentesFilter: AgentesFilter
 ): CampaignBarDatum[] {
   const directions =
     filter === 'incoming'
@@ -228,9 +262,19 @@ export function buildCampaignRanking(
         ? [analytics.outgoing]
         : [analytics.incoming, analytics.outgoing]
   const merged = new Map<string, Map<string, number>>()
+  // agentCampaignCounts (no campaignCounts, que no tiene desglose por agente) para poder aplicar
+  // tambien el filtro de agentes del tab Resumen.
   for (const direction of directions) {
-    for (const { campana, estado, count } of direction.campaignCounts) {
+    for (const {
+      agente,
+      campana,
+      estado,
+      count
+    } of direction.agentCampaignCounts) {
       if (!estadoAllowed(estado, estadosFilter)) {
+        continue
+      }
+      if (!agenteAllowed(agente, agentesFilter)) {
         continue
       }
       const estadoCounts = merged.get(campana) ?? new Map<string, number>()
@@ -322,13 +366,15 @@ export type DemandHeatmap = {
 export function buildDemandHeatmap(
   demand: DemandAnalytics,
   filter: AttentionFilter,
-  estadosFilter: EstadosFilter
+  estadosFilter: EstadosFilter,
+  agentesFilter: AgentesFilter
 ): DemandHeatmap {
   const counts = new Map<string, number>()
   let total = 0
   for (const bucket of demand.buckets) {
     if (filter !== 'all' && bucket.direction !== filter) continue
     if (!estadoAllowed(bucket.estado, estadosFilter)) continue
+    if (!agenteAllowed(bucket.agente, agentesFilter)) continue
     const key = `${bucket.dayOfWeek}:${bucket.hour}`
     counts.set(key, (counts.get(key) ?? 0) + bucket.count)
     total += bucket.count

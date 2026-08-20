@@ -39,6 +39,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '#/components/ui/select'
+import { Separator } from '#/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 import {
   buildAgentRanking,
@@ -68,6 +69,7 @@ import {
 } from '#/server/reports.functions'
 import {
   AGENT_LIMIT_OPTIONS,
+  type AgentesFilter,
   type AgentLimit,
   ATTENTION_FILTERS,
   type AtencionesView,
@@ -75,7 +77,6 @@ import {
   type AttentionRecordsPage,
   type AttentionsSearch,
   attentionsSearchSchema,
-  type EstadosFilter,
   type IncidentCategory,
   todayIsoDate
 } from '#/server/schemas'
@@ -88,7 +89,11 @@ const FILTER_LABEL: Record<AttentionFilter, string> = {
 function formatAgentLimit(limit: AgentLimit) {
   return limit === 'all' ? 'Todos' : `Top ${limit}`
 }
-function formatEstadosFilter(filter: EstadosFilter, available: string[]) {
+function formatMultiSelectFilter(
+  filter: 'all' | string[],
+  available: string[],
+  noun: string
+) {
   if (filter === 'all' || filter.length === available.length) {
     return 'Todos'
   }
@@ -98,7 +103,7 @@ function formatEstadosFilter(filter: EstadosFilter, available: string[]) {
   if (filter.length === 1) {
     return filter[0]
   }
-  return `${filter.length} estados`
+  return `${filter.length} ${noun}`
 }
 function CategorySwatch({ category }: { category: IncidentCategory }) {
   return (
@@ -111,6 +116,42 @@ function CategorySwatch({ category }: { category: IncidentCategory }) {
 const UNKNOWN_AGENT_LABEL = 'Sin agente'
 function incidentAgentLabel(agente: string) {
   return agente.trim() === '' ? UNKNOWN_AGENT_LABEL : agente
+}
+
+function agentesLabel(filter: AgentesFilter): string | null {
+  if (filter === 'all') return null
+  if (filter.length === 1) return filter[0]
+  return `${filter.length} agentes`
+}
+
+function MultiSelectQuickActions({
+  onSelectAll,
+  onSelectNone
+}: {
+  onSelectAll: () => void
+  onSelectNone: () => void
+}) {
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2 px-3 py-1.5">
+        <button
+          type="button"
+          className="text-xs font-medium text-primary hover:underline"
+          onClick={onSelectAll}
+        >
+          Marcar todos
+        </button>
+        <button
+          type="button"
+          className="text-xs font-medium text-primary hover:underline"
+          onClick={onSelectNone}
+        >
+          Ninguno
+        </button>
+      </div>
+      <Separator className="mb-1" />
+    </>
+  )
 }
 const UNKNOWN_PLAN_LABEL = 'Sin plan'
 function planLabel(plan: string) {
@@ -146,9 +187,9 @@ function AtencionesPage() {
     direction,
     agentLimit,
     estados,
+    agentes,
     view,
     category,
-    agente,
     campana,
     plan,
     date,
@@ -241,7 +282,7 @@ function AtencionesPage() {
         direction,
         estados,
         campana,
-        agente,
+        agentes,
         date,
         dateEnd,
         page: demorasPage,
@@ -262,33 +303,45 @@ function AtencionesPage() {
     direction,
     estados,
     campana,
-    agente,
+    agentes,
     date,
     dateEnd,
     demorasPage,
     fetchAttentionRecordsPage
   ])
   const availableEstados = getAvailableEstados(analytics)
-  const { total, slices } = buildStatusChartData(analytics, direction, estados)
-  const agents = buildAgentRanking(analytics, direction, agentLimit, estados)
-  const topClosers = buildTopClosers(analytics)
-  const campaigns = buildCampaignRanking(analytics, direction, estados)
-  const demandHeatmap = buildDemandHeatmap(demandAnalytics, direction, estados)
+  const { total, slices } = buildStatusChartData(
+    analytics,
+    direction,
+    estados,
+    agentes
+  )
+  const agents = buildAgentRanking(
+    analytics,
+    direction,
+    agentLimit,
+    estados,
+    agentes
+  )
+  const topClosers = buildTopClosers(analytics, agentes)
+  const campaigns = buildCampaignRanking(analytics, direction, estados, agentes)
+  const demandHeatmap = buildDemandHeatmap(
+    demandAnalytics,
+    direction,
+    estados,
+    agentes
+  )
   const { blockedMessage, advisoryMessage } = describeAvailability(
     analytics,
     direction
   )
-  const availableIncidentAgents = [
-    ...new Set(
-      incidentAnalytics.records.map(record => incidentAgentLabel(record.agente))
-    )
-  ].sort((a, b) => a.localeCompare(b))
   const availableIncidentCampaigns = [
     ...new Set(incidentAnalytics.records.map(record => record.campana))
   ].sort((a, b) => a.localeCompare(b))
   const incidentRecords = incidentAnalytics.records.filter(
     record =>
-      (agente === 'all' || incidentAgentLabel(record.agente) === agente) &&
+      (agentes === 'all' ||
+        agentes.includes(incidentAgentLabel(record.agente))) &&
       (campana === 'all' || record.campana === campana)
   )
   const incidentCategoryOrder = pickDominantCategoryOrder(incidentRecords)
@@ -303,10 +356,14 @@ function AtencionesPage() {
       ...analytics.outgoing.campaignCounts.map(c => c.campana)
     ])
   ].sort((a, b) => a.localeCompare(b))
-  const availableRecordAgents = [
+
+  const availableAgentes = [
     ...new Set([
       ...analytics.incoming.agentCounts.map(a => a.agente),
-      ...analytics.outgoing.agentCounts.map(a => a.agente)
+      ...analytics.outgoing.agentCounts.map(a => a.agente),
+      ...incidentAnalytics.records.map(record =>
+        incidentAgentLabel(record.agente)
+      )
     ])
   ].sort((a, b) => a.localeCompare(b))
   const availableRecordPlans = [
@@ -351,12 +408,49 @@ function AtencionesPage() {
       replace: true
     })
   }
+  function selectAllEstados() {
+    navigate({
+      search: prev => ({ ...prev, estados: 'all', demorasPage: 1 }),
+      replace: true
+    })
+  }
+  function selectNoEstados() {
+    navigate({
+      search: prev => ({ ...prev, estados: [], demorasPage: 1 }),
+      replace: true
+    })
+  }
+  function isAgenteChecked(agenteName: string) {
+    return agentes === 'all' || agentes.includes(agenteName)
+  }
+  function toggleAgente(agenteName: string) {
+    const current = agentes === 'all' ? availableAgentes : agentes
+    const next = current.includes(agenteName)
+      ? current.filter(a => a !== agenteName)
+      : [...current, agenteName]
+    navigate({
+      search: prev => ({ ...prev, agentes: next, demorasPage: 1 }),
+      replace: true
+    })
+  }
+  function selectAllAgentes() {
+    navigate({
+      search: prev => ({ ...prev, agentes: 'all', demorasPage: 1 }),
+      replace: true
+    })
+  }
+  function selectNoAgentes() {
+    navigate({
+      search: prev => ({ ...prev, agentes: [], demorasPage: 1 }),
+      replace: true
+    })
+  }
   function goToAgentIncidents(clickedAgent: string) {
     navigate({
       search: prev => ({
         ...prev,
         view: 'incidencias',
-        agente: clickedAgent,
+        agentes: [clickedAgent],
         demorasPage: 1
       }),
       replace: true
@@ -366,7 +460,7 @@ function AtencionesPage() {
     incidentCategoryOrder.indexOf(activeIncidentCategory)
   )
   const incidentExportFilters = [
-    agente !== 'all' ? `Agente: ${agente}` : null,
+    agentesLabel(agentes) ? `Agente(s): ${agentesLabel(agentes)}` : null,
     campana !== 'all' ? `Campaña: ${campana}` : null
   ].filter((part): part is string => part !== null)
   function handleDownloadIncidentsJson() {
@@ -375,7 +469,7 @@ function AtencionesPage() {
       categoria: activeIncidentCategory,
       cadena: incidentExportChain,
       total: incidentRecords.length,
-      filtros: { agente, campana },
+      filtros: { agentes, campana },
       arbol: buildIncidentHierarchyTree(incidentRecords, incidentExportChain)
     }
     downloadBlob(
@@ -426,6 +520,49 @@ function AtencionesPage() {
             }
           />
 
+          {availableAgentes.length > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-muted-foreground">
+                Agentes
+              </span>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button
+                      variant="outline"
+                      className="w-40 justify-between font-normal"
+                    />
+                  }
+                >
+                  {formatMultiSelectFilter(
+                    agentes,
+                    availableAgentes,
+                    'agentes'
+                  )}
+                  <ChevronDownIcon className="size-4 text-muted-foreground" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <MultiSelectQuickActions
+                    onSelectAll={selectAllAgentes}
+                    onSelectNone={selectNoAgentes}
+                  />
+                  {availableAgentes.map(agenteName => (
+                    <Label
+                      key={agenteName}
+                      className="cursor-default rounded-xl px-3 py-2 font-normal hover:bg-accent"
+                    >
+                      <Checkbox
+                        checked={isAgenteChecked(agenteName)}
+                        onCheckedChange={() => toggleAgente(agenteName)}
+                      />
+                      {agenteName}
+                    </Label>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
+
           {view === 'resumen' && (
             <>
               <Button
@@ -449,87 +586,112 @@ function AtencionesPage() {
                     : 'Refresh ahora'}
               </Button>
 
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  render={
-                    <Button
-                      variant="outline"
-                      className="w-40 justify-between font-normal"
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-muted-foreground">
+                  Estado
+                </span>
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <Button
+                        variant="outline"
+                        className="w-40 justify-between font-normal"
+                      />
+                    }
+                  >
+                    {formatMultiSelectFilter(
+                      estados,
+                      availableEstados,
+                      'estados'
+                    )}
+                    <ChevronDownIcon className="size-4 text-muted-foreground" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <MultiSelectQuickActions
+                      onSelectAll={selectAllEstados}
+                      onSelectNone={selectNoEstados}
                     />
+                    {availableEstados.map(estado => (
+                      <Label
+                        key={estado}
+                        className="cursor-default rounded-xl px-3 py-2 font-normal hover:bg-accent"
+                      >
+                        <Checkbox
+                          checked={isEstadoChecked(estado)}
+                          onCheckedChange={() => toggleEstado(estado)}
+                        />
+                        {estado}
+                      </Label>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-muted-foreground">
+                  Top agentes
+                </span>
+                <Select
+                  value={String(agentLimit)}
+                  onValueChange={value =>
+                    navigate({
+                      search: prev => ({
+                        ...prev,
+                        agentLimit:
+                          value === 'all'
+                            ? 'all'
+                            : (Number(value) as AgentLimit)
+                      }),
+                      replace: true
+                    })
                   }
                 >
-                  {formatEstadosFilter(estados, availableEstados)}
-                  <ChevronDownIcon className="size-4 text-muted-foreground" />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  {availableEstados.map(estado => (
-                    <Label
-                      key={estado}
-                      className="cursor-default rounded-xl px-3 py-2 font-normal hover:bg-accent"
-                    >
-                      <Checkbox
-                        checked={isEstadoChecked(estado)}
-                        onCheckedChange={() => toggleEstado(estado)}
-                      />
-                      {estado}
-                    </Label>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
+                  <SelectTrigger className="w-32">
+                    <SelectValue>
+                      {(value: string) => formatAgentLimit(value as AgentLimit)}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {AGENT_LIMIT_OPTIONS.map(limit => (
+                      <SelectItem key={limit} value={String(limit)}>
+                        {formatAgentLimit(limit)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-              <Select
-                value={String(agentLimit)}
-                onValueChange={value =>
-                  navigate({
-                    search: prev => ({
-                      ...prev,
-                      agentLimit:
-                        value === 'all' ? 'all' : (Number(value) as AgentLimit)
-                    }),
-                    replace: true
-                  })
-                }
-              >
-                <SelectTrigger className="w-32">
-                  <SelectValue>
-                    {(value: string) => formatAgentLimit(value as AgentLimit)}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {AGENT_LIMIT_OPTIONS.map(limit => (
-                    <SelectItem key={limit} value={String(limit)}>
-                      {formatAgentLimit(limit)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Select
-                value={direction}
-                onValueChange={value =>
-                  navigate({
-                    search: prev => ({
-                      ...prev,
-                      direction: value as AttentionFilter,
-                      demorasPage: 1
-                    }),
-                    replace: true
-                  })
-                }
-              >
-                <SelectTrigger className="w-36">
-                  <SelectValue>
-                    {(value: AttentionFilter) => FILTER_LABEL[value]}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {ATTENTION_FILTERS.map(filter => (
-                    <SelectItem key={filter} value={filter}>
-                      {FILTER_LABEL[filter]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-muted-foreground">
+                  Dirección
+                </span>
+                <Select
+                  value={direction}
+                  onValueChange={value =>
+                    navigate({
+                      search: prev => ({
+                        ...prev,
+                        direction: value as AttentionFilter,
+                        demorasPage: 1
+                      }),
+                      replace: true
+                    })
+                  }
+                >
+                  <SelectTrigger className="w-36">
+                    <SelectValue>
+                      {(value: AttentionFilter) => FILTER_LABEL[value]}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ATTENTION_FILTERS.map(filter => (
+                      <SelectItem key={filter} value={filter}>
+                        {FILTER_LABEL[filter]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </>
           )}
         </div>
@@ -740,7 +902,7 @@ function AtencionesPage() {
             <p className="text-sm text-muted-foreground">
               {incidentRecords.length} incidencias registradas en atenciones y
               llamadas salientes
-              {agente !== 'all' && ` para ${agente}`}
+              {agentesLabel(agentes) && ` para ${agentesLabel(agentes)}`}
               {campana !== 'all' && ` en ${campana}`} -- haz clic en una barra
               para ver su desglose, hasta llegar al ticket.
             </p>
@@ -782,43 +944,6 @@ function AtencionesPage() {
                   </Select>
                 </div>
               )}
-
-              {availableIncidentAgents.length > 0 && (
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-muted-foreground">
-                    Agente
-                  </span>
-                  <Select
-                    value={agente}
-                    onValueChange={value =>
-                      navigate({
-                        search: prev => ({
-                          ...prev,
-                          agente: value ?? 'all',
-                          demorasPage: 1
-                        }),
-                        replace: true
-                      })
-                    }
-                  >
-                    <SelectTrigger className="min-w-56 justify-between">
-                      <SelectValue>
-                        {(value: string) =>
-                          value === 'all' ? 'Todos los agentes' : value
-                        }
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Todos los agentes</SelectItem>
-                      {availableIncidentAgents.map(name => (
-                        <SelectItem key={name} value={name}>
-                          {name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
             </div>
           </div>
 
@@ -839,7 +964,7 @@ function AtencionesPage() {
             ) : incidentRecords.length === 0 ? (
               <Card className="mt-4">
                 <CardContent className="text-sm text-muted-foreground">
-                  {agente === 'all' && campana === 'all'
+                  {agentes === 'all' && campana === 'all'
                     ? 'No hay incidencias registradas todavia.'
                     : 'No hay incidencias registradas para este filtro.'}
                 </CardContent>
@@ -929,7 +1054,11 @@ function AtencionesPage() {
                     />
                   }
                 >
-                  {formatEstadosFilter(estados, availableEstados)}
+                  {formatMultiSelectFilter(
+                    estados,
+                    availableEstados,
+                    'estados'
+                  )}
                   <ChevronDownIcon className="size-4 text-muted-foreground" />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start">
@@ -1009,43 +1138,6 @@ function AtencionesPage() {
                   <SelectContent>
                     <SelectItem value="all">Todas las campañas</SelectItem>
                     {availableRecordCampaigns.map(name => (
-                      <SelectItem key={name} value={name}>
-                        {name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-            {availableRecordAgents.length > 0 && (
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-muted-foreground">
-                  Agente
-                </span>
-                <Select
-                  value={agente}
-                  onValueChange={value =>
-                    navigate({
-                      search: prev => ({
-                        ...prev,
-                        agente: value ?? 'all',
-                        demorasPage: 1
-                      }),
-                      replace: true
-                    })
-                  }
-                >
-                  <SelectTrigger className="min-w-56">
-                    <SelectValue>
-                      {(value: string) =>
-                        value === 'all' ? 'Todos los agentes' : value
-                      }
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Todos los agentes</SelectItem>
-                    {availableRecordAgents.map(name => (
                       <SelectItem key={name} value={name}>
                         {name}
                       </SelectItem>

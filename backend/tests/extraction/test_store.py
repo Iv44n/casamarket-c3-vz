@@ -291,10 +291,39 @@ def test_attention_records_page_filters_by_agente_with_sin_agente_fallback_for_d
     )
 
     page = store.attention_records_page(
-        conn, direction="all", agente="Sin agente", page=1, page_size=50
+        conn, direction="all", agentes=["Sin agente"], page=1, page_size=50
     )
 
     assert {row["ID atención"] for row in page.rows} == {"dash", "blank"}
+
+
+def test_attention_records_page_filters_by_multiple_agentes():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("ana", agente="Ana"),
+            _row("luis", agente="Luis"),
+            _row("sofia", agente="Sofia"),
+        ],
+    )
+
+    page = store.attention_records_page(
+        conn, direction="all", agentes=["Ana", "Luis"], page=1, page_size=50
+    )
+
+    assert {row["ID atención"] for row in page.rows} == {"ana", "luis"}
+
+
+def test_attention_records_page_agentes_empty_list_matches_nothing():
+    conn = _conn()
+    _seed(conn, "attention", [_row("1")])
+
+    page = store.attention_records_page(conn, direction="all", agentes=[], page=1, page_size=50)
+
+    assert page.rows == []
+    assert page.total == 0
 
 
 def test_attention_records_page_filters_by_date_range():

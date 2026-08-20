@@ -110,9 +110,9 @@ export const attentionsSearchSchema = z.object({
     ])
     .default(10),
   estados: z.union([z.literal('all'), z.array(z.string())]).default('all'),
+  agentes: z.union([z.literal('all'), z.array(z.string())]).default('all'),
   view: z.enum(ATENCIONES_VIEWS).default('resumen'),
   category: z.enum(INCIDENT_CATEGORIES).default('ambito'),
-  agente: z.string().default('all'),
   campana: z.string().default('all'),
   plan: z.string().default('all'),
   date: dateFilterValue.default(todayIsoDate),
@@ -123,6 +123,7 @@ export const attentionsSearchSchema = z.object({
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
 export type EstadosFilter = AttentionsSearch['estados']
+export type AgentesFilter = AttentionsSearch['agentes']
 export const DIRECTION_REPORT_NAME: Record<AttentionDirection, ReportName> = {
   incoming: 'attention',
   outgoing: 'outboundattention'
@@ -188,7 +189,7 @@ export const attentionRecordsPageRequestSchema = z.object({
   direction: z.enum(ATTENTION_FILTERS).default('all'),
   estados: z.union([z.literal('all'), z.array(z.string())]).default('all'),
   campana: z.string().default('all'),
-  agente: z.string().default('all'),
+  agentes: z.union([z.literal('all'), z.array(z.string())]).default('all'),
   date: dateFilterValue.default('all'),
   dateEnd: dateEndValue,
   page: z.number().int().min(1).default(1),
@@ -208,6 +209,7 @@ export type DemandBucketCount = {
   hour: number
   direction: AttentionDirection
   estado: string
+  agente: string
   count: number
 }
 export type DemandAnalytics = {

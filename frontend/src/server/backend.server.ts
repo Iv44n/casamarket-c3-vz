@@ -54,7 +54,7 @@ export async function fetchAttentionRecordsPage(params: {
   direction: AttentionRecordsPageRequest['direction']
   estados: AttentionRecordsPageRequest['estados']
   campana: string
-  agente: string
+  agentes: AttentionRecordsPageRequest['agentes']
   dateFrom?: string
   dateTo?: string
   page: number
@@ -71,7 +71,9 @@ export async function fetchAttentionRecordsPage(params: {
     for (const estado of params.estados) query.append('estados', estado)
   }
   if (params.campana !== 'all') query.set('campana', params.campana)
-  if (params.agente !== 'all') query.set('agente', params.agente)
+  if (params.agentes !== 'all') {
+    for (const agente of params.agentes) query.append('agentes', agente)
+  }
   if (params.dateFrom) query.set('date_from', params.dateFrom)
   if (params.dateTo) query.set('date_to', params.dateTo)
   query.set('page', String(params.page))
