@@ -12,6 +12,7 @@ import {
   INCIDENT_SOURCE_REPORTS
 } from '#/lib/incident-analytics'
 import {
+  fetchAttentionRecordsPage,
   fetchBackfillStatus,
   fetchContactsSyncStatus,
   fetchExtractionStatus,
@@ -25,6 +26,8 @@ import {
 } from './backend.server'
 import type {
   AttentionDirection,
+  AttentionRecord,
+  AttentionRecordsPage,
   AttentionsAnalytics,
   DemandAnalytics,
   DemandBucketCount,
@@ -35,6 +38,7 @@ import type {
   TransferHop
 } from './schemas'
 import {
+  attentionRecordsPageRequestSchema,
   backfillRequestSchema,
   dateFilterSchema,
   historicalBackfillRequestSchema,
@@ -138,11 +142,22 @@ function estadoKeyOf(row: ReportRow): string {
     ? estado
     : 'Sin estado'
 }
+function agenteKeyOf(row: ReportRow): string {
+  const agente = row.Agente
+  return typeof agente === 'string' &&
+    agente.trim() !== '' &&
+    agente.trim() !== '-'
+    ? agente
+    : 'Sin agente'
+}
+function campanaKeyOf(row: ReportRow): string {
+  const campana = row.Campaña
+  return typeof campana === 'string' && campana.trim() !== ''
+    ? campana
+    : 'Sin campaña'
+}
 function deriveDirectionAnalytics(
-  rows: ReportRow[] | null,
-  direction: AttentionDirection,
-  transfersById: Map<string, TransferHop[]>,
-  contactsByPhone: Map<string, ContactInfo>
+  rows: ReportRow[] | null
 ): DirectionAnalytics {
   if (rows === null) {
     return {
@@ -152,8 +167,7 @@ function deriveDirectionAnalytics(
       agentCounts: [],
       campaignCounts: [],
       agentCampaignCounts: [],
-      agentAttentionSeconds: [],
-      attentionRecords: []
+      agentAttentionSeconds: []
     }
   }
   const statusCounts = new Map<string, number>()
@@ -167,26 +181,15 @@ function deriveDirectionAnalytics(
     string,
     Map<string, { totalSeconds: number; sampleCount: number }>
   >()
-  const attentionRecords: DirectionAnalytics['attentionRecords'] = []
 
   for (const row of rows) {
     const estadoKey = estadoKeyOf(row)
     statusCounts.set(estadoKey, (statusCounts.get(estadoKey) ?? 0) + 1)
-    const agente = row.Agente
-    const agenteKey =
-      typeof agente === 'string' &&
-      agente.trim() !== '' &&
-      agente.trim() !== '-'
-        ? agente
-        : 'Sin agente'
+    const agenteKey = agenteKeyOf(row)
     const agentCounts = agentEstadoCounts.get(agenteKey) ?? new Map()
     agentCounts.set(estadoKey, (agentCounts.get(estadoKey) ?? 0) + 1)
     agentEstadoCounts.set(agenteKey, agentCounts)
-    const campana = row.Campaña
-    const campanaKey =
-      typeof campana === 'string' && campana.trim() !== ''
-        ? campana
-        : 'Sin campaña'
+    const campanaKey = campanaKeyOf(row)
     const campaignCounts = campaignEstadoCounts.get(campanaKey) ?? new Map()
     campaignCounts.set(estadoKey, (campaignCounts.get(estadoKey) ?? 0) + 1)
     campaignEstadoCounts.set(campanaKey, campaignCounts)
@@ -220,40 +223,6 @@ function deriveDirectionAnalytics(
       estadoAttention.set(estadoKey, current)
       agentEstadoAttentionSeconds.set(agenteKey, estadoAttention)
     }
-
-    const idAtencionRaw = row['ID atención']
-    const idAtencion =
-      typeof idAtencionRaw === 'number' || typeof idAtencionRaw === 'string'
-        ? String(idAtencionRaw)
-        : ''
-    const cliente = row['Nombre de cliente']
-    const startEpochMs = parseStartEpochMs(row)
-    const closeEpochMs = parseLimaDateTime(
-      row['Fecha final'],
-      row['Hora final']
-    )
-    const chain = idAtencion ? (transfersById.get(idAtencion) ?? []) : []
-    const lastHop = chain.length > 0 ? chain[chain.length - 1] : undefined
-    const contactKey = normalizePhoneKey(row['Número cliente'])
-    const contact = contactKey ? contactsByPhone.get(contactKey) : undefined
-    attentionRecords.push({
-      idAtencion,
-      cliente: typeof cliente === 'string' ? cliente : '',
-      plan: contact?.plan ?? '',
-      rubro: contact?.rubro ?? '',
-      agente: agenteKey,
-      campana: campanaKey,
-      direction,
-      estado: estadoKey,
-      startEpochMs,
-      closeEpochMs,
-      transferredBy: lastHop?.agenteOrigen ?? null,
-      transferDestType: lastHop?.destType ?? null,
-      transferDestino: lastHop?.destino ?? null,
-      transferChain: chain,
-      withAgentSinceMs:
-        agenteKey === 'Sin agente' ? null : (lastHop?.epochMs ?? startEpochMs)
-    })
   }
 
   return {
@@ -301,8 +270,7 @@ function deriveDirectionAnalytics(
             sampleCount
           })
         )
-    ),
-    attentionRecords
+    )
   }
 }
 
@@ -318,18 +286,10 @@ export const getAttentionsAnalytics = createServerFn({ method: 'GET' })
   .validator(dateFilterSchema)
   .handler(async ({ data }): Promise<AttentionsAnalytics> => {
     const { dateFrom, dateTo } = toHistoryDateRange(data.date, data.dateEnd)
-    const [attentionRows, outboundRows, transferRows, contactsRows] =
-      await Promise.all([
-        fetchReportRowsHistory('attention', dateFrom, dateTo),
-        fetchReportRowsHistory('outboundattention', dateFrom, dateTo),
-        // "transfer" se correlaciona por "Atención ID", no por dia -- filtrarlo por fecha
-        // podria descartar transferencias registradas justo despues de medianoche respecto a
-        // su atencion padre. No pasarle dateFrom/dateTo (ver backend/app/extraction/store.py).
-        fetchReportRowsHistory('transfer'),
-        fetchReportRows('contacts')
-      ])
-    const transfersById = buildTransferChainIndex(transferRows ?? [])
-    const contactsByPhone = buildContactsIndex(contactsRows ?? [])
+    const [attentionRows, outboundRows] = await Promise.all([
+      fetchReportRowsHistory('attention', dateFrom, dateTo),
+      fetchReportRowsHistory('outboundattention', dateFrom, dateTo)
+    ])
     return {
       incoming: deriveDirectionAnalytics(
         attentionRows === null
@@ -339,10 +299,7 @@ export const getAttentionsAnalytics = createServerFn({ method: 'GET' })
               ATTENTION_DATE_FIELD,
               data.date,
               data.dateEnd
-            ),
-        'incoming',
-        transfersById,
-        contactsByPhone
+            )
       ),
       outgoing: deriveDirectionAnalytics(
         outboundRows === null
@@ -352,11 +309,82 @@ export const getAttentionsAnalytics = createServerFn({ method: 'GET' })
               ATTENTION_DATE_FIELD,
               data.date,
               data.dateEnd
-            ),
-        'outgoing',
-        transfersById,
-        contactsByPhone
+            )
       )
+    }
+  })
+
+function toAttentionRecord(
+  row: ReportRow,
+  direction: AttentionDirection,
+  transfersById: Map<string, TransferHop[]>,
+  contactsByPhone: Map<string, ContactInfo>
+): AttentionRecord {
+  const idAtencionRaw = row['ID atención']
+  const idAtencion =
+    typeof idAtencionRaw === 'number' || typeof idAtencionRaw === 'string'
+      ? String(idAtencionRaw)
+      : ''
+  const cliente = row['Nombre de cliente']
+  const agenteKey = agenteKeyOf(row)
+  const startEpochMs = parseStartEpochMs(row)
+  const closeEpochMs = parseLimaDateTime(row['Fecha final'], row['Hora final'])
+  const chain = idAtencion ? (transfersById.get(idAtencion) ?? []) : []
+  const lastHop = chain.length > 0 ? chain[chain.length - 1] : undefined
+  const contactKey = normalizePhoneKey(row['Número cliente'])
+  const contact = contactKey ? contactsByPhone.get(contactKey) : undefined
+  return {
+    idAtencion,
+    cliente: typeof cliente === 'string' ? cliente : '',
+    plan: contact?.plan ?? '',
+    rubro: contact?.rubro ?? '',
+    agente: agenteKey,
+    campana: campanaKeyOf(row),
+    direction,
+    estado: estadoKeyOf(row),
+    startEpochMs,
+    closeEpochMs,
+    transferredBy: lastHop?.agenteOrigen ?? null,
+    transferDestType: lastHop?.destType ?? null,
+    transferDestino: lastHop?.destino ?? null,
+    transferChain: chain,
+    withAgentSinceMs:
+      agenteKey === 'Sin agente' ? null : (lastHop?.epochMs ?? startEpochMs)
+  }
+}
+
+export const getAttentionRecordsPage = createServerFn({ method: 'GET' })
+  .validator(attentionRecordsPageRequestSchema)
+  .handler(async ({ data }): Promise<AttentionRecordsPage> => {
+    if (data.estados !== 'all' && data.estados.length === 0) {
+      return { total: 0, staleCount: 0, records: [], availablePlans: [] }
+    }
+    const { dateFrom, dateTo } = toHistoryDateRange(data.date, data.dateEnd)
+    const [page, contactsRows] = await Promise.all([
+      fetchAttentionRecordsPage({
+        direction: data.direction,
+        estados: data.estados,
+        campana: data.campana,
+        agente: data.agente,
+        dateFrom,
+        dateTo,
+        page: data.page,
+        pageSize: data.pageSize
+      }),
+      fetchReportRows('contacts')
+    ])
+    const transfersById = buildTransferChainIndex(page.transfers)
+    const contactsByPhone = buildContactsIndex(contactsRows ?? [])
+    const availablePlans = [
+      ...new Set((contactsRows ?? []).map(row => cleanContactField(row.Plan)))
+    ]
+    return {
+      total: page.total,
+      staleCount: page.staleCount,
+      records: page.rows.map(row =>
+        toAttentionRecord(row, row.direction, transfersById, contactsByPhone)
+      ),
+      availablePlans
     }
   })
 

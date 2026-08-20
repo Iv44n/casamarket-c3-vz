@@ -1,4 +1,5 @@
 import type {
+  AttentionRecordsPageRequest,
   BackfillRunSummary,
   BackfillStatus,
   ContactsSyncStatus,
@@ -48,6 +49,37 @@ export async function fetchReportRowsHistory(
   })().finally(() => inFlightHistoryFetches.delete(path))
   inFlightHistoryFetches.set(path, promise)
   return promise
+}
+export async function fetchAttentionRecordsPage(params: {
+  direction: AttentionRecordsPageRequest['direction']
+  estados: AttentionRecordsPageRequest['estados']
+  campana: string
+  agente: string
+  dateFrom?: string
+  dateTo?: string
+  page: number
+  pageSize: number
+}): Promise<{
+  total: number
+  staleCount: number
+  rows: (ReportRow & { direction: 'incoming' | 'outgoing' })[]
+  transfers: ReportRow[]
+}> {
+  const query = new URLSearchParams()
+  query.set('direction', params.direction)
+  if (params.estados !== 'all') {
+    for (const estado of params.estados) query.append('estados', estado)
+  }
+  if (params.campana !== 'all') query.set('campana', params.campana)
+  if (params.agente !== 'all') query.set('agente', params.agente)
+  if (params.dateFrom) query.set('date_from', params.dateFrom)
+  if (params.dateTo) query.set('date_to', params.dateTo)
+  query.set('page', String(params.page))
+  query.set('page_size', String(params.pageSize))
+  const response = await backendFetch(
+    `/data/attention-records?${query.toString()}`
+  )
+  return response.json()
 }
 export async function fetchExtractionStatus(): Promise<ExtractionStatus> {
   const response = await backendFetch('/extraction/status')

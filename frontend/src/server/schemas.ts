@@ -118,7 +118,8 @@ export const attentionsSearchSchema = z.object({
   date: dateFilterValue.default(todayIsoDate),
   dateEnd: dateEndValue,
   demandDate: dateFilterValue.default(defaultDemandWeekStart),
-  demandDateEnd: dateEndValue.default(defaultDemandWeekEnd)
+  demandDateEnd: dateEndValue.default(defaultDemandWeekEnd),
+  demorasPage: z.number().int().min(1).default(1)
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
 export type EstadosFilter = AttentionsSearch['estados']
@@ -155,7 +156,6 @@ export type DirectionAnalytics = {
     totalSeconds: number
     sampleCount: number
   }[]
-  attentionRecords: AttentionRecord[]
 }
 export type TransferHop = {
   agenteOrigen: string
@@ -183,6 +183,25 @@ export type AttentionRecord = {
 export type AttentionsAnalytics = {
   incoming: DirectionAnalytics
   outgoing: DirectionAnalytics
+}
+export const attentionRecordsPageRequestSchema = z.object({
+  direction: z.enum(ATTENTION_FILTERS).default('all'),
+  estados: z.union([z.literal('all'), z.array(z.string())]).default('all'),
+  campana: z.string().default('all'),
+  agente: z.string().default('all'),
+  date: dateFilterValue.default('all'),
+  dateEnd: dateEndValue,
+  page: z.number().int().min(1).default(1),
+  pageSize: z.number().int().min(1).max(200).default(50)
+})
+export type AttentionRecordsPageRequest = z.infer<
+  typeof attentionRecordsPageRequestSchema
+>
+export type AttentionRecordsPage = {
+  total: number
+  staleCount: number
+  records: AttentionRecord[]
+  availablePlans: string[]
 }
 export type DemandBucketCount = {
   dayOfWeek: number

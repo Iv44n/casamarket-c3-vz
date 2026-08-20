@@ -1,4 +1,6 @@
+import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 from app.extraction import store
 
@@ -132,3 +134,345 @@ def test_history_rows_ignores_date_filter_for_reports_without_a_mapped_date_colu
     history = store.history_rows(conn, "transfer", "2026-08-16", "2026-08-18")
 
     assert len(history) == 1
+
+
+def test_migration_adds_time_columns_and_backfills_them_from_row_json():
+    conn = sqlite3.connect(":memory:")
+    # Simula el esquema pre-migracion (sin hora_registro/hora_final) que ya existe en el Turso
+    # en vivo -- _init_schema debe agregar las columnas y rellenarlas desde row_json.
+    conn.executescript(
+        """
+        CREATE TABLE attention (
+            id_atencion     TEXT PRIMARY KEY,
+            estado          TEXT,
+            agente          TEXT,
+            campana         TEXT,
+            fecha_registro  TEXT,
+            fecha_final     TEXT,
+            numero_cliente  TEXT,
+            first_seen_at   TEXT NOT NULL,
+            last_seen_at    TEXT NOT NULL,
+            row_json        TEXT NOT NULL
+        );
+        """
+    )
+    row = {"ID atención": "1", "Hora registro": "10:00:00", "Hora final": "11:30:00"}
+    conn.execute(
+        "INSERT INTO attention (id_atencion, first_seen_at, last_seen_at, row_json) "
+        "VALUES (?, ?, ?, ?)",
+        ("1", "2026-08-19T00:00:00", "2026-08-19T00:00:00", json.dumps(row)),
+    )
+    conn.commit()
+
+    store._init_schema(conn)
+
+    assert {"hora_registro", "hora_final"} <= store._existing_columns(conn, "attention")
+    cursor = conn.execute(
+        "SELECT hora_registro, hora_final FROM attention WHERE id_atencion = '1'"
+    )
+    assert cursor.fetchone() == ("10:00:00", "11:30:00")
+
+
+def _lima_naive(dt_utc: datetime) -> tuple[str, str]:
+    """Componentes 'DD/MM/YYYY'/'HH:MM:SS' (formato de fecha_registro/fecha_final) en hora Lima
+    (UTC-5) para un instante UTC real -- usado para construir filas cuyo elapsed calculado en SQL
+    (que compara contra julianday('now'), UTC real) tenga un valor predecible relativo al momento
+    en que corre el test."""
+    lima = dt_utc - timedelta(hours=5)
+    return lima.strftime("%d/%m/%Y"), lima.strftime("%H:%M:%S")
+
+
+def _lima_naive_iso(dt_utc: datetime) -> tuple[str, str]:
+    """Igual que _lima_naive pero en 'YYYY-MM-DD' -- formato de transfer.fecha."""
+    lima = dt_utc - timedelta(hours=5)
+    return lima.strftime("%Y-%m-%d"), lima.strftime("%H:%M:%S")
+
+
+def _row(
+    id_atencion: str,
+    *,
+    estado: str = "Abierta",
+    agente: str = "Ana",
+    campana: str = "Soporte",
+    fecha_registro: str = "18/08/2026",
+    hora_registro: str = "08:00:00",
+    fecha_final: str | None = None,
+    hora_final: str | None = None,
+    numero_cliente: str = "999999999",
+) -> dict:
+    return {
+        "ID atención": id_atencion,
+        "Estado": estado,
+        "Agente": agente,
+        "Campaña": campana,
+        "Fecha registro": fecha_registro,
+        "Hora registro": hora_registro,
+        "Fecha final": fecha_final,
+        "Hora final": hora_final,
+        "Número cliente": numero_cliente,
+    }
+
+
+def _seed(conn, report_name: str, rows: list[dict]) -> None:
+    store.upsert_report_rows(conn, report_name, rows, "2026-08-19T00:00:00")
+
+
+def test_attention_records_page_direction_all_unions_both_tables_tagged():
+    conn = _conn()
+    _seed(conn, "attention", [_row("in1")])
+    _seed(conn, "outboundattention", [_row("out1")])
+
+    page = store.attention_records_page(conn, direction="all", page=1, page_size=50)
+
+    by_id = {row["ID atención"]: row["direction"] for row in page.rows}
+    assert by_id == {"in1": "incoming", "out1": "outgoing"}
+
+
+def test_attention_records_page_direction_incoming_excludes_outbound_table():
+    conn = _conn()
+    _seed(conn, "attention", [_row("in1")])
+    _seed(conn, "outboundattention", [_row("out1")])
+
+    page = store.attention_records_page(conn, direction="incoming", page=1, page_size=50)
+
+    assert [row["ID atención"] for row in page.rows] == ["in1"]
+
+
+def test_attention_records_page_filters_by_estados_and_sin_estado_fallback():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("abierta", estado="Abierta"),
+            _row("cerrada", estado="Cerrada"),
+            _row("blank", estado=""),
+        ],
+    )
+
+    page = store.attention_records_page(
+        conn, direction="all", estados=["Abierta", "Sin estado"], page=1, page_size=50
+    )
+
+    assert {row["ID atención"] for row in page.rows} == {"abierta", "blank"}
+
+
+def test_attention_records_page_estados_empty_list_matches_nothing():
+    conn = _conn()
+    _seed(conn, "attention", [_row("1")])
+
+    page = store.attention_records_page(conn, direction="all", estados=[], page=1, page_size=50)
+
+    assert page.rows == []
+    assert page.total == 0
+
+
+def test_attention_records_page_filters_by_campana_with_sin_campana_fallback():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [_row("soporte", campana="Soporte"), _row("blank", campana="")],
+    )
+
+    page = store.attention_records_page(
+        conn, direction="all", campana="Sin campaña", page=1, page_size=50
+    )
+
+    assert [row["ID atención"] for row in page.rows] == ["blank"]
+
+
+def test_attention_records_page_filters_by_agente_with_sin_agente_fallback_for_dash():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [_row("ana", agente="Ana"), _row("dash", agente="-"), _row("blank", agente="")],
+    )
+
+    page = store.attention_records_page(
+        conn, direction="all", agente="Sin agente", page=1, page_size=50
+    )
+
+    assert {row["ID atención"] for row in page.rows} == {"dash", "blank"}
+
+
+def test_attention_records_page_filters_by_date_range():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("in_range", fecha_registro="18/08/2026"),
+            _row("out_of_range", fecha_registro="01/09/2026"),
+        ],
+    )
+
+    page = store.attention_records_page(
+        conn, direction="all", date_from="2026-08-18", date_to="2026-08-18", page=1, page_size=50
+    )
+
+    assert [row["ID atención"] for row in page.rows] == ["in_range"]
+
+
+def test_attention_records_page_orders_by_elapsed_time_with_agent_longest_first():
+    conn = _conn()
+    now = datetime.now(timezone.utc)
+    old_fecha, old_hora = _lima_naive(now - timedelta(hours=5))
+    recent_fecha, recent_hora = _lima_naive(now - timedelta(minutes=10))
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("recent", fecha_registro=recent_fecha, hora_registro=recent_hora),
+            _row("old", fecha_registro=old_fecha, hora_registro=old_hora),
+            _row("no_agent", agente="-"),
+        ],
+    )
+
+    page = store.attention_records_page(conn, direction="all", page=1, page_size=50)
+
+    assert [row["ID atención"] for row in page.rows] == ["old", "recent", "no_agent"]
+
+
+def test_attention_records_page_prefers_latest_transfer_hop_over_registration_time():
+    conn = _conn()
+    now = datetime.now(timezone.utc)
+    long_ago_fecha, long_ago_hora = _lima_naive(now - timedelta(hours=3))
+    recent_fecha, recent_hora = _lima_naive(now - timedelta(minutes=20))
+    _seed(
+        conn,
+        "attention",
+        [
+            # Registrada hace 3h, pero transferida a su agente actual hace solo 5 min -- su
+            # elapsed real (~5min) debe medirse desde la transferencia, no desde el registro
+            # (que daria, incorrectamente, ~3h).
+            _row("transferred", fecha_registro=long_ago_fecha, hora_registro=long_ago_hora),
+            # Registrada hace 20 min, nunca transferida -- elapsed real ~20min.
+            _row("never_transferred", fecha_registro=recent_fecha, hora_registro=recent_hora),
+        ],
+    )
+    transfer_fecha, transfer_hora = _lima_naive_iso(now - timedelta(minutes=5))
+    _seed(
+        conn,
+        "transfer",
+        [
+            {
+                "Atención ID": "transferred",
+                "Fecha": transfer_fecha,
+                "Hora": transfer_hora,
+                "Agente Origen": "Ana",
+                "Destino": "Luis",
+            }
+        ],
+    )
+
+    page = store.attention_records_page(conn, direction="all", page=1, page_size=50)
+
+    # "never_transferred" (~20min con su agente) debe ordenar antes que "transferred" (~5min con
+    # su agente actual, pese a estar registrada desde hace 3h) -- confirma que el sort usa el
+    # ultimo hop de transfer, no fecha_registro, para "transferred".
+    assert [row["ID atención"] for row in page.rows] == ["never_transferred", "transferred"]
+
+
+def test_attention_records_page_freezes_elapsed_time_for_closed_records():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row(
+                "closed_long_ago",
+                fecha_registro="01/01/2026",
+                hora_registro="08:00:00",
+                fecha_final="01/01/2026",
+                hora_final="10:00:00",
+            )
+        ],
+    )
+
+    page = store.attention_records_page(conn, direction="all", page=1, page_size=50)
+
+    assert len(page.rows) == 1
+    # No es stale (esta cerrada) aunque su duracion historica (2h) supere el umbral de stale.
+    assert page.stale_count == 0
+
+
+def test_attention_records_page_stale_count_only_counts_open_records_past_threshold():
+    conn = _conn()
+    now = datetime.now(timezone.utc)
+    stale_fecha, stale_hora = _lima_naive(now - timedelta(hours=2))
+    fresh_fecha, fresh_hora = _lima_naive(now - timedelta(minutes=5))
+    closed_fecha, closed_hora = _lima_naive(now - timedelta(hours=1))
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("stale_open", fecha_registro=stale_fecha, hora_registro=stale_hora),
+            _row("fresh_open", fecha_registro=fresh_fecha, hora_registro=fresh_hora),
+            # Misma "since" que stale_open (hace 2h), pero cerrada hace 1h -- no cuenta como
+            # stale porque ya esta cerrada, sin importar cuanto duro mientras estuvo abierta.
+            _row(
+                "stale_but_closed",
+                fecha_registro=stale_fecha,
+                hora_registro=stale_hora,
+                fecha_final=closed_fecha,
+                hora_final=closed_hora,
+            ),
+        ],
+    )
+
+    page = store.attention_records_page(conn, direction="all", page=1, page_size=50)
+
+    assert page.stale_count == 1
+
+
+def test_attention_records_page_paginates_with_page_and_page_size():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row(str(i), fecha_registro="18/08/2026", hora_registro=f"{8 + i:02d}:00:00")
+            for i in range(5)
+        ],
+    )
+
+    page1 = store.attention_records_page(conn, direction="all", page=1, page_size=2)
+    page2 = store.attention_records_page(conn, direction="all", page=2, page_size=2)
+
+    assert page1.total == 5
+    assert len(page1.rows) == 2
+    assert len(page2.rows) == 2
+    assert {row["ID atención"] for row in page1.rows}.isdisjoint(
+        {row["ID atención"] for row in page2.rows}
+    )
+
+
+def test_attention_records_page_returns_transfers_only_for_ids_on_the_page():
+    conn = _conn()
+    _seed(conn, "attention", [_row("on_page")])
+    _seed(
+        conn,
+        "transfer",
+        [
+            {
+                "Atención ID": "on_page",
+                "Fecha": "2026-08-18",
+                "Hora": "09:00:00",
+                "Agente Origen": "Ana",
+                "Destino": "Luis",
+            },
+            {
+                "Atención ID": "not_on_page",
+                "Fecha": "2026-08-18",
+                "Hora": "09:00:00",
+                "Agente Origen": "Ana",
+                "Destino": "Luis",
+            },
+        ],
+    )
+
+    page = store.attention_records_page(conn, direction="all", page=1, page_size=50)
+
+    assert [t["Atención ID"] for t in page.transfers] == ["on_page"]

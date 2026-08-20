@@ -3,7 +3,6 @@ import {
   ChevronRightIcon,
   TriangleAlertIcon
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import {
@@ -32,7 +31,6 @@ import { formatSecondsAsDuration } from '#/lib/duration'
 import { cn } from '#/lib/utils'
 import type { AttentionRecord } from '#/server/schemas'
 
-const PAGE_SIZE = 50
 const DIRECTION_LABEL: Record<AttentionRecord['direction'], string> = {
   incoming: 'Entrante',
   outgoing: 'Saliente'
@@ -167,49 +165,46 @@ function withAgentSeconds(record: AttentionRecord, now: number): number | null {
 }
 
 export function AttentionRecordsTable({
-  records
+  records,
+  total,
+  staleCount,
+  page,
+  pageSize,
+  isLoading,
+  onPageChange
 }: {
   records: AttentionRecord[]
+  total: number
+  staleCount: number
+  page: number
+  pageSize: number
+  isLoading: boolean
+  onPageChange: (page: number) => void
 }) {
-  const [page, setPage] = useState(0)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: resets pagination whenever the parent's records (e.g. its date/estado filter) change
-  useEffect(() => {
-    setPage(0)
-  }, [records])
-
-  if (records.length === 0) {
+  if (total === 0) {
     return (
       <Card size="sm" className="mt-4">
         <CardContent className="text-sm text-muted-foreground">
-          No hay atenciones para el filtro actual.
+          {isLoading
+            ? 'Cargando atenciones...'
+            : 'No hay atenciones para el filtro actual.'}
         </CardContent>
       </Card>
     )
   }
 
   const now = Date.now()
-  const staleCount = records.filter(record => {
-    if (record.closeEpochMs !== null) return false
-    const seconds = withAgentSeconds(record, now)
-    return seconds !== null && seconds > STALE_THRESHOLD_SECONDS
-  }).length
-  const sorted = [...records].sort((a, b) => {
-    const secondsA = withAgentSeconds(a, now) ?? -1
-    const secondsB = withAgentSeconds(b, now) ?? -1
-    return secondsB - secondsA
-  })
-  const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE))
-  const start = page * PAGE_SIZE
-  const pageRecords = sorted.slice(start, start + PAGE_SIZE)
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const start = (page - 1) * pageSize
 
   return (
     <Card size="sm" className="mt-4">
       <CardHeader>
         <CardTitle>Atenciones</CardTitle>
         <CardDescription>
-          {records.length} atenciones para el filtro actual, ordenadas por
-          cuanto tiempo llevan (o llevaron, si ya se cerraron) con su agente
-          actual (desde la ultima transferencia, si la hubo).
+          {total} atenciones para el filtro actual, ordenadas por cuanto tiempo
+          llevan (o llevaron, si ya se cerraron) con su agente actual (desde la
+          ultima transferencia, si la hubo).
         </CardDescription>
         <div className="flex items-center gap-3 text-muted-foreground text-xs">
           <span className="flex items-center gap-1.5">
@@ -236,107 +231,122 @@ export function AttentionRecordsTable({
           </p>
         )}
       </CardHeader>
-      <CardContent className="overflow-x-auto p-0">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>ID</TableHead>
-              <TableHead>Estado</TableHead>
-              <TableHead className="max-w-48">Cliente</TableHead>
-              <TableHead className="max-w-32">Plan</TableHead>
-              <TableHead className="max-w-36">Agente</TableHead>
-              <TableHead className="max-w-36">Transferido por</TableHead>
-              <TableHead className="max-w-32">Campaña</TableHead>
-              <TableHead>Dirección</TableHead>
-              <TableHead>Tiempo abierta</TableHead>
-              <TableHead>Tiempo con agente actual</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {pageRecords.map((record, i) => {
-              const seconds = withAgentSeconds(record, now)
-              const totalSeconds = elapsedSeconds(record, now)
-              const isStale =
-                record.closeEpochMs === null &&
-                seconds !== null &&
-                seconds > STALE_THRESHOLD_SECONDS
-              return (
-                <TableRow key={start + i}>
-                  <TableCell className="align-top text-muted-foreground">
-                    <Cell value={record.idAtencion} />
-                  </TableCell>
-                  <TableCell className="align-top">
-                    <EstadoCell estado={record.estado} />
-                  </TableCell>
-                  <TableCell className="max-w-48 align-top">
-                    <TruncatedCell
-                      value={record.cliente}
-                      className="max-w-48"
-                    />
-                  </TableCell>
-                  <TableCell className="max-w-32 align-top">
-                    <TruncatedCell value={record.plan} className="max-w-32" />
-                  </TableCell>
-                  <TableCell className="max-w-36 align-top">
-                    <TruncatedCell value={record.agente} className="max-w-36" />
-                  </TableCell>
-                  <TableCell className="max-w-36 align-top">
-                    <TransferredByCell record={record} className="max-w-32" />
-                  </TableCell>
-                  <TableCell className="max-w-32 align-top">
-                    <TruncatedCell
-                      value={record.campana}
-                      className="max-w-32"
-                    />
-                  </TableCell>
-                  <TableCell className="align-top">
-                    <Badge variant="outline">
-                      {DIRECTION_LABEL[record.direction]}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="align-top font-medium">
-                    {totalSeconds === null ? (
-                      <span className="text-muted-foreground">—</span>
-                    ) : (
-                      formatSecondsAsDuration(totalSeconds)
-                    )}
-                  </TableCell>
-                  <TableCell className="align-top font-medium">
-                    {seconds === null ? (
-                      <span className="text-muted-foreground">—</span>
-                    ) : isStale ? (
-                      <span className="inline-flex items-center gap-1 text-destructive">
-                        <TriangleAlertIcon className="size-3.5" />
-                        {formatSecondsAsDuration(seconds)}
-                      </span>
-                    ) : (
-                      formatSecondsAsDuration(seconds)
-                    )}
-                  </TableCell>
-                </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
+      <CardContent
+        className={cn(
+          'overflow-x-auto p-0 transition-opacity',
+          isLoading && 'opacity-50'
+        )}
+      >
+        {records.length === 0 ? (
+          <p className="p-4 text-sm text-muted-foreground">
+            El filtro de plan no encontro atenciones en esta pagina -- proba con
+            otra pagina o quita el filtro de plan.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>ID</TableHead>
+                <TableHead>Estado</TableHead>
+                <TableHead className="max-w-48">Cliente</TableHead>
+                <TableHead className="max-w-32">Plan</TableHead>
+                <TableHead className="max-w-36">Agente</TableHead>
+                <TableHead className="max-w-36">Transferido por</TableHead>
+                <TableHead className="max-w-32">Campaña</TableHead>
+                <TableHead>Dirección</TableHead>
+                <TableHead>Tiempo abierta</TableHead>
+                <TableHead>Tiempo con agente actual</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {records.map((record, i) => {
+                const seconds = withAgentSeconds(record, now)
+                const totalSeconds = elapsedSeconds(record, now)
+                const isStale =
+                  record.closeEpochMs === null &&
+                  seconds !== null &&
+                  seconds > STALE_THRESHOLD_SECONDS
+                return (
+                  <TableRow key={start + i}>
+                    <TableCell className="align-top text-muted-foreground">
+                      <Cell value={record.idAtencion} />
+                    </TableCell>
+                    <TableCell className="align-top">
+                      <EstadoCell estado={record.estado} />
+                    </TableCell>
+                    <TableCell className="max-w-48 align-top">
+                      <TruncatedCell
+                        value={record.cliente}
+                        className="max-w-48"
+                      />
+                    </TableCell>
+                    <TableCell className="max-w-32 align-top">
+                      <TruncatedCell value={record.plan} className="max-w-32" />
+                    </TableCell>
+                    <TableCell className="max-w-36 align-top">
+                      <TruncatedCell
+                        value={record.agente}
+                        className="max-w-36"
+                      />
+                    </TableCell>
+                    <TableCell className="max-w-36 align-top">
+                      <TransferredByCell record={record} className="max-w-32" />
+                    </TableCell>
+                    <TableCell className="max-w-32 align-top">
+                      <TruncatedCell
+                        value={record.campana}
+                        className="max-w-32"
+                      />
+                    </TableCell>
+                    <TableCell className="align-top">
+                      <Badge variant="outline">
+                        {DIRECTION_LABEL[record.direction]}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="align-top font-medium">
+                      {totalSeconds === null ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        formatSecondsAsDuration(totalSeconds)
+                      )}
+                    </TableCell>
+                    <TableCell className="align-top font-medium">
+                      {seconds === null ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : isStale ? (
+                        <span className="inline-flex items-center gap-1 text-destructive">
+                          <TriangleAlertIcon className="size-3.5" />
+                          {formatSecondsAsDuration(seconds)}
+                        </span>
+                      ) : (
+                        formatSecondsAsDuration(seconds)
+                      )}
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
+        )}
       </CardContent>
       <CardFooter className="justify-center gap-2">
         <Button
           variant="outline"
           size="icon-sm"
-          onClick={() => setPage(p => Math.max(0, p - 1))}
-          disabled={page <= 0}
+          onClick={() => onPageChange(Math.max(1, page - 1))}
+          disabled={page <= 1 || isLoading}
           aria-label="Pagina anterior"
         >
           <ChevronLeftIcon />
         </Button>
         <span className="text-sm text-muted-foreground">
-          Página {page + 1} de {totalPages}
+          Página {page} de {totalPages}
         </span>
         <Button
           variant="outline"
           size="icon-sm"
-          onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
-          disabled={page >= totalPages - 1}
+          onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+          disabled={page >= totalPages || isLoading}
           aria-label="Pagina siguiente"
         >
           <ChevronRightIcon />

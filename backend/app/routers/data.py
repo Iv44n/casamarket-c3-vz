@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 
-from ..extraction import parsing
+from ..extraction import parsing, store
 
 router = APIRouter(prefix="/data", tags=["data"])
 
@@ -14,6 +14,48 @@ KNOWN_REPORTS = {
     "contacts",
     "transfer",
 }
+
+DIRECTION_VALUES = {"all", "incoming", "outgoing"}
+
+@router.get("/attention-records")
+def get_attention_records(
+    direction: str = Query(default="all"),
+    estados: list[str] | None = Query(default=None),
+    campana: str | None = Query(default=None),
+    agente: str | None = Query(default=None),
+    date_from: str | None = Query(default=None, pattern=ISO_DATE_PATTERN),
+    date_to: str | None = Query(default=None, pattern=ISO_DATE_PATTERN),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    if direction not in DIRECTION_VALUES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"direction invalido: {direction!r}. Validos: {sorted(DIRECTION_VALUES)}",
+        )
+
+    conn = store.get_connection()
+    try:
+        page_result = store.attention_records_page(
+            conn,
+            direction=direction,
+            estados=estados,
+            campana=campana,
+            agente=agente,
+            date_from=date_from,
+            date_to=date_to,
+            page=page,
+            page_size=page_size,
+        )
+    finally:
+        conn.close()
+
+    return {
+        "total": page_result.total,
+        "staleCount": page_result.stale_count,
+        "rows": page_result.rows,
+        "transfers": page_result.transfers,
+    }
 
 
 @router.get("/{report_name}")

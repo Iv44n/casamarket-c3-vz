@@ -1,4 +1,4 @@
-import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
 import {
   ChevronDownIcon,
@@ -6,7 +6,7 @@ import {
   FileTextIcon,
   RefreshCwIcon
 } from 'lucide-react'
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { AgentWorkloadChart } from '#/components/agent-workload-chart'
 import { AttentionRecordsTable } from '#/components/attention-records-table'
@@ -59,6 +59,7 @@ import {
 import { buildIncidentHierarchyPdf } from '#/lib/incident-hierarchy-pdf'
 import { cn } from '#/lib/utils'
 import {
+  getAttentionRecordsPage,
   getAttentionsAnalytics,
   getDemandAnalytics,
   getIncidentAnalytics,
@@ -71,6 +72,8 @@ import {
   ATTENTION_FILTERS,
   type AtencionesView,
   type AttentionFilter,
+  type AttentionRecordsPage,
+  type AttentionsSearch,
   attentionsSearchSchema,
   type EstadosFilter,
   type IncidentCategory,
@@ -113,33 +116,32 @@ const UNKNOWN_PLAN_LABEL = 'Sin plan'
 function planLabel(plan: string) {
   return plan.trim() === '' ? UNKNOWN_PLAN_LABEL : plan
 }
+const DEMORAS_PAGE_SIZE = 50
+
+const EMPTY_ATTENTION_RECORDS_PAGE: AttentionRecordsPage = {
+  total: 0,
+  staleCount: 0,
+  records: [],
+  availablePlans: []
+}
+
 export const Route = createFileRoute('/atenciones')({
   ssr: 'data-only',
   validateSearch: attentionsSearchSchema,
-  loaderDeps: ({ search }) => ({
-    date: search.date,
-    dateEnd: search.dateEnd,
-    demandDate: search.demandDate,
-    demandDateEnd: search.demandDateEnd
-  }),
-  loader: async ({ deps }) => {
+  loader: async ({ location }) => {
+    const { date, dateEnd, demandDate, demandDateEnd } =
+      location.search as AttentionsSearch
     const [attentions, incidents, demand] = await Promise.all([
-      getAttentionsAnalytics({ data: deps }),
-      getIncidentAnalytics({ data: deps }),
-      getDemandAnalytics({
-        data: { date: deps.demandDate, dateEnd: deps.demandDateEnd }
-      })
+      getAttentionsAnalytics({ data: { date, dateEnd } }),
+      getIncidentAnalytics({ data: { date, dateEnd } }),
+      getDemandAnalytics({ data: { date: demandDate, dateEnd: demandDateEnd } })
     ])
     return { attentions, incidents, demand }
   },
   component: AtencionesPage
 })
 function AtencionesPage() {
-  const {
-    attentions: analytics,
-    incidents: incidentAnalytics,
-    demand: demandAnalytics
-  } = Route.useLoaderData()
+  const initialData = Route.useLoaderData()
   const {
     direction,
     agentLimit,
@@ -152,13 +154,120 @@ function AtencionesPage() {
     date,
     dateEnd,
     demandDate,
-    demandDateEnd
+    demandDateEnd,
+    demorasPage
   } = Route.useSearch()
   const navigate = Route.useNavigate()
-  const router = useRouter()
   const refresh = useServerFn(triggerRefresh)
   const backfill = useServerFn(triggerBackfill)
+  const fetchAttentionsAnalytics = useServerFn(getAttentionsAnalytics)
+  const fetchIncidentAnalytics = useServerFn(getIncidentAnalytics)
+  const fetchDemandAnalytics = useServerFn(getDemandAnalytics)
+  const fetchAttentionRecordsPage = useServerFn(getAttentionRecordsPage)
   const [pending, setPending] = useState(false)
+  const [analytics, setAnalytics] = useState(initialData.attentions)
+  const [incidentAnalytics, setIncidentAnalytics] = useState(
+    initialData.incidents
+  )
+  const [demandAnalytics, setDemandAnalytics] = useState(initialData.demand)
+  const [summaryLoading, setSummaryLoading] = useState(false)
+  const [demandLoading, setDemandLoading] = useState(false)
+  const [attentionRecordsPage, setAttentionRecordsPage] = useState(
+    EMPTY_ATTENTION_RECORDS_PAGE
+  )
+  const [demorasLoading, setDemorasLoading] = useState(true)
+  const isFirstSummaryRun = useRef(true)
+  const refetchSummary = useCallback(
+    async (targetDate: typeof date, targetDateEnd: typeof dateEnd) => {
+      setSummaryLoading(true)
+      try {
+        const [attentions, incidents] = await Promise.all([
+          fetchAttentionsAnalytics({
+            data: { date: targetDate, dateEnd: targetDateEnd }
+          }),
+          fetchIncidentAnalytics({
+            data: { date: targetDate, dateEnd: targetDateEnd }
+          })
+        ])
+        setAnalytics(attentions)
+        setIncidentAnalytics(incidents)
+      } finally {
+        setSummaryLoading(false)
+      }
+    },
+    [fetchAttentionsAnalytics, fetchIncidentAnalytics]
+  )
+  useEffect(() => {
+    if (isFirstSummaryRun.current) {
+      isFirstSummaryRun.current = false
+      return
+    }
+    refetchSummary(date, dateEnd)
+  }, [date, dateEnd, refetchSummary])
+
+  const isFirstDemandRun = useRef(true)
+  const refetchDemand = useCallback(
+    async (
+      targetDemandDate: typeof demandDate,
+      targetDemandDateEnd: typeof demandDateEnd
+    ) => {
+      setDemandLoading(true)
+      try {
+        setDemandAnalytics(
+          await fetchDemandAnalytics({
+            data: { date: targetDemandDate, dateEnd: targetDemandDateEnd }
+          })
+        )
+      } finally {
+        setDemandLoading(false)
+      }
+    },
+    [fetchDemandAnalytics]
+  )
+  useEffect(() => {
+    if (isFirstDemandRun.current) {
+      isFirstDemandRun.current = false
+      return
+    }
+    refetchDemand(demandDate, demandDateEnd)
+  }, [demandDate, demandDateEnd, refetchDemand])
+
+  useEffect(() => {
+    if (view !== 'demoras') return
+    let cancelled = false
+    setDemorasLoading(true)
+    fetchAttentionRecordsPage({
+      data: {
+        direction,
+        estados,
+        campana,
+        agente,
+        date,
+        dateEnd,
+        page: demorasPage,
+        pageSize: DEMORAS_PAGE_SIZE
+      }
+    })
+      .then(result => {
+        if (!cancelled) setAttentionRecordsPage(result)
+      })
+      .finally(() => {
+        if (!cancelled) setDemorasLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    view,
+    direction,
+    estados,
+    campana,
+    agente,
+    date,
+    dateEnd,
+    demorasPage,
+    fetchAttentionRecordsPage
+  ])
   const availableEstados = getAvailableEstados(analytics)
   const { total, slices } = buildStatusChartData(analytics, direction, estados)
   const agents = buildAgentRanking(analytics, direction, agentLimit, estados)
@@ -188,26 +297,23 @@ function AtencionesPage() {
     : (incidentCategoryOrder[0] ?? category)
   const attentionRecordsAvailable =
     analytics.incoming.available || analytics.outgoing.available
-  const allAttentionRecords = [
-    ...analytics.incoming.attentionRecords,
-    ...analytics.outgoing.attentionRecords
-  ]
   const availableRecordCampaigns = [
-    ...new Set(allAttentionRecords.map(record => record.campana))
+    ...new Set([
+      ...analytics.incoming.campaignCounts.map(c => c.campana),
+      ...analytics.outgoing.campaignCounts.map(c => c.campana)
+    ])
   ].sort((a, b) => a.localeCompare(b))
   const availableRecordAgents = [
-    ...new Set(allAttentionRecords.map(record => record.agente))
+    ...new Set([
+      ...analytics.incoming.agentCounts.map(a => a.agente),
+      ...analytics.outgoing.agentCounts.map(a => a.agente)
+    ])
   ].sort((a, b) => a.localeCompare(b))
   const availableRecordPlans = [
-    ...new Set(allAttentionRecords.map(record => planLabel(record.plan)))
+    ...new Set(attentionRecordsPage.availablePlans.map(planLabel))
   ].sort((a, b) => a.localeCompare(b))
-  const filteredAttentionRecords = allAttentionRecords.filter(
-    record =>
-      (direction === 'all' || record.direction === direction) &&
-      (campana === 'all' || record.campana === campana) &&
-      (agente === 'all' || record.agente === agente) &&
-      (plan === 'all' || planLabel(record.plan) === plan) &&
-      (estados === 'all' || estados.includes(record.estado))
+  const filteredAttentionRecords = attentionRecordsPage.records.filter(
+    record => plan === 'all' || planLabel(record.plan) === plan
   )
   const isRangeSelected = date !== 'all' && Boolean(dateEnd) && dateEnd !== date
   const isPastDaySelected =
@@ -222,7 +328,10 @@ function AtencionesPage() {
         await refresh()
         toast.success('Extraccion completada')
       }
-      await router.invalidate()
+      await Promise.all([
+        refetchSummary(date, dateEnd),
+        refetchDemand(demandDate, demandDateEnd)
+      ])
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
     } finally {
@@ -238,7 +347,7 @@ function AtencionesPage() {
       ? current.filter(e => e !== estado)
       : [...current, estado]
     navigate({
-      search: prev => ({ ...prev, estados: next }),
+      search: prev => ({ ...prev, estados: next, demorasPage: 1 }),
       replace: true
     })
   }
@@ -247,7 +356,8 @@ function AtencionesPage() {
       search: prev => ({
         ...prev,
         view: 'incidencias',
-        agente: clickedAgent
+        agente: clickedAgent,
+        demorasPage: 1
       }),
       replace: true
     })
@@ -308,7 +418,8 @@ function AtencionesPage() {
                 search: prev => ({
                   ...prev,
                   date: newDate,
-                  dateEnd: newDateEnd
+                  dateEnd: newDateEnd,
+                  demorasPage: 1
                 }),
                 replace: true
               })
@@ -399,7 +510,8 @@ function AtencionesPage() {
                   navigate({
                     search: prev => ({
                       ...prev,
-                      direction: value as AttentionFilter
+                      direction: value as AttentionFilter,
+                      demorasPage: 1
                     }),
                     replace: true
                   })
@@ -462,7 +574,12 @@ function AtencionesPage() {
                 </p>
               )}
 
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <div
+                className={cn(
+                  'grid grid-cols-1 gap-4 transition-opacity lg:grid-cols-2',
+                  summaryLoading && 'opacity-50'
+                )}
+              >
                 <section
                   aria-label="Distribucion por estado"
                   className="flex flex-col"
@@ -597,7 +714,12 @@ function AtencionesPage() {
                         />
                       </CardAction>
                     </CardHeader>
-                    <CardContent className="flex flex-1 items-center">
+                    <CardContent
+                      className={cn(
+                        'flex flex-1 items-center transition-opacity',
+                        demandLoading && 'opacity-50'
+                      )}
+                    >
                       {demandHeatmap.total === 0 ? (
                         <p className="text-sm text-muted-foreground">
                           Sin registros.
@@ -633,7 +755,11 @@ function AtencionesPage() {
                     value={campana}
                     onValueChange={value =>
                       navigate({
-                        search: prev => ({ ...prev, campana: value ?? 'all' }),
+                        search: prev => ({
+                          ...prev,
+                          campana: value ?? 'all',
+                          demorasPage: 1
+                        }),
                         replace: true
                       })
                     }
@@ -666,7 +792,11 @@ function AtencionesPage() {
                     value={agente}
                     onValueChange={value =>
                       navigate({
-                        search: prev => ({ ...prev, agente: value ?? 'all' }),
+                        search: prev => ({
+                          ...prev,
+                          agente: value ?? 'all',
+                          demorasPage: 1
+                        }),
                         replace: true
                       })
                     }
@@ -692,80 +822,88 @@ function AtencionesPage() {
             </div>
           </div>
 
-          {!incidentAnalytics.available ? (
-            <Card className="mt-4">
-              <CardContent className="text-sm text-muted-foreground">
-                Todavia no se descargo ningun archivo con datos de incidencias.
-                Dispara un refresh desde{' '}
-                <Link to="/status" className="text-primary underline">
-                  /status
-                </Link>
-                .
-              </CardContent>
-            </Card>
-          ) : incidentRecords.length === 0 ? (
-            <Card className="mt-4">
-              <CardContent className="text-sm text-muted-foreground">
-                {agente === 'all' && campana === 'all'
-                  ? 'No hay incidencias registradas todavia.'
-                  : 'No hay incidencias registradas para este filtro.'}
-              </CardContent>
-            </Card>
-          ) : (
-            <Card size="sm" className="mt-4">
-              <CardContent>
-                <Tabs
-                  value={activeIncidentCategory}
-                  onValueChange={value =>
-                    navigate({
-                      search: prev => ({
-                        ...prev,
-                        category: value as IncidentCategory
-                      }),
-                      replace: true
-                    })
-                  }
-                >
-                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                    <TabsList>
-                      {incidentCategoryOrder.map(cat => (
-                        <TabsTrigger key={cat} value={cat} className="gap-1.5">
-                          <CategorySwatch category={cat} />
-                          {INCIDENT_CATEGORY_LABEL[cat]}
-                        </TabsTrigger>
-                      ))}
-                    </TabsList>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleDownloadIncidentsJson}
-                      >
-                        <FileJsonIcon data-icon="inline-start" />
-                        JSON
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleDownloadIncidentsPdf}
-                      >
-                        <FileTextIcon data-icon="inline-start" />
-                        PDF
-                      </Button>
+          <div
+            className={cn('transition-opacity', summaryLoading && 'opacity-50')}
+          >
+            {!incidentAnalytics.available ? (
+              <Card className="mt-4">
+                <CardContent className="text-sm text-muted-foreground">
+                  Todavia no se descargo ningun archivo con datos de
+                  incidencias. Dispara un refresh desde{' '}
+                  <Link to="/status" className="text-primary underline">
+                    /status
+                  </Link>
+                  .
+                </CardContent>
+              </Card>
+            ) : incidentRecords.length === 0 ? (
+              <Card className="mt-4">
+                <CardContent className="text-sm text-muted-foreground">
+                  {agente === 'all' && campana === 'all'
+                    ? 'No hay incidencias registradas todavia.'
+                    : 'No hay incidencias registradas para este filtro.'}
+                </CardContent>
+              </Card>
+            ) : (
+              <Card size="sm" className="mt-4">
+                <CardContent>
+                  <Tabs
+                    value={activeIncidentCategory}
+                    onValueChange={value =>
+                      navigate({
+                        search: prev => ({
+                          ...prev,
+                          category: value as IncidentCategory
+                        }),
+                        replace: true
+                      })
+                    }
+                  >
+                    <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                      <TabsList>
+                        {incidentCategoryOrder.map(cat => (
+                          <TabsTrigger
+                            key={cat}
+                            value={cat}
+                            className="gap-1.5"
+                          >
+                            <CategorySwatch category={cat} />
+                            {INCIDENT_CATEGORY_LABEL[cat]}
+                          </TabsTrigger>
+                        ))}
+                      </TabsList>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleDownloadIncidentsJson}
+                        >
+                          <FileJsonIcon data-icon="inline-start" />
+                          JSON
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleDownloadIncidentsPdf}
+                        >
+                          <FileTextIcon data-icon="inline-start" />
+                          PDF
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                  {incidentCategoryOrder.map((cat, index) => (
-                    <TabsContent key={cat} value={cat}>
-                      <IncidentHierarchy
-                        records={incidentRecords}
-                        chain={incidentCategoryOrder.slice(index)}
-                      />
-                    </TabsContent>
-                  ))}
-                </Tabs>
-              </CardContent>
-            </Card>
-          )}
+                    {incidentCategoryOrder.map((cat, index) => (
+                      <TabsContent key={cat} value={cat}>
+                        <IncidentHierarchy
+                          records={incidentRecords}
+                          chain={incidentCategoryOrder.slice(index)}
+                        />
+                      </TabsContent>
+                    ))}
+                  </Tabs>
+                </CardContent>
+              </Card>
+            )}
+          </div>
         </TabsContent>
 
         <TabsContent value="demoras" className="mt-4">
@@ -821,7 +959,8 @@ function AtencionesPage() {
                   navigate({
                     search: prev => ({
                       ...prev,
-                      direction: value as AttentionFilter
+                      direction: value as AttentionFilter,
+                      demorasPage: 1
                     }),
                     replace: true
                   })
@@ -851,7 +990,11 @@ function AtencionesPage() {
                   value={campana}
                   onValueChange={value =>
                     navigate({
-                      search: prev => ({ ...prev, campana: value ?? 'all' }),
+                      search: prev => ({
+                        ...prev,
+                        campana: value ?? 'all',
+                        demorasPage: 1
+                      }),
                       replace: true
                     })
                   }
@@ -884,7 +1027,11 @@ function AtencionesPage() {
                   value={agente}
                   onValueChange={value =>
                     navigate({
-                      search: prev => ({ ...prev, agente: value ?? 'all' }),
+                      search: prev => ({
+                        ...prev,
+                        agente: value ?? 'all',
+                        demorasPage: 1
+                      }),
                       replace: true
                     })
                   }
@@ -954,7 +1101,20 @@ function AtencionesPage() {
               </CardContent>
             </Card>
           ) : (
-            <AttentionRecordsTable records={filteredAttentionRecords} />
+            <AttentionRecordsTable
+              records={filteredAttentionRecords}
+              total={attentionRecordsPage.total}
+              staleCount={attentionRecordsPage.staleCount}
+              page={demorasPage}
+              pageSize={DEMORAS_PAGE_SIZE}
+              isLoading={demorasLoading}
+              onPageChange={nextPage =>
+                navigate({
+                  search: prev => ({ ...prev, demorasPage: nextPage }),
+                  replace: true
+                })
+              }
+            />
           )}
         </TabsContent>
       </Tabs>

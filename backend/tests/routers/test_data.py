@@ -133,3 +133,59 @@ def test_get_report_history_404s_when_nothing_downloaded_yet(client: TestClient)
     response = client.get("/data/contacts/history")
 
     assert response.status_code == 404
+
+
+def test_get_attention_records_returns_paginated_shape(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    store._init_schema(conn)
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [{"ID atención": "1", "Estado": "Abierta", "Agente": "Ana"}],
+        observed_at="2026-08-19T00:00:00",
+    )
+    monkeypatch.setattr(store, "get_connection", lambda: conn)
+
+    response = client.get("/data/attention-records")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["rows"][0]["direction"] == "incoming"
+    assert body["rows"][0]["ID atención"] == "1"
+    assert body["transfers"] == []
+    assert "staleCount" in body
+
+
+def test_get_attention_records_422s_for_invalid_direction(client: TestClient):
+    response = client.get("/data/attention-records", params={"direction": "sideways"})
+
+    assert response.status_code == 422
+
+
+def test_get_attention_records_filters_by_query_params(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    store._init_schema(conn)
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [
+            {"ID atención": "match", "Estado": "Abierta", "Agente": "Ana", "Campaña": "Soporte"},
+            {"ID atención": "other", "Estado": "Cerrada", "Agente": "Luis", "Campaña": "Ventas"},
+        ],
+        observed_at="2026-08-19T00:00:00",
+    )
+    monkeypatch.setattr(store, "get_connection", lambda: conn)
+
+    response = client.get(
+        "/data/attention-records",
+        params={"direction": "incoming", "estados": ["Abierta"], "campana": "Soporte"},
+    )
+
+    assert response.status_code == 200
+    rows = response.json()["rows"]
+    assert [row["ID atención"] for row in rows] == ["match"]

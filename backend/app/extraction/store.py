@@ -36,6 +36,72 @@ def _iso_date_expr(column: str) -> str:
     )
 
 
+def _iso_datetime_expr(date_column: str, time_column: str) -> str:
+    """DD/MM/YYYY + HH:MM:SS -> 'YYYY-MM-DD HH:MM:SS', mismo espiritu de guarda GLOB que
+    _iso_date_expr (valores mal formados -> NULL en vez de una clave de orden corrupta). El
+    resultado es directamente comparable con julianday() y con el "fecha || ' ' || hora" ya-ISO
+    de transfer -- ver _since_key_expr."""
+    date_glob = "[0-9][0-9]/[0-9][0-9]/[0-9][0-9][0-9][0-9]"
+    time_glob = "[0-9][0-9]:[0-9][0-9]:[0-9][0-9]"
+    iso_date = (
+        f"substr({date_column}, 7, 4) || '-' || substr({date_column}, 4, 2) || '-' || "
+        f"substr({date_column}, 1, 2)"
+    )
+    return (
+        f"CASE WHEN {date_column} GLOB '{date_glob}' AND {time_column} GLOB '{time_glob}' "
+        f"THEN {iso_date} || ' ' || {time_column} ELSE NULL END"
+    )
+
+
+def _norm_expr(column: str, empty_label: str, blank_values: tuple[str, ...] = ("",)) -> str:
+    """Espeja las etiquetas de fallback agenteKey/campanaKey/estadoKeyOf del frontend
+    (reports.functions.ts/atenciones.tsx): NULL o un valor "en blanco" (segun blank_values) se
+    normaliza a empty_label antes de comparar/filtrar, para que un filtro como agente='Sin
+    agente' calce con filas cuya columna esta vacia o es '-' en vez de literalmente esa etiqueta."""
+    quoted_blanks = ", ".join(f"'{v}'" for v in blank_values)
+    return (
+        f"CASE WHEN {column} IS NULL OR TRIM({column}) IN ({quoted_blanks}) "
+        f"THEN '{empty_label}' ELSE {column} END"
+    )
+
+
+_LIMA_OFFSET_SECONDS = 5 * 60 * 60
+
+
+def _since_key_expr(table: str) -> str:
+    """"Desde cuando esta con su agente actual" -- COALESCE del ultimo hop de transferencia
+    (transfer.fecha ya es ISO, string-concat con hora ya es directamente comparable/ordenable,
+    sin necesidad de parsear) con la hora de registro propia de la fila. NULL cuando no hay
+    agente asignado (mismo criterio que withAgentSinceMs en reports.functions.ts: agenteKey ===
+    'Sin agente' -> null), para que esas filas queden al final del orden sin importar timestamps."""
+    agente_norm = _norm_expr("agente", "Sin agente", ("", "-"))
+    start_iso = _iso_datetime_expr("fecha_registro", "hora_registro")
+    last_transfer_iso = (
+        f"(SELECT MAX(t.fecha || ' ' || t.hora) FROM transfer t "
+        f"WHERE t.id_atencion = {table}.id_atencion)"
+    )
+    return (
+        f"CASE WHEN {agente_norm} = 'Sin agente' THEN NULL "
+        f"ELSE COALESCE({last_transfer_iso}, {start_iso}) END"
+    )
+
+
+def _close_iso_expr() -> str:
+    return _iso_datetime_expr("fecha_final", "hora_final")
+
+
+def _elapsed_seconds_expr(since_key_col: str, close_iso_col: str) -> str:
+    """Replica elapsedSeconds/withAgentSeconds (attention-records-table.tsx): si la atencion ya
+    cerro, la duracion queda congelada en fecha_final/hora_final (ambos lados de la resta estan en
+    la misma hora Lima "naive", el offset UTC-5 se cancela); si sigue abierta, se compara contra
+    julianday('now') (UTC real), asi que ahi si hay que sumar el offset de vuelta."""
+    return (
+        f"CASE WHEN {close_iso_col} IS NOT NULL "
+        f"THEN (julianday({close_iso_col}) - julianday({since_key_col})) * 86400.0 "
+        f"ELSE (julianday('now') - julianday({since_key_col})) * 86400.0 - {_LIMA_OFFSET_SECONDS} END"
+    )
+
+
 _DATE_RANGE_INDEXES = "\n".join(
     f"CREATE INDEX IF NOT EXISTS idx_{table}_{column}_iso ON {table} ({_iso_date_expr(column)});"
     for table, column in _HISTORY_DATE_COLUMN.items()
@@ -48,7 +114,9 @@ CREATE TABLE IF NOT EXISTS attention (
     agente          TEXT,
     campana         TEXT,
     fecha_registro  TEXT,
+    hora_registro   TEXT,
     fecha_final     TEXT,
+    hora_final      TEXT,
     numero_cliente  TEXT,
     first_seen_at   TEXT NOT NULL,
     last_seen_at    TEXT NOT NULL,
@@ -56,6 +124,7 @@ CREATE TABLE IF NOT EXISTS attention (
 );
 CREATE INDEX IF NOT EXISTS idx_attention_estado ON attention(estado);
 CREATE INDEX IF NOT EXISTS idx_attention_campana ON attention(campana);
+CREATE INDEX IF NOT EXISTS idx_attention_agente ON attention(agente);
 
 CREATE TABLE IF NOT EXISTS outboundattention (
     id_atencion     TEXT PRIMARY KEY,
@@ -63,7 +132,9 @@ CREATE TABLE IF NOT EXISTS outboundattention (
     agente          TEXT,
     campana         TEXT,
     fecha_registro  TEXT,
+    hora_registro   TEXT,
     fecha_final     TEXT,
+    hora_final      TEXT,
     numero_cliente  TEXT,
     first_seen_at   TEXT NOT NULL,
     last_seen_at    TEXT NOT NULL,
@@ -71,6 +142,7 @@ CREATE TABLE IF NOT EXISTS outboundattention (
 );
 CREATE INDEX IF NOT EXISTS idx_outboundattention_estado ON outboundattention(estado);
 CREATE INDEX IF NOT EXISTS idx_outboundattention_campana ON outboundattention(campana);
+CREATE INDEX IF NOT EXISTS idx_outboundattention_agente ON outboundattention(agente);
 
 CREATE TABLE IF NOT EXISTS callincoming (
     linkedid        TEXT PRIMARY KEY,
@@ -154,7 +226,9 @@ _ATTENTION_EXTRACTED = {
     "agente": "Agente",
     "campana": "Campaña",
     "fecha_registro": "Fecha registro",
+    "hora_registro": "Hora registro",
     "fecha_final": "Fecha final",
+    "hora_final": "Hora final",
     "numero_cliente": "Número cliente",
 }
 _CALL_EXTRACTED = {
@@ -198,8 +272,42 @@ def get_connection() -> turso_serverless.Connection:
     return conn
 
 
+_ATTENTION_TABLES = ("attention", "outboundattention")
+# hora_registro/hora_final no existian cuando attention/outboundattention se crearon por primera
+# vez -- CREATE TABLE IF NOT EXISTS no las agrega a una tabla ya existente en el Turso en vivo, asi
+# que _init_schema corre esta migracion aparte (PRAGMA table_info + ALTER TABLE por columna
+# faltante). El valor crudo siempre estuvo en row_json (es la fila completa del XLSX ya parseada),
+# asi que el backfill es gratis via json_extract -- no hace falta re-descargar nada.
+_NEW_TIME_COLUMNS: dict[str, str] = {
+    "hora_registro": "Hora registro",
+    "hora_final": "Hora final",
+}
+
+
+def _existing_columns(conn: DBConnection, table: str) -> set[str]:
+    cursor = conn.execute(f"PRAGMA table_info({table})")
+    return {row[1] for row in cursor.fetchall()}
+
+
+def _migrate_time_columns(conn: DBConnection) -> None:
+    for table in _ATTENTION_TABLES:
+        existing = _existing_columns(conn, table)
+        missing = [column for column in _NEW_TIME_COLUMNS if column not in existing]
+        for column in missing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+        if missing:
+            conn.commit()
+        for column, source_header in _NEW_TIME_COLUMNS.items():
+            conn.execute(
+                f"UPDATE {table} SET {column} = json_extract(row_json, ?) WHERE {column} IS NULL",
+                (f'$."{source_header}"',),
+            )
+        conn.commit()
+
+
 def _init_schema(conn: DBConnection) -> None:
     conn.executescript(_SCHEMA)
+    _migrate_time_columns(conn)
 
 
 def _normalize_pk(value: object) -> str | None:
@@ -387,6 +495,132 @@ def history_rows(
         )
     rows = [json.loads(row[0]) for row in cursor.fetchall()]
     return rows or None
+
+
+_STALE_THRESHOLD_SECONDS = 60 * 60  # espeja STALE_THRESHOLD_SECONDS en attention-records-table.tsx
+
+
+@dataclass(frozen=True)
+class AttentionRecordsPage:
+    total: int
+    stale_count: int
+    rows: list[dict]  # row_json + {"direction": "incoming"|"outgoing"}
+    transfers: list[dict]  # row_json de transfer, solo para los id_atencion de `rows`
+
+
+def _attention_where(
+    estados: list[str] | None,
+    campana: str | None,
+    agente: str | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[str, list]:
+    clauses = ["1=1"]
+    params: list = []
+    if estados is not None:
+        if len(estados) == 0:
+            # Seleccion explicita de "ningun estado" -- distinto de "sin filtro" (estados=None).
+            # El llamador (frontend) evita mandar esto por HTTP y corta antes de llegar aca, pero
+            # esta guarda deja la funcion correcta igual si algo la llama directo con [].
+            clauses.append("1=0")
+        else:
+            estado_norm = _norm_expr("estado", "Sin estado")
+            placeholders = ", ".join("?" for _ in estados)
+            clauses.append(f"{estado_norm} IN ({placeholders})")
+            params.extend(estados)
+    if campana and campana != "all":
+        campana_norm = _norm_expr("campana", "Sin campaña")
+        clauses.append(f"{campana_norm} = ?")
+        params.append(campana)
+    if agente and agente != "all":
+        agente_norm = _norm_expr("agente", "Sin agente", ("", "-"))
+        clauses.append(f"{agente_norm} = ?")
+        params.append(agente)
+    if date_from:
+        iso_expr = _iso_date_expr("fecha_registro")
+        clauses.append(f"{iso_expr} BETWEEN ? AND ?")
+        params.append(date_from)
+        params.append(date_to or date_from)
+    return " AND ".join(clauses), params
+
+
+_DIRECTION_TABLES: dict[str, list[tuple[str, str]]] = {
+    "incoming": [("attention", "incoming")],
+    "outgoing": [("outboundattention", "outgoing")],
+    "all": [("attention", "incoming"), ("outboundattention", "outgoing")],
+}
+
+
+def _branch_sql(table: str, direction_label: str, where_sql: str) -> str:
+    return (
+        f"SELECT row_json, '{direction_label}' AS direction, id_atencion, "
+        f"{_since_key_expr(table)} AS since_key, {_close_iso_expr()} AS close_iso "
+        f"FROM {table} WHERE {where_sql}"
+    )
+
+
+def attention_records_page(
+    conn: DBConnection,
+    *,
+    direction: str = "all",
+    estados: list[str] | None = None,
+    campana: str | None = None,
+    agente: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> AttentionRecordsPage:
+    branches = _DIRECTION_TABLES[direction]
+    where_sql, where_params = _attention_where(estados, campana, agente, date_from, date_to)
+    inner_sql = " UNION ALL ".join(
+        _branch_sql(table, label, where_sql) for table, label in branches
+    )
+    branch_params = tuple(where_params) * len(branches)
+
+    count_sql = (
+        "SELECT COUNT(*), SUM(CASE WHEN close_iso IS NULL AND since_key IS NOT NULL AND "
+        f"((julianday('now') - julianday(since_key)) * 86400.0 - {_LIMA_OFFSET_SECONDS}) "
+        f"> {_STALE_THRESHOLD_SECONDS} THEN 1 ELSE 0 END) FROM ({inner_sql})"
+    )
+    total_row = conn.execute(count_sql, branch_params).fetchone()
+    total = total_row[0] or 0
+    stale_count = total_row[1] or 0
+
+    elapsed_expr = _elapsed_seconds_expr("since_key", "close_iso")
+    page_sql = (
+        f"SELECT row_json, direction, id_atencion FROM ({inner_sql}) "
+        f"ORDER BY CASE WHEN since_key IS NULL THEN 1 ELSE 0 END, {elapsed_expr} DESC "
+        "LIMIT ? OFFSET ?"
+    )
+    offset = (page - 1) * page_size
+    cursor = conn.execute(page_sql, branch_params + (page_size, offset))
+
+    rows = []
+    ids = set()
+    for row_json, direction_label, id_atencion in cursor.fetchall():
+        record = json.loads(row_json)
+        record["direction"] = direction_label
+        rows.append(record)
+        ids.add(str(id_atencion))
+
+    return AttentionRecordsPage(
+        total=total,
+        stale_count=stale_count,
+        rows=rows,
+        transfers=_transfer_rows_for_ids(conn, ids),
+    )
+
+
+def _transfer_rows_for_ids(conn: DBConnection, ids: set[str]) -> list[dict]:
+    if not ids:
+        return []
+    placeholders = ", ".join("?" for _ in ids)
+    cursor = conn.execute(
+        f"SELECT row_json FROM transfer WHERE id_atencion IN ({placeholders})",
+        tuple(ids),
+    )
+    return [json.loads(row[0]) for row in cursor.fetchall()]
 
 
 def save_sync_status(
