@@ -1,5 +1,5 @@
 import { CalendarIcon, XIcon } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { DateRange } from 'react-day-picker'
 import { es } from 'react-day-picker/locale'
 import { Button } from '#/components/ui/button'
@@ -29,12 +29,14 @@ export function DateRangeFilter({
   date,
   dateEnd,
   onChange,
-  clearLabel = 'Quitar filtro de fecha'
+  clearLabel = 'Quitar filtro de fecha',
+  disabled = false
 }: {
   date: DateFilter
   dateEnd: string | undefined
   onChange: (date: DateFilter, dateEnd: string | undefined) => void
   clearLabel?: string
+  disabled?: boolean
 }) {
   const isRangeSelected = date !== 'all' && Boolean(dateEnd) && dateEnd !== date
   const committedRange: DateRange | undefined =
@@ -47,6 +49,10 @@ export function DateRangeFilter({
   const [pendingRange, setPendingRange] = useState<DateRange | undefined>(
     committedRange
   )
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (disabled) setOpen(false)
+  }, [disabled])
   function commitRange(from: Date, to: Date) {
     const fromIso = toIsoDateLocal(from)
     const toIso = toIsoDateLocal(to)
@@ -64,11 +70,15 @@ export function DateRangeFilter({
   return (
     <div className="flex items-center gap-1">
       <Popover
-        onOpenChange={open => {
-          if (open) setPendingRange(committedRange)
+        open={open}
+        onOpenChange={nextOpen => {
+          if (disabled) return
+          setOpen(nextOpen)
+          if (nextOpen) setPendingRange(committedRange)
         }}
       >
         <PopoverTrigger
+          disabled={disabled}
           render={<Button variant="outline" className="font-normal" />}
         >
           <CalendarIcon data-icon="inline-start" />
@@ -85,7 +95,7 @@ export function DateRangeFilter({
             resetOnSelect
             selected={pendingRange}
             onSelect={handlePendingRangeSelect}
-            disabled={{ after: new Date() }}
+            disabled={disabled ? true : { after: new Date() }}
             locale={es}
           />
         </PopoverContent>
@@ -95,6 +105,7 @@ export function DateRangeFilter({
           variant="ghost"
           size="icon-sm"
           aria-label={clearLabel}
+          disabled={disabled}
           onClick={() => onChange('all', undefined)}
         >
           <XIcon />

@@ -218,8 +218,10 @@ function AtencionesPage() {
   )
   const [demorasLoading, setDemorasLoading] = useState(true)
   const isFirstSummaryRun = useRef(true)
+  const summaryRequestIdRef = useRef(0)
   const refetchSummary = useCallback(
     async (targetDate: typeof date, targetDateEnd: typeof dateEnd) => {
+      const requestId = ++summaryRequestIdRef.current
       setSummaryLoading(true)
       try {
         const [attentions, incidents] = await Promise.all([
@@ -230,10 +232,11 @@ function AtencionesPage() {
             data: { date: targetDate, dateEnd: targetDateEnd }
           })
         ])
+        if (requestId !== summaryRequestIdRef.current) return
         setAnalytics(attentions)
         setIncidentAnalytics(incidents)
       } finally {
-        setSummaryLoading(false)
+        if (requestId === summaryRequestIdRef.current) setSummaryLoading(false)
       }
     },
     [fetchAttentionsAnalytics, fetchIncidentAnalytics]
@@ -247,20 +250,22 @@ function AtencionesPage() {
   }, [date, dateEnd, refetchSummary])
 
   const isFirstDemandRun = useRef(true)
+  const demandRequestIdRef = useRef(0)
   const refetchDemand = useCallback(
     async (
       targetDemandDate: typeof demandDate,
       targetDemandDateEnd: typeof demandDateEnd
     ) => {
+      const requestId = ++demandRequestIdRef.current
       setDemandLoading(true)
       try {
-        setDemandAnalytics(
-          await fetchDemandAnalytics({
-            data: { date: targetDemandDate, dateEnd: targetDemandDateEnd }
-          })
-        )
+        const result = await fetchDemandAnalytics({
+          data: { date: targetDemandDate, dateEnd: targetDemandDateEnd }
+        })
+        if (requestId !== demandRequestIdRef.current) return
+        setDemandAnalytics(result)
       } finally {
-        setDemandLoading(false)
+        if (requestId === demandRequestIdRef.current) setDemandLoading(false)
       }
     },
     [fetchDemandAnalytics]
@@ -502,6 +507,7 @@ function AtencionesPage() {
           <DateRangeFilter
             date={date}
             dateEnd={dateEnd}
+            disabled={summaryLoading || (view === 'demoras' && demorasLoading)}
             onChange={(newDate, newDateEnd) =>
               navigate({
                 search: prev => ({
@@ -522,6 +528,7 @@ function AtencionesPage() {
               </span>
               <DropdownMenu>
                 <DropdownMenuTrigger
+                  disabled={view === 'demoras' && demorasLoading}
                   render={
                     <Button
                       variant="outline"
@@ -861,6 +868,7 @@ function AtencionesPage() {
                         <DateRangeFilter
                           date={demandDate}
                           dateEnd={demandDateEnd}
+                          disabled={demandLoading}
                           onChange={(newDate, newDateEnd) =>
                             navigate({
                               search: prev => ({
@@ -1049,6 +1057,7 @@ function AtencionesPage() {
               </span>
               <DropdownMenu>
                 <DropdownMenuTrigger
+                  disabled={demorasLoading}
                   render={
                     <Button
                       variant="outline"
@@ -1088,6 +1097,7 @@ function AtencionesPage() {
               </span>
               <Select
                 value={direction}
+                disabled={demorasLoading}
                 onValueChange={value =>
                   navigate({
                     search: prev => ({
@@ -1121,6 +1131,7 @@ function AtencionesPage() {
                 </span>
                 <Select
                   value={campana}
+                  disabled={demorasLoading}
                   onValueChange={value =>
                     navigate({
                       search: prev => ({
