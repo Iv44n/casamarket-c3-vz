@@ -1,4 +1,5 @@
 import json
+import threading
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -73,16 +74,18 @@ def _since_key_expr(table: str) -> str:
     (transfer.fecha ya es ISO, string-concat con hora ya es directamente comparable/ordenable,
     sin necesidad de parsear) con la hora de registro propia de la fila. NULL cuando no hay
     agente asignado (mismo criterio que withAgentSinceMs en reports.functions.ts: agenteKey ===
-    'Sin agente' -> null), para que esas filas queden al final del orden sin importar timestamps."""
+    'Sin agente' -> null), para que esas filas queden al final del orden sin importar timestamps.
+
+    Usa lt.last_transfer_iso -- la columna pre-agregada por el LEFT JOIN que _branch_sql hace
+    contra (SELECT id_atencion, MAX(fecha || ' ' || hora) FROM transfer GROUP BY id_atencion).
+    Antes esto era una subconsulta correlacionada por fila (SELECT MAX(...) FROM transfer WHERE
+    t.id_atencion = {table}.id_atencion), que se ejecutaba N veces (una por fila de atencion) en
+    el COUNT y otra N en el SELECT paginado; el JOIN la resuelve una sola vez para toda la query."""
     agente_norm = _norm_expr("agente", "Sin agente", ("", "-"))
     start_iso = _iso_datetime_expr("fecha_registro", "hora_registro")
-    last_transfer_iso = (
-        f"(SELECT MAX(t.fecha || ' ' || t.hora) FROM transfer t "
-        f"WHERE t.id_atencion = {table}.id_atencion)"
-    )
     return (
         f"CASE WHEN {agente_norm} = 'Sin agente' THEN NULL "
-        f"ELSE COALESCE({last_transfer_iso}, {start_iso}) END"
+        f"ELSE COALESCE(lt.last_transfer_iso, {start_iso}) END"
     )
 
 
@@ -258,6 +261,7 @@ class IngestResult:
 
 
 _schema_initialized = False
+_schema_lock = threading.Lock()
 
 
 def get_connection() -> turso_serverless.Connection:
@@ -267,8 +271,10 @@ def get_connection() -> turso_serverless.Connection:
         turso_config.database_url, auth_token=turso_config.auth_token
     )
     if not _schema_initialized:
-        _init_schema(conn)
-        _schema_initialized = True
+        with _schema_lock:
+            if not _schema_initialized:
+                _init_schema(conn)
+                _schema_initialized = True
     return conn
 
 
@@ -557,10 +563,19 @@ _DIRECTION_TABLES: dict[str, list[tuple[str, str]]] = {
 
 
 def _branch_sql(table: str, direction_label: str, where_sql: str) -> str:
+    # LEFT JOIN contra el ultimo hop de transferencia pre-agregado por id_atencion,
+    # en vez de una subconsulta correlacionada por fila (antes:
+    # "(SELECT MAX(t.fecha || ' ' || t.hora) FROM transfer t WHERE t.id_atencion = {table}.id_atencion)").
+    # Con miles de atenciones, esa subconsulta se ejecutaba una vez por fila en el
+    # COUNT y otra en el SELECT paginado -- el LEFT JOIN la resuelve una sola vez.
     return (
-        f"SELECT row_json, '{direction_label}' AS direction, id_atencion, "
+        f"SELECT {table}.row_json, '{direction_label}' AS direction, {table}.id_atencion, "
         f"{_since_key_expr(table)} AS since_key, {_close_iso_expr()} AS close_iso "
-        f"FROM {table} WHERE {where_sql}"
+        f"FROM {table} "
+        f"LEFT JOIN (SELECT id_atencion, MAX(fecha || ' ' || hora) AS last_transfer_iso "
+        f"FROM transfer GROUP BY id_atencion) lt "
+        f"ON lt.id_atencion = {table}.id_atencion "
+        f"WHERE {where_sql}"
     )
 
 

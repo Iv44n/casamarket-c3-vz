@@ -6,11 +6,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '#/components/ui/card'
 import { Skeleton } from '#/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableRow } from '#/components/ui/table'
 import { cn } from '#/lib/utils'
-import { getReportRows, getReportSummary } from '#/server/reports.functions'
+import { getReportRowsPage, getReportSummary } from '#/server/reports.functions'
 import {
   REPORT_NAMES,
   type ReportName,
-  type ReportRow,
+  type ReportRowsPage,
   type ReportSummary,
   reportSearchSchema
 } from '#/server/schemas'
@@ -18,35 +18,41 @@ import {
 type ReportLoaderData =
   | {
       reportName: ReportName
-      rows: null
+      page: null
       summaryPromise: null
     }
   | {
       reportName: ReportName
-      rows: ReportRow[]
+      page: ReportRowsPage
       summaryPromise: Promise<ReportSummary | null>
     }
 export const Route = createFileRoute('/reports/$reportName')({
   validateSearch: reportSearchSchema,
+  loaderDeps: ({ search }) => ({
+    page: search.page,
+    pageSize: search.pageSize
+  }),
   ssr: false,
-  loader: async ({ params }): Promise<ReportLoaderData> => {
+  loader: async ({ params, deps }): Promise<ReportLoaderData> => {
     if (!REPORT_NAMES.includes(params.reportName as ReportName)) {
       throw notFound()
     }
     const reportName = params.reportName as ReportName
-    const rows = await getReportRows({ data: { reportName } })
-    if (rows === null) {
-      return { reportName, rows: null, summaryPromise: null }
+    const page = await getReportRowsPage({
+      data: { reportName, page: deps.page, pageSize: deps.pageSize }
+    })
+    if (page === null) {
+      return { reportName, page: null, summaryPromise: null }
     }
     const summaryPromise = getReportSummary({ data: { reportName } })
-    return { reportName, rows, summaryPromise }
+    return { reportName, page, summaryPromise }
   },
   component: ReportDetail
 })
 function ReportDetail() {
-  const { reportName, rows, summaryPromise } = Route.useLoaderData()
+  const { reportName, page: reportPage, summaryPromise } = Route.useLoaderData()
   const { page, pageSize } = Route.useSearch()
-  if (rows === null || rows === undefined) {
+  if (reportPage === null) {
     return (
       <div>
         <h1 className="text-2xl font-bold tracking-tight">{reportName}</h1>
@@ -64,8 +70,8 @@ function ReportDetail() {
     )
   }
   const start = (page - 1) * pageSize
-  const pageRows = rows.slice(start, start + pageSize)
-  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize))
+  const pageRows = reportPage.rows
+  const totalPages = Math.max(1, Math.ceil(reportPage.total / pageSize))
   return (
     <div>
       <div className="flex items-center gap-3">

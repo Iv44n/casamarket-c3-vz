@@ -253,17 +253,20 @@ directions, to demonstrate (and actually use) both non-`false` modes:
 reportSearchSchema` (zod v4, used directly -- no `@tanstack/zod-adapter` needed since v4 infers
 input/output types on its own). `page`/`pageSize` both have `.default(...)`, so `<Link
 to="/reports/$reportName" params={...} />` doesn't require passing `search` at all; confirmed live
-that navigating without search params redirects to `?page=1&pageSize=25`. Pagination itself is
-**client-side** slicing of the full row array -- the backend's `/data/{report_name}` has no
-server-side pagination (see `backend/app/routers/data.py`), it always returns every row.
+that navigating without search params redirects to `?page=1&pageSize=50`. Pagination itself is
+**server-side**: `loaderDeps` exposes `page`/`pageSize` to the loader, which calls
+`getReportRowsPage` (a `createServerFn` proxying to the backend's `GET /data/{report_name}/page`,
+see `backend/app/routers/data.py`) instead of fetching every row and slicing client-side -- only the
+current page's rows cross the wire on every page change.
 
 **Route loaders + typed server functions** (`routes/reports/$reportName.tsx`,
 `server/reports.functions.ts`): the loader validates `params.reportName` against `REPORT_NAMES`
-(throwing `notFound()` for an unknown name -- confirmed live) and calls `getReportRows`, a
-`createServerFn` that proxies to the backend's `GET /data/{report_name}`. A `null` result (backend's
-"nothing downloaded yet" signal, see `backend/app/extraction/parsing.py`) is handled as a distinct
-UI state, not folded into the 404 case -- it's a normal, expected state for a fresh deployment, not
-an error.
+(throwing `notFound()` for an unknown name -- confirmed live) and calls `getReportRowsPage`. A `null`
+result (backend's "nothing downloaded yet" signal, see `backend/app/extraction/parsing.py`) is
+handled as a distinct UI state, not folded into the 404 case -- it's a normal, expected state for a
+fresh deployment, not an error. `getReportRows` (the unpaginated `GET /data/{report_name}` proxy)
+still exists and is what `getReportSummary` uses below -- the column-population profile needs every
+row regardless of which page is being viewed.
 
 **Streaming**: `getReportSummary` (also a `createServerFn`) computes a column-population profile --
 genuinely slower than `getReportRows` because it scans every row (real difference on `contacts`,

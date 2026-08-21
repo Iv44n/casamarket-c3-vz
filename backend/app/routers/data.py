@@ -75,6 +75,35 @@ def get_report(report_name: str) -> list[dict]:
     return records
 
 
+@router.get("/{report_name}/page")
+def get_report_page(
+    report_name: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    """Devuelve una pagina del reporte (slice server-side) + el total de filas,
+    para que el frontend no necesite cargar y transferir el archivo completo en
+    cada cambio de pagina -- el endpoint /{report_name} sin paginar sigue
+    disponible para los callers que necesitan todas las filas de una (contacts
+    index, summary)."""
+    if report_name not in KNOWN_REPORTS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Reporte desconocido: {report_name!r}. Validos: {sorted(KNOWN_REPORTS)}",
+        )
+
+    records = parsing.parse_report(report_name)
+    if records is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Todavia no se descargo ningun archivo de '{report_name}'.",
+        )
+    total = len(records)
+    start = (page - 1) * page_size
+    page_rows = records[start : start + page_size]
+    return {"total": total, "rows": page_rows}
+
+
 @router.get("/{report_name}/history")
 def get_report_history(
     report_name: str,

@@ -6,7 +6,7 @@ import {
   FileTextIcon,
   RefreshCwIcon
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { AgentWorkloadChart } from '#/components/agent-workload-chart'
 import { AttentionRecordsTable } from '#/components/attention-records-table'
@@ -314,63 +314,97 @@ function AtencionesPage() {
     demorasPage,
     fetchAttentionRecordsPage
   ])
-  const availableEstados = getAvailableEstados(analytics)
-  const { total, slices } = buildStatusChartData(
-    analytics,
-    direction,
-    estados,
-    agentes
+  const availableEstados = useMemo(
+    () => getAvailableEstados(analytics),
+    [analytics]
   )
-  const agents = buildAgentRanking(
-    analytics,
-    direction,
-    agentLimit,
-    estados,
-    agentes
+  const { total, slices } = useMemo(
+    () => buildStatusChartData(analytics, direction, estados, agentes),
+    [analytics, direction, estados, agentes]
   )
-  const topClosers = buildTopClosers(analytics, agentes)
-  const campaigns = buildCampaignRanking(analytics, direction, estados, agentes)
-  const demandHeatmap = buildDemandHeatmap(demandAnalytics)
-  const { blockedMessage, advisoryMessage } = describeAvailability(
-    analytics,
-    direction
+  const agents = useMemo(
+    () => buildAgentRanking(analytics, direction, agentLimit, estados, agentes),
+    [analytics, direction, agentLimit, estados, agentes]
   )
-  const availableIncidentCampaigns = [
-    ...new Set(incidentAnalytics.records.map(record => record.campana))
-  ].sort((a, b) => a.localeCompare(b))
-  const incidentRecords = incidentAnalytics.records.filter(
-    record =>
-      (agentes === 'all' ||
-        agentes.includes(incidentAgentLabel(record.agente))) &&
-      (campana === 'all' || record.campana === campana)
+  const topClosers = useMemo(
+    () => buildTopClosers(analytics, agentes),
+    [analytics, agentes]
   )
-  const incidentCategoryOrder = pickDominantCategoryOrder(incidentRecords)
+  const campaigns = useMemo(
+    () => buildCampaignRanking(analytics, direction, estados, agentes),
+    [analytics, direction, estados, agentes]
+  )
+  const demandHeatmap = useMemo(
+    () => buildDemandHeatmap(demandAnalytics),
+    [demandAnalytics]
+  )
+  const { blockedMessage, advisoryMessage } = useMemo(
+    () => describeAvailability(analytics, direction),
+    [analytics, direction]
+  )
+  const availableIncidentCampaigns = useMemo(
+    () =>
+      [
+        ...new Set(incidentAnalytics.records.map(record => record.campana))
+      ].sort((a, b) => a.localeCompare(b)),
+    [incidentAnalytics]
+  )
+  const incidentRecords = useMemo(
+    () =>
+      incidentAnalytics.records.filter(
+        record =>
+          (agentes === 'all' ||
+            agentes.includes(incidentAgentLabel(record.agente))) &&
+          (campana === 'all' || record.campana === campana)
+      ),
+    [incidentAnalytics, agentes, campana]
+  )
+  const incidentCategoryOrder = useMemo(
+    () => pickDominantCategoryOrder(incidentRecords),
+    [incidentRecords]
+  )
   const activeIncidentCategory = incidentCategoryOrder.includes(category)
     ? category
     : (incidentCategoryOrder[0] ?? category)
   const attentionRecordsAvailable =
     analytics.incoming.available || analytics.outgoing.available
-  const availableRecordCampaigns = [
-    ...new Set([
-      ...analytics.incoming.campaignCounts.map(c => c.campana),
-      ...analytics.outgoing.campaignCounts.map(c => c.campana)
-    ])
-  ].sort((a, b) => a.localeCompare(b))
+  const availableRecordCampaigns = useMemo(
+    () =>
+      [
+        ...new Set([
+          ...analytics.incoming.campaignCounts.map(c => c.campana),
+          ...analytics.outgoing.campaignCounts.map(c => c.campana)
+        ])
+      ].sort((a, b) => a.localeCompare(b)),
+    [analytics]
+  )
 
-  const availableAgentes = [
-    ...new Set([
-      ...analytics.incoming.agentCounts.map(a => a.agente),
-      ...analytics.outgoing.agentCounts.map(a => a.agente),
-      ...incidentAnalytics.records.map(record =>
-        incidentAgentLabel(record.agente)
-      )
-    ])
-  ].sort((a, b) => a.localeCompare(b))
-  const availableRecordPlans = [
-    ...new Set(attentionRecordsPage.availablePlans.map(planLabel))
-  ].sort((a, b) => a.localeCompare(b))
-  const filteredAttentionRecords = attentionRecordsPage.records.filter(
-    record => plan === 'all' || planLabel(record.plan) === plan
+  const availableAgentes = useMemo(
+    () =>
+      [
+        ...new Set([
+          ...analytics.incoming.agentCounts.map(a => a.agente),
+          ...analytics.outgoing.agentCounts.map(a => a.agente),
+          ...incidentAnalytics.records.map(record =>
+            incidentAgentLabel(record.agente)
+          )
+        ])
+      ].sort((a, b) => a.localeCompare(b)),
+    [analytics, incidentAnalytics]
+  )
+  const availableRecordPlans = useMemo(
+    () =>
+      [...new Set(attentionRecordsPage.availablePlans.map(planLabel))].sort(
+        (a, b) => a.localeCompare(b)
+      ),
+    [attentionRecordsPage]
+  )
+  const filteredAttentionRecords = useMemo(
+    () =>
+      attentionRecordsPage.records.filter(
+        record => plan === 'all' || planLabel(record.plan) === plan
+      ),
+    [attentionRecordsPage, plan]
   )
   const isRangeSelected = date !== 'all' && Boolean(dateEnd) && dateEnd !== date
   const isPastDaySelected =

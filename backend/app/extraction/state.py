@@ -15,6 +15,7 @@ from . import service, store
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
+_historical_lock = threading.Lock()
 _last_run: RunSummary | None = None
 _last_backfill_run: BackfillRunSummary | None = None
 _last_contacts_sync_run: RunSummary | None = None
@@ -31,9 +32,15 @@ _hydrated_kinds: set[str] = set()
 def _persist_sync_status(kind: str, status) -> None:
     try:
         conn = store.get_connection()
-        store.save_sync_status(
-            conn, kind, status.model_dump(mode="json"), datetime.now(config.TZ).isoformat()
-        )
+        try:
+            store.save_sync_status(
+                conn,
+                kind,
+                status.model_dump(mode="json"),
+                datetime.now(config.TZ).isoformat(),
+            )
+        finally:
+            conn.close()
     except Exception as exc:
         logger.warning("No se pudo persistir el estado '%s' en la DB -- %s", kind, exc)
 
@@ -44,7 +51,10 @@ def _hydrate_once(kind: str, model):
     _hydrated_kinds.add(kind)
     try:
         conn = store.get_connection()
-        data = store.load_sync_status(conn, kind)
+        try:
+            data = store.load_sync_status(conn, kind)
+        finally:
+            conn.close()
     except Exception as exc:
         logger.warning("No se pudo leer el estado '%s' desde la DB -- %s", kind, exc)
         return None
@@ -231,7 +241,7 @@ def _run_historical_backfill_worker(
         # `_wait_until_not_running` en los tests) usa para saber que ya no hay nada mas
         # pendiente, persistencia incluida.
         _historical_backfill_status = error_status
-        _lock.release()
+        _historical_lock.release()
         return
 
     _log_job_outcomes("Backfill historico", run.jobs)
@@ -253,15 +263,21 @@ def _run_historical_backfill_worker(
     _persist_sync_status(_KIND_HISTORICAL_BACKFILL_STATUS, done_status)
     logger.info("Backfill historico: terminado (ok=%s)", run.ok)
     _historical_backfill_status = done_status
-    _lock.release()
+    _historical_lock.release()
 
 
 def start_historical_backfill(
     date_init: date | None = None, date_end: date | None = None
 ) -> HistoricalBackfillStatus:
     global _historical_backfill_status
-    if not _lock.acquire(blocking=False):
-        raise AlreadyRunningError("Ya hay una extraccion en curso.")
+    # _historical_lock (separado de _lock) para que el backfill historico -- que
+    # corre en background y puede tardar minutos -- NO bloquee los refreshes
+    # regulares de cada 5 min. Es seguro correrlos en paralelo: cada run crea su
+    # propio httpx.Client (sesion C3 independiente) y los upserts a Turso son
+    # idempotentes por PK. Solo queremos evitar dos backfills historicos
+    # solapados.
+    if not _historical_lock.acquire(blocking=False):
+        raise AlreadyRunningError("Ya hay un backfill historico en curso.")
 
     resolved_end = date_end or config.hoy()
     resolved_init = date_init or (

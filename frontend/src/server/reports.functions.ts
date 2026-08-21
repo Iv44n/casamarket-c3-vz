@@ -19,6 +19,7 @@ import {
   fetchHistoricalBackfillStatus,
   fetchReportRows,
   fetchReportRowsHistory,
+  fetchReportRowsPage,
   triggerBackfillExtraction,
   triggerContactsSync,
   triggerExtractionRefresh,
@@ -34,6 +35,7 @@ import type {
   DirectionAnalytics,
   IncidentAnalytics,
   ReportRow,
+  ReportRowsPage,
   ReportSummary,
   TransferHop
 } from './schemas'
@@ -42,7 +44,8 @@ import {
   backfillRequestSchema,
   dateFilterSchema,
   historicalBackfillRequestSchema,
-  reportNameSchema
+  reportNameSchema,
+  reportRowsPageRequestSchema
 } from './schemas'
 
 const ATTENTION_DATE_FIELD = 'Fecha registro'
@@ -104,11 +107,33 @@ export const getReportRows = createServerFn({ method: 'GET' })
   .validator(reportNameSchema)
   .handler(async ({ data }) => fetchReportRows(data.reportName))
 
+export const getReportRowsPage = createServerFn({ method: 'GET' })
+  .validator(reportRowsPageRequestSchema)
+  .handler(
+    async ({ data }): Promise<ReportRowsPage | null> =>
+      fetchReportRowsPage(data.reportName, data.page, data.pageSize)
+  )
+
+const SUMMARY_CACHE_TTL_MS = 5 * 60 * 1000
+type SummaryCache = {
+  summary: ReportSummary | null
+  fetchedAt: number
+}
+const _summaryCache = new Map<string, SummaryCache>()
+
 export const getReportSummary = createServerFn({ method: 'GET' })
   .validator(reportNameSchema)
   .handler(async ({ data }): Promise<ReportSummary | null> => {
+    const now = Date.now()
+    const cached = _summaryCache.get(data.reportName)
+    if (cached && now - cached.fetchedAt < SUMMARY_CACHE_TTL_MS) {
+      return cached.summary
+    }
     const rows = await fetchReportRows(data.reportName)
-    if (rows === null) return null
+    if (rows === null) {
+      _summaryCache.set(data.reportName, { summary: null, fetchedAt: now })
+      return null
+    }
     const columns = new Map<string, number>()
     for (const row of rows) {
       for (const [key, value] of Object.entries(row)) {
@@ -122,12 +147,14 @@ export const getReportSummary = createServerFn({ method: 'GET' })
         }
       }
     }
-    return {
+    const summary: ReportSummary = {
       rowCount: rows.length,
       columns: [...columns.entries()]
         .map(([name, populated]) => ({ name, populated }))
         .sort((a, b) => b.populated - a.populated)
     }
+    _summaryCache.set(data.reportName, { summary, fetchedAt: now })
+    return summary
   })
 
 function parseStartEpochMs(row: ReportRow): number | null {
@@ -353,6 +380,26 @@ function toAttentionRecord(
   }
 }
 
+const CONTACTS_CACHE_TTL_MS = 5 * 60 * 1000
+type ContactsCache = {
+  rows: ReportRow[] | null
+  fetchedAt: number
+}
+let _contactsCache: ContactsCache | null = null
+
+async function getCachedContactsRows(): Promise<ReportRow[] | null> {
+  const now = Date.now()
+  if (
+    _contactsCache &&
+    now - _contactsCache.fetchedAt < CONTACTS_CACHE_TTL_MS
+  ) {
+    return _contactsCache.rows
+  }
+  const rows = await fetchReportRows('contacts')
+  _contactsCache = { rows, fetchedAt: now }
+  return rows
+}
+
 export const getAttentionRecordsPage = createServerFn({ method: 'GET' })
   .validator(attentionRecordsPageRequestSchema)
   .handler(async ({ data }): Promise<AttentionRecordsPage> => {
@@ -375,7 +422,7 @@ export const getAttentionRecordsPage = createServerFn({ method: 'GET' })
         page: data.page,
         pageSize: data.pageSize
       }),
-      fetchReportRows('contacts')
+      getCachedContactsRows()
     ])
     const transfersById = buildTransferChainIndex(page.transfers)
     const contactsByPhone = buildContactsIndex(contactsRows ?? [])

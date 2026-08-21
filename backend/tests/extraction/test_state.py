@@ -12,10 +12,20 @@ from app.schemas import HistoricalBackfillStatus
 
 
 @pytest.fixture(autouse=True)
-def isolated_sync_status_store(monkeypatch: pytest.MonkeyPatch):
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    store._init_schema(conn)
-    monkeypatch.setattr(store, "get_connection", lambda: conn)
+def isolated_sync_status_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    # Archivo en disco (no ":memory:") a proposito: state.py ahora cierra la conexion
+    # despues de cada persist/hydrate (ver _persist_sync_status/_hydrate_once), igual
+    # que hace el resto del proyecto contra Turso. Una conexion ":memory:" compartida
+    # perderia todo su contenido en el primer close(); un archivo en disco sobrevive
+    # a que cada get_connection() abra una conexion nueva, igual que Turso (remoto,
+    # persistente) se comporta en produccion.
+    db_path = tmp_path / "sync_status.db"
+    init_conn = sqlite3.connect(db_path, check_same_thread=False)
+    store._init_schema(init_conn)
+    init_conn.close()
+    monkeypatch.setattr(
+        store, "get_connection", lambda: sqlite3.connect(db_path, check_same_thread=False)
+    )
     state._hydrated_kinds.clear()
     yield
     state._hydrated_kinds.clear()
@@ -377,6 +387,10 @@ def reset_historical_backfill_status():
     state._historical_backfill_status = HistoricalBackfillStatus()
     yield
     state._historical_backfill_status = HistoricalBackfillStatus()
+    # Si un test fallo y dejo _historical_lock adquirido, los tests siguientes
+    # quedarian bloqueados -- lo liberamos por seguridad.
+    if state._historical_lock.locked():
+        state._historical_lock.release()
 
 
 def _wait_until_not_running(timeout: float = 2.0) -> None:
@@ -418,7 +432,7 @@ def test_start_historical_backfill_eventually_reaches_done_with_the_summary(
     assert status.result.date_init == (
         config.hoy() - datetime.timedelta(days=config.HISTORICAL_BACKFILL_WINDOW_DAYS)
     ).isoformat()
-    assert not state._lock.locked()
+    assert not state._historical_lock.locked()
 
 
 def test_start_historical_backfill_uses_the_given_date_range_instead_of_the_default(
@@ -476,7 +490,7 @@ def test_start_historical_backfill_reaches_error_phase_if_service_raises(
     status = state.historical_backfill_status()
     assert status.phase == "error"
     assert status.error == "login failed"
-    assert not state._lock.locked()
+    assert not state._historical_lock.locked()
 
 
 def test_start_historical_backfill_raises_already_running_if_lock_held(
@@ -485,12 +499,12 @@ def test_start_historical_backfill_raises_already_running_if_lock_held(
     monkeypatch.setattr(
         service, "run_historical_backfill", lambda date_init, date_end: _fake_run(ok=True)
     )
-    state._lock.acquire()
+    state._historical_lock.acquire()
     try:
         with pytest.raises(state.AlreadyRunningError):
             state.start_historical_backfill()
     finally:
-        state._lock.release()
+        state._historical_lock.release()
 
 
 def test_historical_backfill_status_defaults_to_idle():

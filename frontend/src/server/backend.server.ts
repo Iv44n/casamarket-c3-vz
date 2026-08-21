@@ -5,7 +5,8 @@ import type {
   ContactsSyncStatus,
   ExtractionStatus,
   HistoricalBackfillStatus,
-  ReportRow
+  ReportRow,
+  ReportRowsPage
 } from './schemas'
 
 const BASE_URL = process.env.C3_API_URL ?? 'http://127.0.0.1:8000'
@@ -21,12 +22,48 @@ async function backendFetch(
   }
   return response
 }
+const _reportRowsCache = new Map<
+  string,
+  { promise: Promise<ReportRow[] | null>; expiresAt: number }
+>()
+const REPORT_ROWS_CACHE_TTL_MS = 60_000
+
 export async function fetchReportRows(
   reportName: string
 ): Promise<ReportRow[] | null> {
-  const response = await backendFetch(`/data/${reportName}`)
-  if (response.status === 404) return null
-  return response.json()
+  const now = Date.now()
+  const cached = _reportRowsCache.get(reportName)
+  if (cached && cached.expiresAt > now) return cached.promise
+
+  const promise = (async () => {
+    const response = await backendFetch(`/data/${reportName}`)
+    return response.status === 404 ? null : await response.json()
+  })()
+  _reportRowsCache.set(reportName, {
+    promise,
+    expiresAt: now + REPORT_ROWS_CACHE_TTL_MS
+  })
+  // Si la peticion falla, sacamos la promesa rechazada del cache para que el proximo
+  // llamado reintente en vez de devolver el mismo error cacheado por todo el TTL.
+  promise.catch(() => {
+    const entry = _reportRowsCache.get(reportName)
+    if (entry?.promise === promise) _reportRowsCache.delete(reportName)
+  })
+  return promise
+}
+
+export async function fetchReportRowsPage(
+  reportName: string,
+  page: number,
+  pageSize: number
+): Promise<ReportRowsPage | null> {
+  const query = new URLSearchParams()
+  query.set('page', String(page))
+  query.set('page_size', String(pageSize))
+  const response = await backendFetch(
+    `/data/${reportName}/page?${query.toString()}`
+  )
+  return response.status === 404 ? null : await response.json()
 }
 
 const inFlightHistoryFetches = new Map<string, Promise<ReportRow[] | null>>()

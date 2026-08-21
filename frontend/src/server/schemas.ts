@@ -16,8 +16,16 @@ export const reportSearchSchema = z.object({
   pageSize: z.number().int().min(1).max(200).default(50)
 })
 export type ReportSearch = z.infer<typeof reportSearchSchema>
+export const reportRowsPageRequestSchema = reportNameSchema.extend({
+  page: z.number().int().min(1).default(1),
+  pageSize: z.number().int().min(1).max(200).default(50)
+})
 type JsonPrimitive = string | number | boolean | null
 export type ReportRow = Record<string, JsonPrimitive>
+export type ReportRowsPage = {
+  total: number
+  rows: ReportRow[]
+}
 export type ReportSummary = {
   rowCount: number
   columns: {

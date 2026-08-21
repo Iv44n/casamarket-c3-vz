@@ -58,6 +58,49 @@ def test_get_report_404s_when_nothing_downloaded_yet(client: TestClient):
     assert response.status_code == 404
 
 
+def test_get_report_page_returns_a_slice_and_the_total(
+    client: TestClient, tmp_path: Path
+):
+    _write_xlsx(
+        tmp_path / "attention_2026-08-13_export.xlsx",
+        [("Nombre",), ("Ana",), ("Beto",), ("Caro",)],
+    )
+
+    response = client.get("/data/attention/page", params={"page": 2, "page_size": 2})
+
+    assert response.status_code == 200
+    assert response.json() == {"total": 3, "rows": [{"Nombre": "Caro"}]}
+
+
+def test_get_report_page_defaults_to_the_first_page_of_fifty(
+    client: TestClient, tmp_path: Path
+):
+    _write_xlsx(
+        tmp_path / "attention_2026-08-13_export.xlsx",
+        [("Nombre",), ("Ana",), ("Beto",)],
+    )
+
+    response = client.get("/data/attention/page")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "total": 2,
+        "rows": [{"Nombre": "Ana"}, {"Nombre": "Beto"}],
+    }
+
+
+def test_get_report_page_404s_for_unknown_report_name(client: TestClient):
+    response = client.get("/data/not-a-real-report/page")
+
+    assert response.status_code == 404
+
+
+def test_get_report_page_404s_when_nothing_downloaded_yet(client: TestClient):
+    response = client.get("/data/contacts/page")
+
+    assert response.status_code == 404
+
+
 def test_get_report_history_concatenates_every_downloaded_day_for_contacts(
     client: TestClient, tmp_path: Path
 ):

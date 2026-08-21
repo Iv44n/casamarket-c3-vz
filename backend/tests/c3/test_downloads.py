@@ -153,6 +153,66 @@ def isolated_downloads_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     return tmp_path
 
 
+def _touch(path: Path, mtime: float) -> None:
+    path.write_bytes(b"x")
+    os.utime(path, (mtime, mtime))
+
+
+def test_prune_old_files_returns_zero_when_downloads_dir_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(config, "DOWNLOADS_DIR", tmp_path / "does-not-exist")
+
+    assert downloads.prune_old_files("attention") == 0
+
+
+def test_prune_old_files_keeps_only_the_n_most_recent(isolated_downloads_dir: Path):
+    for i in range(5):
+        _touch(isolated_downloads_dir / f"attention_2026-08-{10 + i}_export.xlsx", i)
+
+    removed = downloads.prune_old_files("attention", keep=2)
+
+    assert removed == 3
+    remaining = {p.name for p in isolated_downloads_dir.glob("attention_*")}
+    assert remaining == {
+        "attention_2026-08-13_export.xlsx",
+        "attention_2026-08-14_export.xlsx",
+    }
+
+
+def test_prune_old_files_does_not_touch_other_reports(isolated_downloads_dir: Path):
+    for i in range(3):
+        _touch(isolated_downloads_dir / f"attention_2026-08-{10 + i}_export.xlsx", i)
+    _touch(isolated_downloads_dir / "outboundattention_2026-08-10_export.xlsx", 0)
+
+    downloads.prune_old_files("attention", keep=1)
+
+    assert (isolated_downloads_dir / "outboundattention_2026-08-10_export.xlsx").exists()
+
+
+def test_prune_old_files_includes_historical_files_in_the_same_glob(
+    isolated_downloads_dir: Path,
+):
+    _touch(
+        isolated_downloads_dir
+        / "attention_historical_2026-05-01_to_2026-08-01_export.xlsx",
+        0,
+    )
+    for i in range(3):
+        _touch(
+            isolated_downloads_dir / f"attention_2026-08-{10 + i}_export.xlsx", i + 1
+        )
+
+    removed = downloads.prune_old_files("attention", keep=2)
+
+    assert removed == 2
+    remaining = {p.name for p in isolated_downloads_dir.glob("attention_*")}
+    assert remaining == {
+        "attention_2026-08-11_export.xlsx",
+        "attention_2026-08-12_export.xlsx",
+    }
+
+
 def _client(handler) -> httpx.Client:
     return httpx.Client(base_url="https://fake.test", transport=httpx.MockTransport(handler))
 
@@ -232,6 +292,33 @@ def test_run_job_names_the_file_after_the_jobs_file_date_not_todays_date(
     result = downloads.run_job(_client(handler), job)
 
     assert result.path.name == "attention_2026-08-10_reporte.xls"
+
+
+def test_run_job_prunes_old_files_of_the_same_report_after_writing(
+    isolated_downloads_dir: Path,
+):
+    for i in range(downloads._KEEP_PER_REPORT):
+        _touch(isolated_downloads_dir / f"attention_2026-07-{10 + i}_export.xlsx", i)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={
+                "content-type": "application/vnd.ms-excel",
+                "content-disposition": 'attachment; filename="reporte.xls"',
+            },
+            content=b"x",
+        )
+
+    job = downloads.DownloadJob(
+        name="attention", endpoint="/fake", params={}, file_date=datetime.date(2026, 8, 10)
+    )
+    downloads.run_job(_client(handler), job)
+
+    remaining = list(isolated_downloads_dir.glob("attention_*"))
+    assert len(remaining) == downloads._KEEP_PER_REPORT
+    assert (isolated_downloads_dir / "attention_2026-08-10_reporte.xls").exists()
+    assert not (isolated_downloads_dir / "attention_2026-07-10_export.xlsx").exists()
 
 
 def test_run_job_preserves_query_string_already_in_endpoint_when_params_empty(

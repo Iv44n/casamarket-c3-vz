@@ -238,6 +238,37 @@ def all_files(name: str) -> list[Path]:
     return sorted(candidates, key=lambda path: path.stat().st_mtime)
 
 
+# Cuantos archivos por reporte conservar en downloads/ -- cada refresh/backfill
+# escribe uno nuevo sin borrar el anterior, asi que sin esto el directorio crece
+# sin limite. 7 alcanza para una semana de corridas diarias + margen para
+# reintentos; latest_file() solo necesita el mas reciente y all_files() (usado
+# solo por contacts, cuyo historico vive en Turso) tampoco necesita mas.
+_KEEP_PER_REPORT = 7
+
+
+def prune_old_files(name: str, keep: int = _KEEP_PER_REPORT) -> int:
+    """Borra los archivos viejos de `name` en downloads/, conservando los `keep`
+    mas recientes por mtime. Devuelve cuantos elimino. No falla si el directorio
+    o los archivos no existen -- es best-effort, no bloquea la descarga."""
+    if not config.DOWNLOADS_DIR.exists():
+        return 0
+    # glob amplio (name_*) para incluir tambien archivos historical_* que el
+    # patron 20??-??-?? no atrapa, no solo los de fecha simple.
+    candidates = sorted(
+        config.DOWNLOADS_DIR.glob(f"{name}_*"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    removed = 0
+    for stale in candidates[keep:]:
+        try:
+            stale.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 def _filename_from_response(response: httpx.Response, fallback: str) -> str:
     disposition = response.headers.get("content-disposition", "")
     match = re.search(r'filename="?([^";]+)"?', disposition)
@@ -271,6 +302,8 @@ def run_job(client: httpx.Client, job: DownloadJob) -> DownloadResult:
     config.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
     dest = config.DOWNLOADS_DIR / f"{job.name}_{label}_{filename}"
     dest.write_bytes(response.content)
+
+    prune_old_files(job.name)
 
     return DownloadResult(
         job=job,
