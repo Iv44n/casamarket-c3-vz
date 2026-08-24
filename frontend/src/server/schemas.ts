@@ -70,17 +70,21 @@ function pad2(value: number): string {
 function formatIsoDateUtc(date: Date): string {
   return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`
 }
-function addDaysIso(isoDate: string, days: number): string {
+export function addDaysIso(isoDate: string, days: number): string {
   const [year, month, day] = isoDate.split('-').map(Number)
   return formatIsoDateUtc(
     new Date(Date.UTC(year, month - 1, day) + days * 24 * 60 * 60 * 1000)
   )
 }
-function mondayOfWeek(isoDate: string): string {
+export function mondayOfWeek(isoDate: string): string {
   const [year, month, day] = isoDate.split('-').map(Number)
   const jsDayOfWeek = new Date(Date.UTC(year, month - 1, day)).getUTCDay()
   const isoDayOfWeek = jsDayOfWeek === 0 ? 7 : jsDayOfWeek // 1=Mon..7=Sun
   return addDaysIso(isoDate, -(isoDayOfWeek - 1))
+}
+export function firstDayOfMonthIso(isoDate: string): string {
+  const [year, month] = isoDate.split('-')
+  return `${year}-${month}-01`
 }
 function defaultDemandWeekStart(): string {
   return mondayOfWeek(todayIsoDate())
