@@ -50,6 +50,7 @@ import {
   describeAvailability,
   getAvailableEstados
 } from '#/lib/attentions-analytics'
+import { CHART_BIG_NUMBER_FONT_SIZE } from '#/lib/chart-typography'
 import { downloadBlob } from '#/lib/download-file'
 import {
   buildIncidentHierarchyTree,
@@ -788,12 +789,18 @@ function AtencionesPage() {
                   className="flex flex-col"
                 >
                   <Card size="sm" className="flex h-full flex-col">
-                    <CardHeader className="shrink-0 gap-0.5">
+                    <CardHeader className="shrink-0 gap-1 border-b">
                       <CardTitle className="text-base font-medium text-muted-foreground">
                         Estado de atenciones
                       </CardTitle>
-                      <CardDescription className="text-sm">
-                        {total} atenciones
+                      <CardDescription className="flex items-baseline gap-1.5 text-sm">
+                        <span
+                          className="font-bold text-foreground tabular-nums"
+                          style={{ fontSize: CHART_BIG_NUMBER_FONT_SIZE }}
+                        >
+                          {total}
+                        </span>
+                        atenciones
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="flex flex-1 items-center justify-center">
@@ -813,7 +820,7 @@ function AtencionesPage() {
                   className="flex flex-col"
                 >
                   <Card size="sm" className="flex h-full flex-col">
-                    <CardHeader className="shrink-0 gap-0.5">
+                    <CardHeader className="shrink-0 gap-0.5 border-b">
                       <CardTitle className="text-base font-medium text-muted-foreground">
                         Tipo de caso
                       </CardTitle>
@@ -838,7 +845,7 @@ function AtencionesPage() {
                   className="flex flex-col lg:col-span-2"
                 >
                   <Card size="sm" className="flex h-full flex-col">
-                    <CardHeader className="shrink-0 gap-0.5">
+                    <CardHeader className="shrink-0 gap-0.5 border-b">
                       <CardTitle className="text-base font-medium text-muted-foreground">
                         {agentLimit === 'all'
                           ? 'Todos los agentes'
@@ -888,7 +895,7 @@ function AtencionesPage() {
                   className="flex flex-col lg:col-span-2"
                 >
                   <Card size="sm" className="flex h-full flex-col">
-                    <CardHeader className="shrink-0 gap-0.5">
+                    <CardHeader className="shrink-0 gap-0.5 border-b">
                       <CardTitle className="text-base font-medium text-muted-foreground">
                         Mapa de calor de demanda
                       </CardTitle>
