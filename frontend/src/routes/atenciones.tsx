@@ -64,6 +64,7 @@ import {
   getAttentionRecordsPage,
   getAttentionsAnalytics,
   getDemandAnalytics,
+  getExtractionStatus,
   getIncidentAnalytics,
   triggerBackfill,
   triggerRefresh
@@ -173,12 +174,13 @@ export const Route = createFileRoute('/atenciones')({
   loader: async ({ location }) => {
     const { date, dateEnd, demandDate, demandDateEnd } =
       location.search as AttentionsSearch
-    const [attentions, incidents, demand] = await Promise.all([
+    const [status, attentions, incidents, demand] = await Promise.all([
+      getExtractionStatus(),
       getAttentionsAnalytics({ data: { date, dateEnd } }),
       getIncidentAnalytics({ data: { date, dateEnd } }),
       getDemandAnalytics({ data: { date: demandDate, dateEnd: demandDateEnd } })
     ])
-    return { attentions, incidents, demand }
+    return { status, attentions, incidents, demand }
   },
   component: AtencionesPage
 })
@@ -206,7 +208,9 @@ function AtencionesPage() {
   const fetchIncidentAnalytics = useServerFn(getIncidentAnalytics)
   const fetchDemandAnalytics = useServerFn(getDemandAnalytics)
   const fetchAttentionRecordsPage = useServerFn(getAttentionRecordsPage)
+  const fetchExtractionStatus = useServerFn(getExtractionStatus)
   const [pending, setPending] = useState(false)
+  const [extractionStatus, setExtractionStatus] = useState(initialData.status)
   const [analytics, setAnalytics] = useState(initialData.attentions)
   const [incidentAnalytics, setIncidentAnalytics] = useState(
     initialData.incidents
@@ -422,7 +426,8 @@ function AtencionesPage() {
       }
       await Promise.all([
         refetchSummary(date, dateEnd),
-        refetchDemand(demandDate, demandDateEnd)
+        refetchDemand(demandDate, demandDateEnd),
+        fetchExtractionStatus().then(setExtractionStatus)
       ])
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
@@ -531,7 +536,15 @@ function AtencionesPage() {
     <div>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Atenciones</h1>
+          <div className="flex flex-wrap items-baseline gap-2">
+            <h1 className="text-2xl font-bold">Atenciones</h1>
+            <span className="text-xs text-muted-foreground">
+              Ultima actualizacion:{' '}
+              {'finished_at' in extractionStatus
+                ? new Date(extractionStatus.finished_at).toLocaleString()
+                : 'No hay ejecuciones aun'}
+            </span>
+          </div>
           <p className="mt-2 text-sm text-muted-foreground">
             Distribucion por estado, agente, tipo de caso e incidencias de las
             atenciones de WhatsApp del ultimo archivo descargado.
