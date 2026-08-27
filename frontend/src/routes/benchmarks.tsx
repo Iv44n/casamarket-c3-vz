@@ -1,6 +1,12 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
-import { CheckIcon, ChevronDownIcon, PlayIcon, XIcon } from 'lucide-react'
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  PlayIcon,
+  SettingsIcon,
+  XIcon
+} from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { BenchmarkAgentChart } from '#/components/benchmark-agent-chart'
@@ -17,6 +23,16 @@ import {
   CardTitle
 } from '#/components/ui/card'
 import { Checkbox } from '#/components/ui/checkbox'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger
+} from '#/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -58,9 +74,11 @@ import { cn } from '#/lib/utils'
 import {
   getBenchmarkResults,
   getBenchmarkRunStatus,
-  triggerBenchmarkRun
+  getLlmSettings,
+  triggerBenchmarkRun,
+  updateLlmSettings
 } from '#/server/reports.functions'
-import type { BenchmarkRunStatus } from '#/server/schemas'
+import type { BenchmarkRunStatus, LlmSettings } from '#/server/schemas'
 import {
   AGENT_LIMIT_OPTIONS,
   type AgentLimit,
@@ -78,12 +96,14 @@ export const Route = createFileRoute('/benchmarks')({
     const direction = deps.direction === 'all' ? undefined : deps.direction
     const dateFrom = deps.date
     const dateTo = deps.dateEnd ?? deps.date
-    return {
-      runStatus: await getBenchmarkRunStatus(),
-      results: await getBenchmarkResults({
-        data: { direction, dateFrom, dateTo }
-      })
-    }
+    const [runStatus, results, llmSettings] = await Promise.all([
+      getBenchmarkRunStatus(),
+      getBenchmarkResults({ data: { direction, dateFrom, dateTo } }),
+      // null para no-admins (403) -- la card de configuracion simplemente no se
+      // muestra, en vez de tirar abajo el resto de la pagina para ellos.
+      getLlmSettings().catch(() => null)
+    ])
+    return { runStatus, results, llmSettings }
   },
   component: BenchmarksPage
 })
@@ -129,7 +149,7 @@ function MultiSelectQuickActions({
 }
 
 function BenchmarksPage() {
-  const { runStatus, results } = Route.useLoaderData()
+  const { runStatus, results, llmSettings } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
   const totals = benchmarkTotals(results)
@@ -275,6 +295,8 @@ function BenchmarksPage() {
         <BenchmarkRunCard initialStatus={runStatus} />
         <BenchmarkScheduleCard />
       </div>
+
+      {llmSettings && <LlmSettingsCard initialSettings={llmSettings} />}
 
       <Card className="mt-4">
         <CardHeader className="flex-row items-center justify-between">
@@ -757,6 +779,176 @@ function BenchmarkScheduleCard() {
         {lastError && (
           <p className="text-xs text-destructive">
             Último error del disparo automático: {lastError}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function LlmSettingsCard({
+  initialSettings
+}: {
+  initialSettings: LlmSettings
+}) {
+  const doUpdateSettings = useServerFn(updateLlmSettings)
+  const [settings, setSettings] = useState(initialSettings)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [providerName, setProviderName] = useState(settings.provider_name)
+  const [model, setModel] = useState(settings.minimax_model ?? '')
+  const [baseUrl, setBaseUrl] = useState(settings.minimax_base_url ?? '')
+  const [apiKey, setApiKey] = useState('')
+  const [pending, setPending] = useState(false)
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault()
+    setPending(true)
+    try {
+      const updated = await doUpdateSettings({
+        data: {
+          provider_name: providerName,
+          ...(apiKey ? { minimax_api_key: apiKey } : {}),
+          minimax_model: model,
+          minimax_base_url: baseUrl
+        }
+      })
+      setSettings(updated)
+      setDialogOpen(false)
+      toast.success('Configuración del LLM actualizada.')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <Card className="mt-4">
+      <CardHeader className="flex-row items-center justify-between">
+        <div>
+          <CardTitle>Configuración del LLM</CardTitle>
+          <CardDescription>
+            Proveedor usado para juzgar la calidad de las atenciones. Sin una
+            API key configurada, "Ejecutar ahora" va a fallar.
+          </CardDescription>
+        </div>
+        <Dialog
+          open={dialogOpen}
+          onOpenChange={open => {
+            setDialogOpen(open)
+            if (open) {
+              setProviderName(settings.provider_name)
+              setModel(settings.minimax_model ?? '')
+              setBaseUrl(settings.minimax_base_url ?? '')
+              setApiKey('')
+            }
+          }}
+        >
+          <DialogTrigger render={<Button variant="secondary" />}>
+            <SettingsIcon data-icon="inline-start" />
+            {settings.has_api_key ? 'Editar' : 'Configurar'}
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Configuración del LLM</DialogTitle>
+              <DialogDescription>
+                La API key nunca se muestra -- dejala en blanco para conservar
+                la que ya está guardada.
+              </DialogDescription>
+            </DialogHeader>
+            <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="llm-provider">Proveedor</Label>
+                <Input
+                  id="llm-provider"
+                  value={providerName}
+                  onChange={e => setProviderName(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="llm-model">Modelo</Label>
+                <Input
+                  id="llm-model"
+                  value={model}
+                  onChange={e => setModel(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="llm-base-url">Base URL</Label>
+                <Input
+                  id="llm-base-url"
+                  type="url"
+                  value={baseUrl}
+                  onChange={e => setBaseUrl(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="llm-api-key">API key</Label>
+                <Input
+                  id="llm-api-key"
+                  type="password"
+                  autoComplete="off"
+                  value={apiKey}
+                  onChange={e => setApiKey(e.target.value)}
+                  placeholder={
+                    settings.has_api_key
+                      ? 'Dejar en blanco para no cambiarla'
+                      : 'Requerida'
+                  }
+                  required={!settings.has_api_key}
+                />
+              </div>
+              <DialogFooter>
+                <DialogClose
+                  render={<Button type="button" variant="outline" />}
+                >
+                  Cancelar
+                </DialogClose>
+                <Button type="submit" disabled={pending}>
+                  {pending ? 'Guardando...' : 'Guardar'}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </CardHeader>
+      <CardContent className="space-y-1.5 text-sm">
+        <p className="text-muted-foreground">
+          Proveedor:{' '}
+          <span className="text-foreground">{settings.provider_name}</span>
+        </p>
+        <p className="text-muted-foreground">
+          Modelo:{' '}
+          <span className="text-foreground">
+            {settings.minimax_model ?? 'sin configurar'}
+          </span>
+        </p>
+        <p className="text-muted-foreground">
+          Base URL:{' '}
+          <span className="text-foreground">
+            {settings.minimax_base_url ?? 'sin configurar'}
+          </span>
+        </p>
+        <p className="flex items-center gap-2 text-muted-foreground">
+          API key:
+          <Badge
+            variant="secondary"
+            className={
+              settings.has_api_key
+                ? 'bg-chart-2/15 text-chart-2'
+                : 'bg-destructive/10 text-destructive'
+            }
+          >
+            {settings.has_api_key ? 'Configurada' : 'Sin configurar'}
+          </Badge>
+        </p>
+        {settings.updated_at && (
+          <p className="text-xs text-muted-foreground">
+            Última actualización:{' '}
+            {new Date(settings.updated_at).toLocaleString()}
           </p>
         )}
       </CardContent>

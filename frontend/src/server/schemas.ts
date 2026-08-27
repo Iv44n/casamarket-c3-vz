@@ -386,6 +386,19 @@ export type BenchmarkRunStatus = {
 export const benchmarkRunRequestSchema = z.object({
   directions: z.array(z.enum(BENCHMARK_DIRECTIONS)).optional()
 })
+export type LlmSettings = {
+  provider_name: string
+  minimax_model: string | null
+  minimax_base_url: string | null
+  has_api_key: boolean
+  updated_at: string | null
+}
+export const updateLlmSettingsRequestSchema = z.object({
+  provider_name: z.string().min(1).optional(),
+  minimax_api_key: z.string().min(1).optional(),
+  minimax_model: z.string().min(1),
+  minimax_base_url: z.string().min(1)
+})
 export const benchmarkResultsRequestSchema = z.object({
   direction: z.enum(BENCHMARK_DIRECTIONS).optional(),
   dateFrom: z.string().regex(ISO_DATE_REGEX).optional(),

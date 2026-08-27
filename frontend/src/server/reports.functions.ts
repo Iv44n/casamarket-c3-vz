@@ -19,6 +19,7 @@ import {
   fetchContactsSyncStatus,
   fetchExtractionStatus,
   fetchHistoricalBackfillStatus,
+  fetchLlmSettings,
   fetchReportDailyCounts,
   fetchReportRows,
   fetchReportRowsHistory,
@@ -27,7 +28,8 @@ import {
   triggerBenchmarkAnalysis,
   triggerContactsSync,
   triggerExtractionRefresh,
-  triggerHistoricalBackfill
+  triggerHistoricalBackfill,
+  updateLlmSettingsOnBackend
 } from './backend.server'
 import type {
   AgentesFilter,
@@ -55,7 +57,8 @@ import {
   enumerateIsoDates,
   historicalBackfillRequestSchema,
   reportNameSchema,
-  reportRowsPageRequestSchema
+  reportRowsPageRequestSchema,
+  updateLlmSettingsRequestSchema
 } from './schemas'
 
 const ATTENTION_DATE_FIELD = 'Fecha registro'
@@ -650,3 +653,11 @@ export const getBenchmarkResults = createServerFn({ method: 'GET' })
   .handler(async ({ data }) => {
     return fetchBenchmarkResults(data)
   })
+
+export const getLlmSettings = createServerFn({ method: 'GET' }).handler(
+  async () => fetchLlmSettings()
+)
+
+export const updateLlmSettings = createServerFn({ method: 'POST' })
+  .validator(updateLlmSettingsRequestSchema)
+  .handler(async ({ data }) => updateLlmSettingsOnBackend(data))

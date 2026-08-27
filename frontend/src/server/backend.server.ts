@@ -14,6 +14,7 @@ import type {
   DailyCaseCount,
   ExtractionStatus,
   HistoricalBackfillStatus,
+  LlmSettings,
   ReportRow,
   ReportRowsPage
 } from './schemas'
@@ -320,5 +321,22 @@ export async function fetchBenchmarkResults(params: {
   const response = await backendFetch(
     `/benchmarks/results${qs ? `?${qs}` : ''}`
   )
+  return response.json()
+}
+export async function fetchLlmSettings(): Promise<LlmSettings> {
+  const response = await backendFetch('/benchmarks/settings')
+  return response.json()
+}
+export async function updateLlmSettingsOnBackend(data: {
+  provider_name?: string
+  minimax_api_key?: string
+  minimax_model: string
+  minimax_base_url: string
+}): Promise<LlmSettings> {
+  const response = await backendFetch('/benchmarks/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  })
   return response.json()
 }
