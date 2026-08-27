@@ -72,6 +72,20 @@ def me(current_user: CurrentUser = Depends(get_current_user)) -> UserPublic:
     )
 
 
+@router.get("/users")
+def list_users(_admin: CurrentUser = Depends(require_admin)) -> list[UserPublic]:
+    conn = store.get_connection()
+    try:
+        users = store.list_users(conn)
+    finally:
+        conn.close()
+
+    return [
+        UserPublic(id=u.id, username=u.username, is_admin=u.is_admin, created_at=u.created_at)
+        for u in users
+    ]
+
+
 @router.post("/users", status_code=201)
 def create_user(
     request: CreateUserRequest, _admin: CurrentUser = Depends(require_admin)

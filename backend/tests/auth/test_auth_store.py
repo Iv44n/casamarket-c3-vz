@@ -62,6 +62,23 @@ def test_count_users_reflects_the_number_of_created_accounts():
     assert store.count_users(conn) == 2
 
 
+def test_list_users_returns_every_account_ordered_by_id():
+    conn = _conn()
+    store.create_user(conn, "luis", "hash456", is_admin=False, created_at="2026-08-27T00:00:00")
+    store.create_user(conn, "ana", "hash123", is_admin=True, created_at="2026-08-27T00:00:01")
+
+    users = store.list_users(conn)
+
+    assert [u.username for u in users] == ["luis", "ana"]
+    assert [u.is_admin for u in users] == [False, True]
+
+
+def test_list_users_returns_an_empty_list_when_no_accounts_exist():
+    conn = _conn()
+
+    assert store.list_users(conn) == []
+
+
 def test_seed_bootstrap_admin_creates_the_account_when_table_is_empty():
     conn = _conn()
     auth_config = AuthConfig(

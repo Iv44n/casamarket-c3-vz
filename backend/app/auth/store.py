@@ -105,6 +105,19 @@ def count_users(conn: DBConnection) -> int:
     return cursor.fetchone()[0]
 
 
+def list_users(conn: DBConnection) -> list[UserRecord]:
+    """Sin paginacion a proposito -- una tabla de cuentas admin-creadas para un equipo interno
+    se espera chica (a diferencia de attention/callincoming/etc, que sí necesitan pagina server-
+    side, ver /data/attention-records)."""
+    cursor = conn.execute(
+        "SELECT id, username, password_hash, is_admin, created_at FROM users ORDER BY id"
+    )
+    return [
+        UserRecord(id=row[0], username=row[1], password_hash=row[2], is_admin=bool(row[3]), created_at=row[4])
+        for row in cursor.fetchall()
+    ]
+
+
 def seed_bootstrap_admin(
     conn: DBConnection, auth_config: config.AuthConfig, created_at: str
 ) -> UserRecord | None:

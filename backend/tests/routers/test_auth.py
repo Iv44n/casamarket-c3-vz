@@ -108,6 +108,27 @@ def test_me_returns_the_current_user(client: TestClient):
     assert body["is_admin"] is True
 
 
+def test_list_users_without_admin_token_returns_403(client: TestClient):
+    headers = _bearer(1, "ana", False)
+
+    response = client.get("/auth/users", headers=headers)
+
+    assert response.status_code == 403
+
+
+def test_list_users_with_admin_token_returns_every_account(client: TestClient):
+    admin_headers = _bearer(1, "admin", True)
+    client.post(
+        "/auth/users", json={"username": "luis", "password": "s3cret"}, headers=admin_headers
+    )
+
+    response = client.get("/auth/users", headers=admin_headers)
+
+    assert response.status_code == 200
+    usernames = [u["username"] for u in response.json()]
+    assert usernames == ["luis"]
+
+
 def test_create_user_without_admin_token_returns_403(client: TestClient):
     headers = _bearer(1, "ana", False)
 
