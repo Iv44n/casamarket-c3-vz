@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AtencionesRouteImport } from './routes/atenciones'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as StatusRouteImport } from './routes/status'
 import { Route as TendenciasHistoricasRouteImport } from './routes/tendencias-historicas'
 import { Route as ReportsIndexRouteImport } from './routes/reports/index'
@@ -24,6 +25,11 @@ const IndexRoute = IndexRouteImport.update({
 const AtencionesRoute = AtencionesRouteImport.update({
   id: '/atenciones',
   path: '/atenciones',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const StatusRoute = StatusRouteImport.update({
@@ -50,6 +56,7 @@ const ReportsReportNameRoute = ReportsReportNameRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/atenciones': typeof AtencionesRoute
+  '/login': typeof LoginRoute
   '/status': typeof StatusRoute
   '/tendencias-historicas': typeof TendenciasHistoricasRoute
   '/reports/$reportName': typeof ReportsReportNameRoute
@@ -58,6 +65,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/atenciones': typeof AtencionesRoute
+  '/login': typeof LoginRoute
   '/status': typeof StatusRoute
   '/tendencias-historicas': typeof TendenciasHistoricasRoute
   '/reports/$reportName': typeof ReportsReportNameRoute
@@ -67,6 +75,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/atenciones': typeof AtencionesRoute
+  '/login': typeof LoginRoute
   '/status': typeof StatusRoute
   '/tendencias-historicas': typeof TendenciasHistoricasRoute
   '/reports/$reportName': typeof ReportsReportNameRoute
@@ -77,6 +86,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/atenciones'
+    | '/login'
     | '/status'
     | '/tendencias-historicas'
     | '/reports/$reportName'
@@ -85,6 +95,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/atenciones'
+    | '/login'
     | '/status'
     | '/tendencias-historicas'
     | '/reports/$reportName'
@@ -93,6 +104,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/atenciones'
+    | '/login'
     | '/status'
     | '/tendencias-historicas'
     | '/reports/$reportName'
@@ -102,6 +114,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AtencionesRoute: typeof AtencionesRoute
+  LoginRoute: typeof LoginRoute
   StatusRoute: typeof StatusRoute
   TendenciasHistoricasRoute: typeof TendenciasHistoricasRoute
   ReportsReportNameRoute: typeof ReportsReportNameRoute
@@ -122,6 +135,13 @@ declare module '@tanstack/react-router' {
       path: '/atenciones'
       fullPath: '/atenciones'
       preLoaderRoute: typeof AtencionesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/status': {
@@ -158,6 +178,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AtencionesRoute: AtencionesRoute,
+  LoginRoute: LoginRoute,
   StatusRoute: StatusRoute,
   TendenciasHistoricasRoute: TendenciasHistoricasRoute,
   ReportsReportNameRoute: ReportsReportNameRoute,

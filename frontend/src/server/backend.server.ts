@@ -1,3 +1,5 @@
+import { redirect } from '@tanstack/react-router'
+import { deleteCookie, getCookie } from '@tanstack/react-start/server'
 import type {
   AgentesFilter,
   AttentionRecordsPageRequest,
@@ -12,17 +14,52 @@ import type {
 } from './schemas'
 
 const BASE_URL = process.env.C3_API_URL ?? 'http://127.0.0.1:8000'
+export const SESSION_COOKIE_NAME = 'c3_session'
+// El backend ahora exige Authorization: Bearer <jwt> en todo salvo estos dos --
+// ver backend/CLAUDE.md's "Auth" section. Login necesita poder recibir su propio
+// 401 (credenciales invalidas) sin que backendFetch lo trate como sesion expirada.
+const PUBLIC_BACKEND_PATHS = ['/auth/login', '/health']
+function isPublicBackendPath(path: string): boolean {
+  return PUBLIC_BACKEND_PATHS.some(
+    publicPath => path === publicPath || path.startsWith(`${publicPath}?`)
+  )
+}
 async function backendFetch(
   path: string,
   init?: RequestInit
 ): Promise<Response> {
-  const response = await fetch(`${BASE_URL}${path}`, init)
+  const isPublic = isPublicBackendPath(path)
+  const token = getCookie(SESSION_COOKIE_NAME)
+  if (!isPublic && !token) {
+    throw redirect({ to: '/login' })
+  }
+  const headers = new Headers(init?.headers)
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  const response = await fetch(`${BASE_URL}${path}`, { ...init, headers })
+  if (response.status === 401) {
+    if (isPublic) return response
+    deleteCookie(SESSION_COOKIE_NAME, { path: '/' })
+    throw redirect({ to: '/login' })
+  }
   if (!response.ok && response.status !== 404) {
     throw new Error(
       `C3 backend ${path} responded ${response.status}: ${await response.text()}`
     )
   }
   return response
+}
+export async function authenticateWithBackend(
+  username: string,
+  password: string
+): Promise<string | null> {
+  const response = await backendFetch('/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  })
+  if (response.status === 401) return null
+  const data: { access_token: string } = await response.json()
+  return data.access_token
 }
 const _reportRowsCache = new Map<
   string,

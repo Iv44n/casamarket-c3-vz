@@ -1,11 +1,14 @@
 import { Link, useRouterState } from '@tanstack/react-router'
+import { useServerFn } from '@tanstack/react-start'
 import {
   ActivityIcon,
   BarChartHorizontalIcon,
+  LogOutIcon,
   TableIcon,
   TrendingUpIcon
 } from 'lucide-react'
 import { ModeToggle } from '#/components/mode-toggle'
+import { Button } from '#/components/ui/button'
 import {
   Sidebar,
   SidebarContent,
@@ -18,6 +21,12 @@ import {
   SidebarMenuItem,
   SidebarRail
 } from '#/components/ui/sidebar'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger
+} from '#/components/ui/tooltip'
+import { logout } from '#/server/auth.functions'
 
 const NAV_ITEMS = [
   { to: '/reports' as const, label: 'Reportes', icon: TableIcon },
@@ -35,6 +44,7 @@ const NAV_ITEMS = [
 ] as const
 export function AppSidebar() {
   const pathname = useRouterState({ select: state => state.location.pathname })
+  const doLogout = useServerFn(logout)
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
@@ -69,7 +79,24 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
-        <ModeToggle />
+        <div className="flex items-center gap-1">
+          <ModeToggle />
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Cerrar sesion"
+                  onClick={() => doLogout()}
+                />
+              }
+            >
+              <LogOutIcon />
+            </TooltipTrigger>
+            <TooltipContent>Cerrar sesion</TooltipContent>
+          </Tooltip>
+        </div>
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

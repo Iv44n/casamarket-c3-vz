@@ -101,6 +101,10 @@ function defaultDemandWeekStart(): string {
 function defaultDemandWeekEnd(): string {
   return addDaysIso(defaultDemandWeekStart(), 6)
 }
+export const loginRequestSchema = z.object({
+  username: z.string().min(1),
+  password: z.string().min(1)
+})
 export const backfillRequestSchema = z.object({
   date: z.string().regex(ISO_DATE_REGEX)
 })

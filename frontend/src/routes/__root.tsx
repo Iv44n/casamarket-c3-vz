@@ -18,8 +18,13 @@ import {
 } from '#/components/ui/sidebar'
 import { TooltipProvider } from '#/components/ui/tooltip'
 import { cn } from '#/lib/utils'
+import { requireSession } from '#/server/auth.functions'
 import appCss from '../styles.css?url'
 export const Route = createRootRoute({
+  beforeLoad: async ({ location }) => {
+    if (location.pathname === '/login') return
+    await requireSession()
+  },
   head: () => ({
     meta: [
       {
@@ -45,6 +50,7 @@ export const Route = createRootRoute({
 function RootDocument({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({ select: state => state.location.pathname })
   const isWallboard = pathname === '/atenciones'
+  const isAuthPage = pathname === '/login'
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -52,32 +58,39 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         <ThemeProvider defaultTheme="system" storageKey="theme">
-          <AutoRefreshProvider>
-            <TooltipProvider>
-              <SidebarProvider>
-                <AppSidebar />
-                <SidebarInset>
-                  <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
-                    <SidebarTrigger />
-                    <Separator orientation="vertical" className="h-4" />
-                  </header>
-                  <div className="flex min-h-0 flex-1 flex-col">
-                    <div
-                      className={cn(
-                        'flex flex-1 flex-col',
-                        isWallboard
-                          ? 'min-h-[calc(100dvh-3.5rem)] px-6 py-4'
-                          : 'mx-auto w-full max-w-5xl px-4 py-8'
-                      )}
-                    >
-                      {children}
+          {isAuthPage ? (
+            <>
+              <TooltipProvider>{children}</TooltipProvider>
+              <Toaster />
+            </>
+          ) : (
+            <AutoRefreshProvider>
+              <TooltipProvider>
+                <SidebarProvider>
+                  <AppSidebar />
+                  <SidebarInset>
+                    <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
+                      <SidebarTrigger />
+                      <Separator orientation="vertical" className="h-4" />
+                    </header>
+                    <div className="flex min-h-0 flex-1 flex-col">
+                      <div
+                        className={cn(
+                          'flex flex-1 flex-col',
+                          isWallboard
+                            ? 'min-h-[calc(100dvh-3.5rem)] px-6 py-4'
+                            : 'mx-auto w-full max-w-5xl px-4 py-8'
+                        )}
+                      >
+                        {children}
+                      </div>
                     </div>
-                  </div>
-                </SidebarInset>
-              </SidebarProvider>
-            </TooltipProvider>
-            <Toaster />
-          </AutoRefreshProvider>
+                  </SidebarInset>
+                </SidebarProvider>
+              </TooltipProvider>
+              <Toaster />
+            </AutoRefreshProvider>
+          )}
         </ThemeProvider>
         <TanStackDevtools
           config={{
