@@ -191,6 +191,32 @@ def test_daily_counts_excludes_null_and_malformed_dates():
     assert counts == [{"date": "2026-08-18", "count": 1}]
 
 
+def test_daily_counts_filters_by_agentes_with_sin_agente_fallback():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("ana", agente="Ana", fecha_registro="18/08/2026"),
+            _row("bot", agente="Bot", fecha_registro="18/08/2026"),
+            _row("dash", agente="-", fecha_registro="18/08/2026"),
+        ],
+    )
+
+    counts = store.daily_counts(conn, "attention", agentes=["Ana", "Sin agente"])
+
+    assert counts == [{"date": "2026-08-18", "count": 2}]
+
+
+def test_daily_counts_agentes_empty_list_matches_nothing():
+    conn = _conn()
+    _seed(conn, "attention", [_row("ana", agente="Ana")])
+
+    counts = store.daily_counts(conn, "attention", agentes=[])
+
+    assert counts == []
+
+
 def test_migration_adds_time_columns_and_backfills_them_from_row_json():
     conn = sqlite3.connect(":memory:")
     # Simula el esquema pre-migracion (sin hora_registro/hora_final) que ya existe en el Turso

@@ -508,6 +508,7 @@ def daily_counts(
     report_name: str,
     date_from: str | None = None,
     date_to: str | None = None,
+    agentes: list[str] | None = None,
 ) -> list[dict]:
     """Conteo de filas por dia de calendario, agregado en SQL (GROUP BY) en vez de traer cada
     row_json solo para contarlas del lado del caller -- pensado para graficos de tendencia
@@ -516,7 +517,13 @@ def daily_counts(
     transfiere ~3.8MB y tarda 8s+ (json.loads() por fila, tanto en el protocolo de
     turso_serverless como aca arriba en history_rows) -- GROUP BY server-side reduce eso a un
     puñado de filas (una por dia) sin ese costo. Solo cubre los reportes en _HISTORY_DATE_COLUMN
-    (no "transfer": ver su comentario arriba sobre por que no se filtra/agrupa por dia)."""
+    (no "transfer": ver su comentario arriba sobre por que no se filtra/agrupa por dia).
+
+    `agentes` filtra ANTES del GROUP BY (mismo patron de normalizacion "Sin agente" que
+    _attention_where usa para /data/attention-records, incluido el mismo caso especial de
+    lista vacia = "seleccion explicita de ningun agente" en vez de "sin filtro") -- pensado
+    para excluir agentes especiales (bots/cuentas internas) del analisis de tendencias sin
+    tener que caer al endpoint de detalle fila por fila."""
     date_column = _HISTORY_DATE_COLUMN[report_name]
     iso_expr = _iso_date_expr(date_column)
     clauses = [f"{iso_expr} IS NOT NULL"]
@@ -525,6 +532,14 @@ def daily_counts(
         clauses.append(f"{iso_expr} BETWEEN ? AND ?")
         params.append(date_from)
         params.append(date_to or date_from)
+    if agentes is not None:
+        if len(agentes) == 0:
+            clauses.append("1=0")
+        else:
+            agente_norm = _norm_expr("agente", "Sin agente", ("", "-"))
+            placeholders = ", ".join("?" for _ in agentes)
+            clauses.append(f"{agente_norm} IN ({placeholders})")
+            params.extend(agentes)
     where_sql = " AND ".join(clauses)
     cursor = conn.execute(
         f"SELECT {iso_expr} AS day, COUNT(*) FROM {report_name} WHERE {where_sql} "

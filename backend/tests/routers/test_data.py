@@ -249,6 +249,30 @@ def test_get_report_daily_counts_404s_for_reports_without_a_date_column(client: 
     assert response.status_code == 404
 
 
+def test_get_report_daily_counts_filters_by_agentes_query_params(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    store._init_schema(conn)
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [
+            {"ID atención": "ana", "Agente": "Ana", "Fecha registro": "18/08/2026"},
+            {"ID atención": "bot", "Agente": "Bot", "Fecha registro": "18/08/2026"},
+        ],
+        observed_at="2026-08-19T00:00:00",
+    )
+    monkeypatch.setattr(store, "get_connection", lambda: conn)
+
+    response = client.get(
+        "/data/attention/history/daily-counts", params={"agentes": ["Ana"]}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [{"date": "2026-08-18", "count": 1}]
+
+
 def test_get_attention_records_returns_paginated_shape(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ):

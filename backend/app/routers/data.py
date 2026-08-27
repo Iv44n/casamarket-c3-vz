@@ -137,10 +137,13 @@ def get_report_daily_counts(
     report_name: str,
     date_from: str | None = Query(default=None, pattern=ISO_DATE_PATTERN),
     date_to: str | None = Query(default=None, pattern=ISO_DATE_PATTERN),
+    agentes: list[str] | None = Query(default=None),
 ) -> list[DailyCount]:
     """Conteo de filas por dia (GROUP BY server-side) para graficos de tendencia -- ver
     store.daily_counts() para por que existe: no requiere traer/parsear cada row_json como
-    /{report_name}/history, asi que es sensiblemente mas liviano para rangos largos."""
+    /{report_name}/history, asi que es sensiblemente mas liviano para rangos largos.
+    `agentes` (mismo patron repetido que /attention-records) filtra antes del GROUP BY, para
+    poder excluir agentes especiales sin perder el camino rapido."""
     if report_name not in DAILY_COUNT_REPORTS:
         raise HTTPException(
             status_code=404,
@@ -149,6 +152,6 @@ def get_report_daily_counts(
 
     conn = store.get_connection()
     try:
-        return store.daily_counts(conn, report_name, date_from, date_to)
+        return store.daily_counts(conn, report_name, date_from, date_to, agentes=agentes)
     finally:
         conn.close()
