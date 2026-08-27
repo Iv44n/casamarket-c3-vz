@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
-import { RefreshCwIcon, TriangleAlertIcon } from 'lucide-react'
+import { ChevronDownIcon, RefreshCwIcon, TriangleAlertIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { DailyTrendChart } from '#/components/daily-trend-chart'
@@ -14,6 +14,14 @@ import {
   CardHeader,
   CardTitle
 } from '#/components/ui/card'
+import { Checkbox } from '#/components/ui/checkbox'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger
+} from '#/components/ui/dropdown-menu'
+import { Label } from '#/components/ui/label'
+import { Separator } from '#/components/ui/separator'
 import { Skeleton } from '#/components/ui/skeleton'
 import { buildDailyTrend, buildDemandHeatmap } from '#/lib/attentions-analytics'
 import { cn } from '#/lib/utils'
@@ -22,18 +30,57 @@ import {
   getDemandAnalytics
 } from '#/server/reports.functions'
 import {
+  type AgentesFilter,
   type TendenciasHistoricasSearch,
   tendenciasHistoricasSearchSchema
 } from '#/server/schemas'
+
+function agentesLabel(filter: AgentesFilter, available: string[]): string {
+  if (filter === 'all' || filter.length === available.length) return 'Todos'
+  if (filter.length === 0) return 'Ninguno'
+  if (filter.length === 1) return filter[0]
+  return `${filter.length} agentes`
+}
+
+function MultiSelectQuickActions({
+  onSelectAll,
+  onSelectNone
+}: {
+  onSelectAll: () => void
+  onSelectNone: () => void
+}) {
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2 px-3 py-1.5">
+        <button
+          type="button"
+          className="text-xs font-medium text-primary hover:underline"
+          onClick={onSelectAll}
+        >
+          Marcar todos
+        </button>
+        <button
+          type="button"
+          className="text-xs font-medium text-primary hover:underline"
+          onClick={onSelectNone}
+        >
+          Ninguno
+        </button>
+      </div>
+      <Separator className="mb-1" />
+    </>
+  )
+}
 
 export const Route = createFileRoute('/tendencias-historicas')({
   ssr: 'data-only',
   validateSearch: tendenciasHistoricasSearchSchema,
   loader: async ({ location }) => {
-    const { date, dateEnd } = location.search as TendenciasHistoricasSearch
+    const { date, dateEnd, agentes } =
+      location.search as TendenciasHistoricasSearch
     const [demand, dailyTrend] = await Promise.all([
-      getDemandAnalytics({ data: { date, dateEnd } }),
-      getDailyCaseTrend({ data: { date, dateEnd } })
+      getDemandAnalytics({ data: { date, dateEnd, agentes } }),
+      getDailyCaseTrend({ data: { date, dateEnd, agentes } })
     ])
     return { demand, dailyTrend }
   },
@@ -76,7 +123,7 @@ function DailyTrendError({
 
 function TendenciasHistoricasPage() {
   const initialData = Route.useLoaderData()
-  const { date, dateEnd } = Route.useSearch()
+  const { date, dateEnd, agentes } = Route.useSearch()
   const navigate = Route.useNavigate()
   const fetchDailyTrend = useServerFn(getDailyCaseTrend)
   const fetchDemandAnalytics = useServerFn(getDemandAnalytics)
@@ -99,13 +146,21 @@ function TendenciasHistoricasPage() {
   // de carga propio de esta card (y el de la card de abajo). Cada card resuelve su
   // propio refetch/loading/error, igual que ya hace /atenciones.
   const refetchTrend = useCallback(
-    async (targetDate: typeof date, targetDateEnd: typeof dateEnd) => {
+    async (
+      targetDate: typeof date,
+      targetDateEnd: typeof dateEnd,
+      targetAgentes: typeof agentes
+    ) => {
       const requestId = ++trendRequestIdRef.current
       setTrendLoading(true)
       setTrendError(null)
       try {
         const result = await fetchDailyTrend({
-          data: { date: targetDate, dateEnd: targetDateEnd }
+          data: {
+            date: targetDate,
+            dateEnd: targetDateEnd,
+            agentes: targetAgentes
+          }
         })
         if (requestId !== trendRequestIdRef.current) return
         setDailyTrendAnalytics(result)
@@ -123,16 +178,24 @@ function TendenciasHistoricasPage() {
       isFirstTrendRun.current = false
       return
     }
-    refetchTrend(date, dateEnd)
-  }, [date, dateEnd, refetchTrend])
+    refetchTrend(date, dateEnd, agentes)
+  }, [date, dateEnd, agentes, refetchTrend])
 
   const refetchDemand = useCallback(
-    async (targetDate: typeof date, targetDateEnd: typeof dateEnd) => {
+    async (
+      targetDate: typeof date,
+      targetDateEnd: typeof dateEnd,
+      targetAgentes: typeof agentes
+    ) => {
       const requestId = ++demandRequestIdRef.current
       setDemandLoading(true)
       try {
         const result = await fetchDemandAnalytics({
-          data: { date: targetDate, dateEnd: targetDateEnd }
+          data: {
+            date: targetDate,
+            dateEnd: targetDateEnd,
+            agentes: targetAgentes
+          }
         })
         if (requestId !== demandRequestIdRef.current) return
         setDemandAnalytics(result)
@@ -151,8 +214,8 @@ function TendenciasHistoricasPage() {
       isFirstDemandRun.current = false
       return
     }
-    refetchDemand(date, dateEnd)
-  }, [date, dateEnd, refetchDemand])
+    refetchDemand(date, dateEnd, agentes)
+  }, [date, dateEnd, agentes, refetchDemand])
 
   const dailyTrend = useMemo(
     () => buildDailyTrend(dailyTrendAnalytics),
@@ -162,6 +225,24 @@ function TendenciasHistoricasPage() {
     () => buildDemandHeatmap(demandAnalytics),
     [demandAnalytics]
   )
+  const availableAgentes = demandAnalytics.availableAgentes
+
+  function isAgenteChecked(agenteName: string) {
+    return agentes === 'all' || agentes.includes(agenteName)
+  }
+  function toggleAgente(agenteName: string) {
+    const current = agentes === 'all' ? availableAgentes : agentes
+    const next = current.includes(agenteName)
+      ? current.filter(a => a !== agenteName)
+      : [...current, agenteName]
+    navigate({ search: prev => ({ ...prev, agentes: next }) })
+  }
+  function selectAllAgentes() {
+    navigate({ search: prev => ({ ...prev, agentes: 'all' }) })
+  }
+  function selectNoAgentes() {
+    navigate({ search: prev => ({ ...prev, agentes: [] }) })
+  }
 
   return (
     <div>
@@ -173,19 +254,62 @@ function TendenciasHistoricasPage() {
             atenciones de WhatsApp -- identifica picos de capacidad.
           </p>
         </div>
-        <DateRangeFilter
-          date={date}
-          dateEnd={dateEnd}
-          onChange={(newDate, newDateEnd) =>
-            navigate({
-              search: prev => ({
-                ...prev,
-                date: newDate,
-                dateEnd: newDateEnd ?? newDate
+        <div className="flex items-center gap-2">
+          {availableAgentes.length > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-muted-foreground">
+                Agentes
+              </span>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button
+                      variant="outline"
+                      className="w-40 justify-between font-normal"
+                    />
+                  }
+                >
+                  <span className="min-w-0 truncate">
+                    {agentesLabel(agentes, availableAgentes)}
+                  </span>
+                  <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-64">
+                  <MultiSelectQuickActions
+                    onSelectAll={selectAllAgentes}
+                    onSelectNone={selectNoAgentes}
+                  />
+                  {availableAgentes.map(agenteName => (
+                    <Label
+                      key={agenteName}
+                      className="cursor-default items-start rounded-xl px-3 py-2 font-normal hover:bg-accent"
+                    >
+                      <Checkbox
+                        checked={isAgenteChecked(agenteName)}
+                        onCheckedChange={() => toggleAgente(agenteName)}
+                        className="mt-0.5"
+                      />
+                      {agenteName}
+                    </Label>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
+          <DateRangeFilter
+            date={date}
+            dateEnd={dateEnd}
+            onChange={(newDate, newDateEnd) =>
+              navigate({
+                search: prev => ({
+                  ...prev,
+                  date: newDate,
+                  dateEnd: newDateEnd ?? newDate
+                })
               })
-            })
-          }
-        />
+            }
+          />
+        </div>
       </div>
 
       <Card className="mt-6">
@@ -230,7 +354,7 @@ function TendenciasHistoricasPage() {
           ) : trendError ? (
             <DailyTrendError
               message={trendError}
-              onRetry={() => refetchTrend(date, dateEnd)}
+              onRetry={() => refetchTrend(date, dateEnd, agentes)}
             />
           ) : dailyTrend.points.length === 0 ? (
             <p className="text-sm text-muted-foreground">

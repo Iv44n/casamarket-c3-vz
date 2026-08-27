@@ -47,6 +47,9 @@ export const dateFilterSchema = z.object({
   date: dateFilterValue.default(todayIsoDate),
   dateEnd: dateEndValue
 })
+export const dateAndAgentesFilterSchema = dateFilterSchema.extend({
+  agentes: z.union([z.literal('all'), z.array(z.string())]).default('all')
+})
 export function todayIsoDate(): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Lima',
@@ -138,10 +141,11 @@ export const attentionsSearchSchema = z.object({
   demorasPage: z.number().int().min(1).default(1)
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
-export const tendenciasHistoricasSearchSchema = z.object({
-  date: dateFilterValue.default(defaultDemandWeekStart),
-  dateEnd: dateEndValue.default(defaultDemandWeekEnd)
-})
+export const tendenciasHistoricasSearchSchema =
+  dateAndAgentesFilterSchema.extend({
+    date: dateFilterValue.default(defaultDemandWeekStart),
+    dateEnd: dateEndValue.default(defaultDemandWeekEnd)
+  })
 export type TendenciasHistoricasSearch = z.infer<
   typeof tendenciasHistoricasSearchSchema
 >
@@ -234,6 +238,7 @@ export type DemandBucketCount = {
 }
 export type DemandAnalytics = {
   available: boolean
+  availableAgentes: string[]
   buckets: DemandBucketCount[]
 }
 export type DailyCaseCount = {

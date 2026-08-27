@@ -1,4 +1,5 @@
 import type {
+  AgentesFilter,
   AttentionRecordsPageRequest,
   BackfillRunSummary,
   BackfillStatus,
@@ -117,11 +118,15 @@ export async function fetchReportRowsHistory(
 export async function fetchReportDailyCounts(
   reportName: string,
   dateFrom: string,
-  dateTo: string
+  dateTo: string,
+  agentes: AgentesFilter = 'all'
 ): Promise<DailyCaseCount[] | null> {
   const params = new URLSearchParams()
   params.set('date_from', dateFrom)
   params.set('date_to', dateTo)
+  if (agentes !== 'all') {
+    for (const agente of agentes) params.append('agentes', agente)
+  }
   const response = await backendFetch(
     `/data/${reportName}/history/daily-counts?${params.toString()}`
   )

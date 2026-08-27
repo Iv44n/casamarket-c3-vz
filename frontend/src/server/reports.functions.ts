@@ -27,6 +27,7 @@ import {
   triggerHistoricalBackfill
 } from './backend.server'
 import type {
+  AgentesFilter,
   AttentionDirection,
   AttentionRecord,
   AttentionRecordsPage,
@@ -44,6 +45,7 @@ import type {
 import {
   attentionRecordsPageRequestSchema,
   backfillRequestSchema,
+  dateAndAgentesFilterSchema,
   dateFilterSchema,
   enumerateIsoDates,
   historicalBackfillRequestSchema,
@@ -179,6 +181,9 @@ function agenteKeyOf(row: ReportRow): string {
     agente.trim() !== '-'
     ? agente
     : 'Sin agente'
+}
+function agenteAllowed(row: ReportRow, agentes: AgentesFilter): boolean {
+  return agentes === 'all' || agentes.includes(agenteKeyOf(row))
 }
 function campanaKeyOf(row: ReportRow): string {
   const campana = row.Campaña
@@ -458,51 +463,82 @@ function aggregateDemandBuckets(rows: ReportRow[] | null): DemandBucketCount[] {
   }))
 }
 
+// El endpoint de historial no agrega por agente, asi que el filtro se aplica aca en
+// memoria despues de traer las filas -- availableAgentes se deriva de las filas SIN
+// filtrar (solo por fecha) para que la lista de opciones no se achique al deseleccionar
+// agentes.
 export const getDemandAnalytics = createServerFn({ method: 'GET' })
-  .validator(dateFilterSchema)
+  .validator(dateAndAgentesFilterSchema)
   .handler(async ({ data }): Promise<DemandAnalytics> => {
     const { dateFrom, dateTo } = toHistoryDateRange(data.date, data.dateEnd)
     const [attentionRows, outboundRows] = await Promise.all([
       fetchReportRowsHistory('attention', dateFrom, dateTo),
       fetchReportRowsHistory('outboundattention', dateFrom, dateTo)
     ])
+    const dateFilteredAttentionRows =
+      attentionRows === null
+        ? null
+        : filterRowsByDate(
+            attentionRows,
+            ATTENTION_DATE_FIELD,
+            data.date,
+            data.dateEnd
+          )
+    const dateFilteredOutboundRows =
+      outboundRows === null
+        ? null
+        : filterRowsByDate(
+            outboundRows,
+            ATTENTION_DATE_FIELD,
+            data.date,
+            data.dateEnd
+          )
+    const availableAgentes = [
+      ...new Set(
+        [
+          ...(dateFilteredAttentionRows ?? []),
+          ...(dateFilteredOutboundRows ?? [])
+        ].map(agenteKeyOf)
+      )
+    ].sort((a, b) => a.localeCompare(b))
     return {
       available: attentionRows !== null || outboundRows !== null,
+      availableAgentes,
       buckets: [
         ...aggregateDemandBuckets(
-          attentionRows === null
+          dateFilteredAttentionRows === null
             ? null
-            : filterRowsByDate(
-                attentionRows,
-                ATTENTION_DATE_FIELD,
-                data.date,
-                data.dateEnd
+            : dateFilteredAttentionRows.filter(row =>
+                agenteAllowed(row, data.agentes)
               )
         ),
         ...aggregateDemandBuckets(
-          outboundRows === null
+          dateFilteredOutboundRows === null
             ? null
-            : filterRowsByDate(
-                outboundRows,
-                ATTENTION_DATE_FIELD,
-                data.date,
-                data.dateEnd
+            : dateFilteredOutboundRows.filter(row =>
+                agenteAllowed(row, data.agentes)
               )
         )
       ]
     }
   })
 
-// Usa /history/daily-counts (agregado con GROUP BY en SQL del lado del backend) en vez de
-// fetchReportRowsHistory -- para un rango de 30 dias eso es ~30 filas en vez de miles de
-// filas completas, sub-segundo en vez de los 8s+ medidos con el endpoint de detalle.
+// Usa /history/daily-counts (agregado con GROUP BY en SQL del lado del backend, filtro por
+// agente incluido -- ver commit 016eba8 del backend) en vez de fetchReportRowsHistory --
+// para un rango de 30 dias eso es ~30 filas en vez de miles de filas completas, sub-segundo
+// en vez de los 8s+ medidos con el endpoint de detalle.
 export const getDailyCaseTrend = createServerFn({ method: 'GET' })
-  .validator(dateFilterSchema)
+  .validator(dateAndAgentesFilterSchema)
   .handler(async ({ data }): Promise<DailyTrendAnalytics> => {
     const { dateFrom, dateTo } = toHistoryDateRange(data.date, data.dateEnd)
     const [attentionCounts, outboundCounts] = await Promise.all([
-      fetchReportDailyCounts('attention', dateFrom, dateTo),
-      fetchReportDailyCounts('outboundattention', dateFrom, dateTo)
+      fetchReportDailyCounts('attention', dateFrom, dateTo, data.agentes),
+      fetchReportDailyCounts(
+        'outboundattention',
+        dateFrom,
+        dateTo,
+        data.agentes
+      )
     ])
     const counts = new Map<string, number>()
     for (const dailyCounts of [attentionCounts, outboundCounts]) {
