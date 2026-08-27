@@ -3,7 +3,9 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
-from app.auth.dependencies import CurrentUser, get_current_user
+from app.auth import store as auth_store
+from app.auth.dependencies import CurrentUser, get_current_user, require_admin
+from app.benchmarks import settings as llm_settings
 from app.benchmarks import state
 from app.extraction import store
 from app.main import app
@@ -27,6 +29,7 @@ _DONE = BenchmarkRunStatus(
 @pytest.fixture
 def client():
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(1, "test", True)
+    app.dependency_overrides[require_admin] = lambda: CurrentUser(1, "test", True)
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
@@ -149,3 +152,102 @@ def test_results_422s_for_a_malformed_date(client: TestClient):
     response = client.get("/benchmarks/results", params={"date_from": "18-08-2026"})
 
     assert response.status_code == 422
+
+
+def _patch_llm_settings_connection(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    # Conexion fresca por llamada, respaldada por un archivo temporal -- mismo motivo que
+    # tests/routers/test_auth.py: un lifespan/otro llamador no debe dejar la conexion
+    # inutilizable para el resto del test si comparten una sola conexion en vez de una por call.
+    db_path = tmp_path / "llm-settings-test.db"
+
+    def _get_connection() -> sqlite3.Connection:
+        conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        llm_settings._init_schema(conn)
+        return conn
+
+    monkeypatch.setattr(llm_settings, "get_connection", _get_connection)
+
+
+def test_get_llm_settings_without_admin_returns_403(
+    client: TestClient, tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    # Saca el override de require_admin (el fixture `client` lo pone por default para las
+    # otras pruebas de este archivo) para que corra la verificacion real contra la DB de auth
+    # -- con una tabla users vacia, "test" no existe -> 403. Mismo store.get_connection que
+    # tests/routers/test_auth.py monkeypatchea, para no pegarle a la Turso real desde un test.
+    del app.dependency_overrides[require_admin]
+
+    db_path = tmp_path / "auth-test.db"
+
+    def _get_auth_connection() -> sqlite3.Connection:
+        conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        auth_store._init_schema(conn)
+        return conn
+
+    monkeypatch.setattr(auth_store, "get_connection", _get_auth_connection)
+
+    response = client.get("/benchmarks/settings")
+
+    assert response.status_code == 403
+
+
+def test_get_llm_settings_defaults_when_nothing_configured_yet(
+    client: TestClient, tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    _patch_llm_settings_connection(monkeypatch, tmp_path)
+
+    response = client.get("/benchmarks/settings")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "provider_name": "minimax",
+        "minimax_model": None,
+        "minimax_base_url": None,
+        "has_api_key": False,
+        "updated_at": None,
+    }
+
+
+def test_put_llm_settings_saves_and_never_returns_the_raw_api_key(
+    client: TestClient, tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    _patch_llm_settings_connection(monkeypatch, tmp_path)
+
+    response = client.put(
+        "/benchmarks/settings",
+        json={
+            "minimax_api_key": "mm-secreta",
+            "minimax_model": "MiniMax-M1",
+            "minimax_base_url": "https://api.minimax.io/v1",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["has_api_key"] is True
+    assert body["minimax_model"] == "MiniMax-M1"
+    assert "minimax_api_key" not in body
+    assert "mm-secreta" not in response.text
+
+
+def test_put_llm_settings_without_api_key_preserves_the_existing_one(
+    client: TestClient, tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    _patch_llm_settings_connection(monkeypatch, tmp_path)
+    client.put(
+        "/benchmarks/settings",
+        json={
+            "minimax_api_key": "mm-secreta",
+            "minimax_model": "MiniMax-M1",
+            "minimax_base_url": "https://api.minimax.io/v1",
+        },
+    )
+
+    response = client.put(
+        "/benchmarks/settings",
+        json={"minimax_model": "MiniMax-M2", "minimax_base_url": "https://api.minimax.io/v1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["has_api_key"] is True
+    assert response.json()["minimax_model"] == "MiniMax-M2"

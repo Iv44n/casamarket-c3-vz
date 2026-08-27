@@ -1,4 +1,4 @@
-from ... import config
+from .. import settings
 from .base import LLMProvider
 from .judge import QualityJudgement, judge_conversation
 from .openai_provider import build_openai_provider
@@ -6,7 +6,7 @@ from .openai_provider import build_openai_provider
 __all__ = ["LLMProvider", "QualityJudgement", "judge_conversation", "build_provider"]
 
 
-def build_provider(llm_config: "config.LLMConfig") -> LLMProvider:
+def build_provider(llm_config: "settings.LLMConfig") -> LLMProvider:
     """Factory que despacha por `llm_config.provider_name` -- hoy solo existe la rama
     'minimax'. Agregar un proveedor nuevo con formato propio es una clase nueva (ver
     openai_provider.py) + una rama nueva aca, sin tocar judge.py ni benchmarks/pipeline.py.

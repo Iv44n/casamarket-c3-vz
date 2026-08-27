@@ -11,6 +11,7 @@ from .. import config, schemas
 from ..c3 import massive, massive_zip
 from ..extraction import store
 from . import llm as llm_module
+from . import settings as llm_settings
 from .llm import LLMProvider, QualityJudgement, judge_conversation
 
 logger = logging.getLogger(__name__)
@@ -192,12 +193,22 @@ def run_benchmark_cycle(
     """Un solo login C3 (envuelto en massive.C3Session, que se re-loguea sola si C3
     invalida la sesion -- ver su docstring), loop SECUENCIAL (no concurrente) sobre
     analyze_direction por cada direccion pedida. Si no se inyecta `llm_provider`
-    (produccion), se construye desde config.load_llm_config() -- el seam que los tests
-    usan para pasar un LLMProvider falso es justamente inyectarlo aca."""
+    (produccion), se construye desde la config guardada por un admin via
+    PUT /benchmarks/settings (settings.load_llm_config()) -- el seam que los tests usan para
+    pasar un LLMProvider falso es justamente inyectarlo aca."""
     resolved_directions = list(directions) if directions is not None else list(DIRECTIONS)
 
     if llm_provider is None:
-        llm_config = config.load_llm_config()
+        settings_conn = llm_settings.get_connection()
+        try:
+            llm_config = llm_settings.load_llm_config(settings_conn)
+        finally:
+            settings_conn.close()
+        if llm_config is None:
+            raise RuntimeError(
+                "El analisis de calidad (LLM) todavia no fue configurado -- un admin tiene que "
+                "completarlo en Configuracion > LLM antes de poder correr un benchmark."
+            )
         llm_provider = llm_module.build_provider(llm_config)
         llm_model = llm_config.model_label
 

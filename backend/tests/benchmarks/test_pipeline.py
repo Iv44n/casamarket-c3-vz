@@ -257,19 +257,21 @@ def test_run_benchmark_cycle_ok_is_false_when_a_direction_fails(monkeypatch: pyt
     assert run.ok is False
 
 
-def test_run_benchmark_cycle_builds_llm_provider_from_config_when_not_injected(
+def test_run_benchmark_cycle_builds_llm_provider_from_settings_when_not_injected(
     monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(
         pipeline.massive.session, "login", lambda creds, transport=None: _FakeC3Client()
     )
-    fake_llm_config = config.LLMConfig(
+    fake_llm_config = pipeline.llm_settings.LLMConfig(
         provider_name="minimax",
         minimax_api_key="x",
         minimax_model="MiniMax-M1",
         minimax_base_url="https://api.minimax.io/v1",
     )
-    monkeypatch.setattr(pipeline.config, "load_llm_config", lambda: fake_llm_config)
+    settings_conn = _conn()
+    monkeypatch.setattr(pipeline.llm_settings, "get_connection", lambda: settings_conn)
+    monkeypatch.setattr(pipeline.llm_settings, "load_llm_config", lambda conn: fake_llm_config)
     built = {}
 
     def fake_build_provider(llm_config):
@@ -294,3 +296,18 @@ def test_run_benchmark_cycle_builds_llm_provider_from_config_when_not_injected(
 
     assert built["config"] is fake_llm_config
     assert seen_providers == ["fake-provider"]
+
+
+def test_run_benchmark_cycle_raises_a_clear_error_when_llm_is_not_configured_yet(
+    monkeypatch: pytest.MonkeyPatch
+):
+    settings_conn = _conn()
+    monkeypatch.setattr(pipeline.llm_settings, "get_connection", lambda: settings_conn)
+    monkeypatch.setattr(pipeline.llm_settings, "load_llm_config", lambda conn: None)
+
+    with pytest.raises(RuntimeError, match="Configuracion"):
+        pipeline.run_benchmark_cycle(
+            ["attention"],
+            creds=config.Credentials(base_url="https://fake.test", username="u", password="p"),
+            conn=_conn(),
+        )

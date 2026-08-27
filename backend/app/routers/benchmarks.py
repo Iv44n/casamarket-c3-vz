@@ -1,9 +1,11 @@
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from ..auth.dependencies import get_current_user
+from ..auth.dependencies import CurrentUser, get_current_user, require_admin
+from ..benchmarks import settings as llm_settings
 from ..benchmarks import state
 from ..extraction import store
 from ..schemas import BenchmarkCaseResult, BenchmarkRunStatus
@@ -17,6 +19,74 @@ ISO_DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 
 class BenchmarkRunRequest(BaseModel):
     directions: list[Literal["attention", "outboundattention"]] | None = None
+
+
+class LLMSettingsPublic(BaseModel):
+    provider_name: str
+    minimax_model: str | None
+    minimax_base_url: str | None
+    has_api_key: bool
+    updated_at: str | None
+
+
+class LLMSettingsRequest(BaseModel):
+    provider_name: str = "minimax"
+    # None = mantener la api key ya guardada (ver settings.save_llm_config) -- asi un admin
+    # puede ajustar modelo/base_url sin tener que reingresar el secreto cada vez.
+    minimax_api_key: str | None = None
+    minimax_model: str
+    minimax_base_url: str
+
+
+def _to_public(llm_config: llm_settings.LLMConfig) -> LLMSettingsPublic:
+    return LLMSettingsPublic(
+        provider_name=llm_config.provider_name,
+        minimax_model=llm_config.minimax_model,
+        minimax_base_url=llm_config.minimax_base_url,
+        has_api_key=bool(llm_config.minimax_api_key),
+        updated_at=llm_config.updated_at,
+    )
+
+
+@router.get("/settings")
+def get_llm_settings(_admin: CurrentUser = Depends(require_admin)) -> LLMSettingsPublic:
+    """Admin-only, igual que /auth/users -- y nunca devuelve minimax_api_key en claro (solo
+    has_api_key), mismo criterio que nunca se expone password_hash via UserPublic."""
+    conn = llm_settings.get_connection()
+    try:
+        current = llm_settings.load_llm_config(conn)
+    finally:
+        conn.close()
+
+    if current is None:
+        return LLMSettingsPublic(
+            provider_name="minimax",
+            minimax_model=None,
+            minimax_base_url=None,
+            has_api_key=False,
+            updated_at=None,
+        )
+    return _to_public(current)
+
+
+@router.put("/settings")
+def update_llm_settings(
+    request: LLMSettingsRequest, _admin: CurrentUser = Depends(require_admin)
+) -> LLMSettingsPublic:
+    conn = llm_settings.get_connection()
+    try:
+        saved = llm_settings.save_llm_config(
+            conn,
+            request.provider_name,
+            request.minimax_api_key,
+            request.minimax_model,
+            request.minimax_base_url,
+            datetime.now(timezone.utc).isoformat(),
+        )
+    finally:
+        conn.close()
+
+    return _to_public(saved)
 
 
 @router.post("/run", status_code=202)

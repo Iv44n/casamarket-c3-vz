@@ -79,6 +79,21 @@ short-lived token + refresh flow, or a revocation list/session table -- neither 
 this is a small internal tool and the blast radius of a stale non-admin token is "can still view
 reports for a few more days," not privilege escalation.
 
+**Benchmarks' LLM provider config is admin-configurable, not env-based**: `LLM_PROVIDER`/
+`MINIMAX_API_KEY`/`MINIMAX_MODEL`/`MINIMAX_BASE_URL` used to be `.env` vars (`config.py`'s
+`load_llm_config()`) -- that's gone. `app/benchmarks/settings.py` now holds this in its own
+Turso-backed singleton row (`llm_settings` table, own self-contained `get_connection()`/schema-init,
+same pattern as `app/auth/store.py`), set via `PUT /benchmarks/settings` (admin-only,
+`Depends(require_admin)`) and read via `GET /benchmarks/settings` -- which never returns the raw
+`minimax_api_key`, only `has_api_key: bool`, same "never expose the secret back" principle as
+`UserPublic` never exposing `password_hash`. A `PUT` with `minimax_api_key` omitted/`None`
+preserves whatever key is already saved (`settings.save_llm_config()`), so an admin can tweak the
+model or base URL without re-entering the secret every time. `pipeline.run_benchmark_cycle()`
+raises a clear `RuntimeError` (not `build_provider()`'s generic missing-fields `ValueError`) if no
+admin has configured this yet at all (`settings.load_llm_config()` returns `None` -- distinct from
+a saved-but-incomplete row). No env var, no `.env.example` entry, no fallback -- this is a deliberate
+full cutover, not "env first, DB overrides."
+
 ## Tooling
 
 Managed entirely by **uv**, lockfile `uv.lock`. Requires Python >= 3.14 (pinned in
