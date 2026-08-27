@@ -5,6 +5,9 @@ import type {
   AttentionRecordsPageRequest,
   BackfillRunSummary,
   BackfillStatus,
+  BenchmarkCaseResult,
+  BenchmarkDirection,
+  BenchmarkRunStatus,
   ContactsSyncStatus,
   CreateUserResult,
   CurrentUser,
@@ -288,5 +291,34 @@ export async function triggerHistoricalBackfill(dateRange?: {
         : {}
     )
   })
+  return response.json()
+}
+export async function fetchBenchmarkRunStatus(): Promise<BenchmarkRunStatus> {
+  const response = await backendFetch('/benchmarks/run/status')
+  return response.json()
+}
+export async function triggerBenchmarkAnalysis(
+  directions?: BenchmarkDirection[]
+): Promise<BenchmarkRunStatus> {
+  const response = await backendFetch('/benchmarks/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(directions ? { directions } : {})
+  })
+  return response.json()
+}
+export async function fetchBenchmarkResults(params: {
+  direction?: BenchmarkDirection
+  dateFrom?: string
+  dateTo?: string
+}): Promise<BenchmarkCaseResult[]> {
+  const query = new URLSearchParams()
+  if (params.direction) query.set('direction', params.direction)
+  if (params.dateFrom) query.set('date_from', params.dateFrom)
+  if (params.dateTo) query.set('date_to', params.dateTo)
+  const qs = query.toString()
+  const response = await backendFetch(
+    `/benchmarks/results${qs ? `?${qs}` : ''}`
+  )
   return response.json()
 }

@@ -217,3 +217,12 @@
     box-sizing: border-box;
   }
 }
+
+@keyframes progress-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}

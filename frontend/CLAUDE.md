@@ -300,10 +300,13 @@ own date column (`"Fecha registro"` for attentions, `"Fecha"` for calls -- diffe
 the backend's C3 export request) only ever covers "today" -- the day-range comes from *which
 already-downloaded files* get read, not from asking C3 for a wider window.
 
-**Defaults to today, not `'all'`** (`server/schemas.ts`'s `attentionsSearchSchema`): a fresh visit to
-`/atenciones` should show today's atenciones, not every historical day merged together -- `'all'` is
-still reachable via the clear ("Quitar filtro de fecha") button, just not the landing state.
-`dateFilterValue.default(todayIsoDate)` -- a zod default can be a thunk, called on every parse -- and
+**Always a concrete date, never `'all'`** (`server/schemas.ts`'s `dateFilterValue`): every date filter
+in the app (`attentionsSearchSchema`, `attentionRecordsPageRequestSchema`, `benchmarksSearchSchema`,
+`dateFilterSchema`) validates to a single ISO date string -- there is no `'all'`/unfiltered state and
+no UI affordance to reach one (`DateRangeFilter` has no clear button; deselecting the range calendar
+falls back to today instead of clearing). A fresh visit to `/atenciones` (or `/benchmarks`) shows
+today's data, not every historical day merged together. `dateFilterValue.default(todayIsoDate)` -- a
+zod default can be a thunk, called on every parse -- and
 `todayIsoDate()` computes "today" from `Intl.DateTimeFormat` pinned to `America/Lima`, **not** the
 executing machine's local clock: this can run server-side during SSR, where "local" would be whatever
 timezone the Node process happens to be in, not the browser's. Mirrors why the backend's `config.hoy()`
@@ -311,13 +314,12 @@ does the same pinning (`backend/app/config.py`) -- both exist so a naive local-c
 drift by a day near midnight relative to the other.
 
 **The "Refresh ahora" button on `/atenciones` is context-aware, tied to that same `date` filter**:
-`handleRefresh` checks `isPastDaySelected` (`date !== 'all' && date !== todayIsoDate()`) -- false (the
-default-today or explicit-all case) calls the regular `triggerRefresh` (today only, same as
-`/status`'s button); true (an actual past day picked) calls `triggerBackfill({ data: { date } })`
-instead, i.e. re-fetches *that* day from C3 rather than today. `'all'` and "today" are treated the same
-here on purpose: a backfill *of* today would do the same C3 request as a regular refresh anyway, so
-there's no reason to route through the backfill call, or to have the button read `` `Backfill
-${today}` `` on a plain page load. This was a deliberate fix, not the original design -- clicking
+`handleRefresh` checks `isPastDaySelected` (`!isRangeSelected && date !== todayIsoDate()`) -- false
+(today selected) calls the regular `triggerRefresh` (today only, same as `/status`'s button); true (an
+actual past day picked) calls `triggerBackfill({ data: { date } })` instead, i.e. re-fetches *that* day
+from C3 rather than today. A backfill *of* today would do the same C3 request as a regular refresh
+anyway, so there's no reason to route through the backfill call, or to have the button read
+`` `Backfill ${today}` `` on a plain page load. This was a deliberate fix, not the original design -- clicking
 refresh with a past day selected used to silently still only refresh today, doing nothing useful for
 the selected day (`triggerRefresh` has no concept of "which day", see the note below). The button's
 label reflects which action will actually run (`"Refresh ahora"` vs `` `Backfill ${date}` ``) so this

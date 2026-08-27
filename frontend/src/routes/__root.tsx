@@ -8,6 +8,7 @@ import {
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
 import { AppSidebar } from '#/components/app-sidebar'
 import { AutoRefreshProvider } from '#/components/auto-refresh-provider'
+import { BenchmarkScheduleProvider } from '#/components/benchmark-schedule-provider'
 import { ThemeProvider } from '#/components/theme-provider'
 import Toaster from '#/components/toaster'
 import { Separator } from '#/components/ui/separator'
@@ -50,6 +51,7 @@ export const Route = createRootRoute({
 function RootDocument({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({ select: state => state.location.pathname })
   const isWallboard = pathname === '/atenciones'
+  const isFullWidth = pathname === '/benchmarks'
   const isAuthPage = pathname === '/login'
   return (
     <html lang="en" suppressHydrationWarning>
@@ -65,30 +67,34 @@ function RootDocument({ children }: { children: React.ReactNode }) {
             </>
           ) : (
             <AutoRefreshProvider>
-              <TooltipProvider>
-                <SidebarProvider>
-                  <AppSidebar />
-                  <SidebarInset>
-                    <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
-                      <SidebarTrigger />
-                      <Separator orientation="vertical" className="h-4" />
-                    </header>
-                    <div className="flex min-h-0 flex-1 flex-col">
-                      <div
-                        className={cn(
-                          'flex flex-1 flex-col',
-                          isWallboard
-                            ? 'min-h-[calc(100dvh-3.5rem)] px-6 py-4'
-                            : 'mx-auto w-full max-w-5xl px-4 py-8'
-                        )}
-                      >
-                        {children}
+              <BenchmarkScheduleProvider>
+                <TooltipProvider>
+                  <SidebarProvider>
+                    <AppSidebar />
+                    <SidebarInset className="min-w-0">
+                      <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
+                        <SidebarTrigger />
+                        <Separator orientation="vertical" className="h-4" />
+                      </header>
+                      <div className="flex min-h-0 flex-1 flex-col">
+                        <div
+                          className={cn(
+                            'flex flex-1 flex-col',
+                            isWallboard
+                              ? 'min-h-[calc(100dvh-3.5rem)] px-6 py-4'
+                              : isFullWidth
+                                ? 'w-full px-6 py-8'
+                                : 'mx-auto w-full max-w-5xl px-4 py-8'
+                          )}
+                        >
+                          {children}
+                        </div>
                       </div>
-                    </div>
-                  </SidebarInset>
-                </SidebarProvider>
-              </TooltipProvider>
-              <Toaster />
+                    </SidebarInset>
+                  </SidebarProvider>
+                </TooltipProvider>
+                <Toaster />
+              </BenchmarkScheduleProvider>
             </AutoRefreshProvider>
           )}
         </ThemeProvider>

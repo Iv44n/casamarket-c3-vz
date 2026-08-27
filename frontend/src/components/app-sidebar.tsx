@@ -3,6 +3,7 @@ import { useServerFn } from '@tanstack/react-start'
 import {
   ActivityIcon,
   BarChartHorizontalIcon,
+  GaugeIcon,
   LogOutIcon,
   TableIcon,
   TrendingUpIcon,
@@ -41,6 +42,7 @@ const NAV_ITEMS = [
     label: 'Tendencias históricas',
     icon: TrendingUpIcon
   },
+  { to: '/benchmarks' as const, label: 'Benchmarks', icon: GaugeIcon },
   { to: '/usuarios' as const, label: 'Usuarios', icon: UsersIcon },
   { to: '/status' as const, label: 'Extraction status', icon: ActivityIcon }
 ] as const

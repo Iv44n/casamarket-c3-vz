@@ -331,3 +331,80 @@ export type HistoricalBackfillStatus = {
   result: HistoricalRunSummary | null
   error: string | null
 }
+
+export const BENCHMARK_DIRECTIONS = ['attention', 'outboundattention'] as const
+export type BenchmarkDirection = (typeof BENCHMARK_DIRECTIONS)[number]
+export const BENCHMARK_DIRECTION_FILTERS = [
+  'all',
+  ...BENCHMARK_DIRECTIONS
+] as const
+export type BenchmarkDirectionFilter =
+  (typeof BENCHMARK_DIRECTION_FILTERS)[number]
+export const BENCHMARK_DIRECTION_LABEL: Record<BenchmarkDirection, string> = {
+  attention: 'Entrantes',
+  outboundattention: 'Salientes'
+}
+export type BenchmarkCaseResult = {
+  id_atencion: string
+  direction: BenchmarkDirection
+  agente: string | null
+  campana: string | null
+  estado: string | null
+  fecha_final: string | null
+  hora_final: string | null
+  cliente: string | null
+  first_response_seconds: number | null
+  has_greeting: boolean | null
+  has_farewell: boolean | null
+  quality_ok: boolean | null
+  llm_notes: string | null
+  analyzed_at: string | null
+}
+export type BenchmarkDirectionSummary = {
+  direction: BenchmarkDirection
+  action: 'analyzed' | 'failed'
+  cases_closed: number
+  cases_pending: number
+  cases_with_pdf: number
+  cases_analyzed: number
+  error: string | null
+}
+export type BenchmarkRunSummary = {
+  started_at: string
+  finished_at: string
+  ok: boolean
+  directions: BenchmarkDirectionSummary[]
+}
+export type BenchmarkRunPhase = 'idle' | 'running' | 'done' | 'error'
+export type BenchmarkRunStatus = {
+  phase: BenchmarkRunPhase
+  started_at: string | null
+  finished_at: string | null
+  result: BenchmarkRunSummary | null
+  error: string | null
+}
+export const benchmarkRunRequestSchema = z.object({
+  directions: z.array(z.enum(BENCHMARK_DIRECTIONS)).optional()
+})
+export const benchmarkResultsRequestSchema = z.object({
+  direction: z.enum(BENCHMARK_DIRECTIONS).optional(),
+  dateFrom: z.string().regex(ISO_DATE_REGEX).optional(),
+  dateTo: z.string().regex(ISO_DATE_REGEX).optional()
+})
+export const benchmarksSearchSchema = z.object({
+  direction: z.enum(BENCHMARK_DIRECTION_FILTERS).default('all'),
+  date: dateFilterValue.default(todayIsoDate),
+  dateEnd: dateEndValue,
+  agentes: z.union([z.literal('all'), z.array(z.string())]).default('all'),
+  agentLimit: z
+    .union([
+      z.literal(5),
+      z.literal(10),
+      z.literal(15),
+      z.literal(20),
+      z.literal(25),
+      z.literal('all')
+    ])
+    .default(10)
+})
+export type BenchmarksSearch = z.infer<typeof benchmarksSearchSchema>

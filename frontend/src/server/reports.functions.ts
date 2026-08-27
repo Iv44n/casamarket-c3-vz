@@ -14,6 +14,8 @@ import {
 import {
   fetchAttentionRecordsPage,
   fetchBackfillStatus,
+  fetchBenchmarkResults,
+  fetchBenchmarkRunStatus,
   fetchContactsSyncStatus,
   fetchExtractionStatus,
   fetchHistoricalBackfillStatus,
@@ -22,6 +24,7 @@ import {
   fetchReportRowsHistory,
   fetchReportRowsPage,
   triggerBackfillExtraction,
+  triggerBenchmarkAnalysis,
   triggerContactsSync,
   triggerExtractionRefresh,
   triggerHistoricalBackfill
@@ -45,6 +48,8 @@ import type {
 import {
   attentionRecordsPageRequestSchema,
   backfillRequestSchema,
+  benchmarkResultsRequestSchema,
+  benchmarkRunRequestSchema,
   dateAndAgentesFilterSchema,
   dateFilterSchema,
   enumerateIsoDates,
@@ -626,4 +631,22 @@ export const triggerHistoricalBackfillRun = createServerFn({
         ? { dateInit: data.dateInit, dateEnd: data.dateEnd }
         : undefined
     )
+  })
+
+export const getBenchmarkRunStatus = createServerFn({ method: 'GET' }).handler(
+  async () => {
+    return fetchBenchmarkRunStatus()
+  }
+)
+
+export const triggerBenchmarkRun = createServerFn({ method: 'POST' })
+  .validator(benchmarkRunRequestSchema)
+  .handler(async ({ data }) => {
+    return triggerBenchmarkAnalysis(data.directions)
+  })
+
+export const getBenchmarkResults = createServerFn({ method: 'GET' })
+  .validator(benchmarkResultsRequestSchema)
+  .handler(async ({ data }) => {
+    return fetchBenchmarkResults(data)
   })
