@@ -12,6 +12,8 @@ def clean_credential_env(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv(key, raising=False)
     for key in config._TURSO_KEYS:
         monkeypatch.delenv(key, raising=False)
+    for key in config._AUTH_KEYS:
+        monkeypatch.delenv(key, raising=False)
 
 
 def test_project_root_is_the_repo_root_not_app():
@@ -142,3 +144,55 @@ def test_load_turso_config_reads_from_process_env_when_file_missing(
 
     assert turso.database_url == "libsql://env.turso.io"
     assert turso.auth_token == "envtoken"
+
+
+def test_load_auth_config_missing_secret_raises(tmp_path: Path):
+    with pytest.raises(RuntimeError, match="AUTH_JWT_SECRET"):
+        config.load_auth_config(env_path=tmp_path / "no-existe.env")
+
+
+def test_load_auth_config_success_with_no_bootstrap_vars(tmp_path: Path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("AUTH_JWT_SECRET=un-secreto-largo\n")
+
+    auth = config.load_auth_config(env_path=env_file)
+
+    assert auth.jwt_secret == "un-secreto-largo"
+    assert auth.bootstrap_username is None
+    assert auth.bootstrap_password is None
+
+
+def test_load_auth_config_success_with_bootstrap_vars(tmp_path: Path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "AUTH_JWT_SECRET=un-secreto-largo\n"
+        "AUTH_BOOTSTRAP_USERNAME=admin\n"
+        "AUTH_BOOTSTRAP_PASSWORD=s3cret\n"
+    )
+
+    auth = config.load_auth_config(env_path=env_file)
+
+    assert auth.bootstrap_username == "admin"
+    assert auth.bootstrap_password == "s3cret"
+
+
+def test_load_auth_config_reads_from_process_env_when_file_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("AUTH_JWT_SECRET", "desde-env")
+
+    auth = config.load_auth_config(env_path=tmp_path / "no-existe.env")
+
+    assert auth.jwt_secret == "desde-env"
+
+
+def test_load_auth_config_process_env_overrides_file_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    env_file = tmp_path / ".env"
+    env_file.write_text("AUTH_JWT_SECRET=desde-archivo\n")
+    monkeypatch.setenv("AUTH_JWT_SECRET", "desde-env")
+
+    auth = config.load_auth_config(env_path=env_file)
+
+    assert auth.jwt_secret == "desde-env"

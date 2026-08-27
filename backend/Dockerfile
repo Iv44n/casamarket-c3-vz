@@ -77,13 +77,12 @@ USER app
 EXPOSE 8000
 ENV PORT=8000
 
-# GET /extraction/status always returns 200 (a real summary, or
-# {"status": "no_runs_yet"}) even before any extraction has run -- cheap,
-# side-effect-free, good healthcheck target. Plain urllib instead of curl/wget
-# so the image doesn't need either installed. Reads $PORT too, same reason
-# as CMD below.
+# GET /health is public on purpose (no Authorization header available to a probe) and always
+# returns 200 with no side effects -- GET /extraction/status used to serve this role but no longer
+# can, since it's now behind auth (app/auth/). Plain urllib instead of curl/wget so the image
+# doesn't need either installed. Reads $PORT too, same reason as CMD below.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import os, urllib.request as u; u.urlopen(f'http://127.0.0.1:{os.environ[\"PORT\"]}/extraction/status', timeout=3)" || exit 1
+    CMD python -c "import os, urllib.request as u; u.urlopen(f'http://127.0.0.1:{os.environ[\"PORT\"]}/health', timeout=3)" || exit 1
 
 # No --reload (that's dev-only), and deliberately no --workers >1 either:
 # extraction/state.py's last-run cache and the refresh lock are plain

@@ -17,13 +17,41 @@ favor of the frontend driving refreshes on its own configurable interval (see
 `frontend/CLAUDE.md` -- the auto-refresh provider) -- don't add a scheduler back here without
 checking that decision first. Unit tests exist (`tests/`, pytest, no live network); no CI yet.
 
-**Security gap, read before deploying beyond localhost**: there is currently **no authentication on
-this API**. `POST /extraction/refresh` and `GET /data/{report_name}` (which serves parsed customer
-PII -- contacts, WhatsApp attentions, calls) are open to anyone who can reach the port. So is
-`POST /extraction/backfill`, which like `POST /extraction/refresh` logs into the live
-`casamarket.c3.pe` and runs real downloads, just for whatever past day an anonymous caller asks for.
-CORS is wide open (`allow_origins=["*"]`) to make local frontend development frictionless. Add auth
-(and narrow CORS) before this server is reachable from anywhere but a trusted local/internal network.
+**Auth**: every endpoint except `POST /auth/login` requires `Authorization: Bearer <jwt>`
+(`app/auth/`, wired onto `runs.router`/`data.router`/`benchmarks.router` via
+`dependencies=[Depends(get_current_user)]` at each `APIRouter(...)` construction --
+`app/auth/dependencies.py`). Individual accounts (`app/auth/store.py`'s `users` table in Turso,
+bcrypt-hashed passwords, no open self-registration -- new accounts are admin-created via
+`POST /auth/users`). The JWT is stateless (14-day expiry, no refresh-token flow, no server-side
+session table) precisely because the browser never calls this API directly -- see the frontend
+integration note below. CORS stays wide open (`allow_origins=["*"]`) on purpose: it was never a
+real security boundary for a server that's only ever called server-to-server (CORS is a
+browser-enforced mechanism, meaningless to a non-browser HTTP client), so narrowing it wouldn't add
+protection -- the JWT check is what actually gates access now.
+
+First account: set `AUTH_JWT_SECRET` (required for any endpoint to work -- generate with
+`openssl rand -hex 32`) plus `AUTH_BOOTSTRAP_USERNAME`/`AUTH_BOOTSTRAP_PASSWORD` (optional) as env
+vars. If both bootstrap vars are set and the `users` table is empty, `main.py`'s `lifespan` hook
+seeds that one admin account at startup (`app/auth/store.py`'s `seed_bootstrap_admin()`) --
+deliberately done in `lifespan`, not lazily on first `auth/store.get_connection()` like schema init
+already is, so it can't race against the very first real login attempt. It's a no-op on every
+later restart once at least one user exists. Further accounts are created via the now-authenticated
+`POST /auth/users` (admin-only, `Depends(require_admin)`), not by re-running bootstrap.
+
+Missing `AUTH_JWT_SECRET` doesn't crash the server (same fail-lazy philosophy as
+`load_credentials()`/`load_turso_config()` below -- never validated eagerly at import time, only
+when something actually calls `config.load_auth_config()`): a missing `Authorization` header still
+401s (checked before config is even loaded), but a *present* header hits the `RuntimeError` and
+surfaces as a 500 -- that's a server misconfiguration, not "your token is invalid," so it's
+deliberately not caught into a 401.
+
+**Frontend integration** (not implemented in this repo -- coordinate with `frontend/CLAUDE.md`):
+the browser never calls this API directly, only the frontend's own server does
+(`frontend/src/server/backend.server.ts`'s `backendFetch()`, the sole choke point for every backend
+call). The plan is for the frontend to store the JWT returned by `POST /auth/login` in an HttpOnly
+cookie on its own domain (no cross-site cookie issue, since the browser only ever talks to the
+frontend) and forward it as `Authorization: Bearer <token>` on every backend call from that one
+choke point.
 
 ## Tooling
 
@@ -58,7 +86,10 @@ directory to `sys.path` when it (or an ancestor) lacks `__init__.py`, which for 
 ## Setup
 
 Copy `.env.example` to `.env` and fill in `C3_USERNAME` / `C3_PASSWORD` (`C3_BASE_URL` is optional,
-defaults to `https://casamarket.c3.pe`). `.env` is gitignored -- never commit real credentials.
+defaults to `https://casamarket.c3.pe`), `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`, and
+`AUTH_JWT_SECRET` (generate with `openssl rand -hex 32`) -- see the Auth section above for what
+that last one gates and how to seed the first account. `.env` is gitignored -- never commit real
+credentials.
 
 ## Layout
 
@@ -72,6 +103,20 @@ app/
   config.py           credentials/paths/timezone -- cross-cutting, everything below depends on it
   schemas.py          Pydantic response models -- cross-cutting, both c3/extraction and routers/
                        use these types (routers/ for responses, extraction/state.py to build them)
+
+  auth/               identity/access control for this API itself -- distinct domain from c3/'s
+                       "knowledge of the external C3 system" and extraction/'s "C3 report data".
+                       Grows when auth gets MORE FEATURES (password reset, roles beyond the current
+                       admin/non-admin bit) -- additive here, doesn't change what c3/, extraction/,
+                       or routers/ know.
+    store.py             `users` table + its own Turso get_connection() -- self-contained, mirrors
+                          extraction/store.py's exact lazy-schema-init pattern rather than extending
+                          that module (same physical Turso DB, unrelated domain/table)
+    security.py           bcrypt hashing + JWT encode/decode, print-free like c3/ and extraction/
+                           (returns values or raises, HTTP layer decides what to do)
+    dependencies.py        get_current_user/require_admin -- the only Depends() in this codebase;
+                            wired onto runs.router/data.router/benchmarks.router at APIRouter(...)
+                            construction so no existing handler had to change
 
   c3/                 knowledge of + a client for Contact Center Cloud, the external system.
                        Grows when a NEW C3 REPORT TYPE is added (25+ are documented but not
@@ -103,13 +148,18 @@ app/
                         above; the actual API prefix (`/extraction/...`) is unchanged
     data.py              GET /data/{report_name} -- parsed rows from the latest download, plus
                          GET /data/{report_name}/history -- every downloaded day's rows concatenated
+    auth.py               POST /auth/login (public), GET /auth/me, POST /auth/users (admin-only) --
+                          the only router NOT given `dependencies=[Depends(get_current_user)]` at
+                          construction, since /login has to stay reachable without a token yet
 ```
 
-`tests/` mirrors this exactly: `tests/c3/`, `tests/extraction/`, `tests/routers/`, plus
-`tests/test_config.py` at the root next to `test_config`'s subject (`config.py`, also at the app
-root). No `__init__.py` needed in the test subdirectories -- pytest discovers `test_*.py` files
+`tests/` mirrors this exactly: `tests/c3/`, `tests/extraction/`, `tests/routers/`, `tests/auth/`,
+plus `tests/test_config.py` at the root next to `test_config`'s subject (`config.py`, also at the
+app root). No `__init__.py` needed in the test subdirectories -- pytest discovers `test_*.py` files
 recursively regardless, and no two test files share a basename across directories, so there's no
-ambiguity for its default import mode to resolve.
+ambiguity for its default import mode to resolve -- this is why `tests/auth/`'s store test is named
+`test_auth_store.py`, not `test_store.py` (that basename is already taken by
+`tests/extraction/test_store.py`).
 
 `pyproject.toml` has **no `[build-system]`, no `[project.scripts]`, no `[tool.uv.build-backend]`**
 -- this is a *virtual* uv project (`source = { virtual = "." }` in `uv.lock`): uv manages the venv
@@ -385,16 +435,20 @@ a Render-style overridden `$PORT` work with a clean `exec`-based SIGTERM shutdow
   `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` for the historical-data store (`config.load_turso_config()`,
   same merge-order/fallback behavior as `load_credentials()` below -- without these two, anything that
   touches the store, e.g. the regular refresh's upsert step or the historical backfill, fails at that
-  point rather than at startup). This wasn't always true for the C3 pair: `config.py`'s
+  point rather than at startup), and `AUTH_JWT_SECRET` (plus optionally
+  `AUTH_BOOTSTRAP_USERNAME`/`AUTH_BOOTSTRAP_PASSWORD` for the first deploy only -- see the Auth
+  section) for `config.load_auth_config()`. This wasn't always true for the C3 pair: `config.py`'s
   `load_credentials()` used to read only a literal `.env` *file* and ignore process env vars entirely,
   which meant Render's plain env vars silently did nothing (confirmed live on 2026-08-14) and the only
   working option was Render's **Secret Files** feature pointed at `/app/.env`. `load_credentials()`
   was changed the same day to also read `os.environ` (see the "pydantic-settings" note above for the
   merge order) specifically so the ordinary env-var path works -- Secret Files still work too if
   preferred, but aren't required anymore.
-- **Healthcheck hits `GET /extraction/status` with plain `urllib`** (no curl/wget installed in the
-  image on purpose, keeps it minimal) -- that route always returns 200 (a real summary, or
-  `{"status": "no_runs_yet"}` before the first run) with no side effects, so it's a safe, cheap
+- **Healthcheck hits `GET /health` with plain `urllib`** (no curl/wget installed in the
+  image on purpose, keeps it minimal) -- deliberately public (no `Depends(get_current_user)`,
+  unlike every other route except `/auth/login`), since a Docker/Render probe has no JWT to send.
+  It replaces `GET /extraction/status`'s old role here: that route always returned 200 (a real
+  summary, or `{"status": "no_runs_yet"}` before the first run) with no side effects, so it's a safe, cheap
   target even on a freshly started container that hasn't extracted anything yet. Reads `$PORT` too,
   same reasoning as `CMD`.
 - **Exactly one process, always** -- no `--reload` (dev-only) and deliberately no
@@ -408,7 +462,8 @@ a Render-style overridden `$PORT` work with a clean `exec`-based SIGTERM shutdow
   if the next status poll happens to land on a different worker. Don't scale this service horizontally
   (Render's autoscaling / multiple instances included) without moving that state somewhere shared
   (Redis, a DB row) first.
-- **Still no auth, still wide-open CORS** (see the security note near the top of this file) -- this
-  Docker work doesn't change that, and deploying to a public Render URL makes it reachable from the
-  entire internet instead of just a local/internal network. Put a reverse proxy + auth layer in front
-  (or otherwise restrict who can reach it) before/soon after this goes live on Render.
+- **Auth is required, CORS stays wide-open** (see the Auth section near the top of this file) --
+  every route except `/auth/login` and `/health` needs a valid JWT. Set `AUTH_JWT_SECRET` (and
+  optionally `AUTH_BOOTSTRAP_USERNAME`/`AUTH_BOOTSTRAP_PASSWORD` for the very first account) in
+  Render's Environment Variables alongside `C3_USERNAME`/`TURSO_*` -- without `AUTH_JWT_SECRET`,
+  every protected route 500s (fail-lazy, not a startup crash -- see the Auth section).

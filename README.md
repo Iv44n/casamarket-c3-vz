@@ -33,6 +33,9 @@ bun install
 bun run dev             # http://localhost:3000 -- requires the backend running
 ```
 
-**No authentication anywhere in this stack yet** -- see the security note at the top of
-`backend/CLAUDE.md` before running this anywhere reachable beyond your own machine. The frontend has
-no login of its own and inherits this gap.
+**The backend now requires authentication** (individual accounts, JWT bearer tokens) -- see the Auth
+section near the top of `backend/CLAUDE.md` for how to set `AUTH_JWT_SECRET` and seed the first
+account. **The frontend does not have its own login yet** -- it still needs to store the JWT
+returned by `POST /auth/login` and forward it on every backend call (see `backend/CLAUDE.md`'s
+"Frontend integration" note and `frontend/CLAUDE.md`); until that lands, the frontend can't reach
+the backend at all.

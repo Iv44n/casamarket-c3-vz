@@ -1,13 +1,16 @@
 from datetime import date
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from ..auth.dependencies import get_current_user
 from ..extraction import state
 from ..schemas import BackfillRunSummary, HistoricalBackfillStatus, NoRunsYet, RunSummary
 
-router = APIRouter(prefix="/extraction", tags=["extraction"])
+router = APIRouter(
+    prefix="/extraction", tags=["extraction"], dependencies=[Depends(get_current_user)]
+)
 
 
 class BackfillRequest(BaseModel):

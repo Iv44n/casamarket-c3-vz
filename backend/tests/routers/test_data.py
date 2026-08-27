@@ -8,14 +8,17 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app import config
+from app.auth.dependencies import CurrentUser, get_current_user
 from app.extraction import store
 
 
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(config, "DOWNLOADS_DIR", tmp_path)
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(1, "test", True)
     with TestClient(app) as c:
         yield c
+    app.dependency_overrides.clear()
 
 
 def _write_xlsx(path: Path, rows: list[tuple]) -> None:

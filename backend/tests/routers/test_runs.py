@@ -3,6 +3,7 @@ import datetime
 import pytest
 from fastapi.testclient import TestClient
 
+from app.auth.dependencies import CurrentUser, get_current_user
 from app.extraction import state
 from app.main import app
 from app.schemas import (
@@ -48,8 +49,10 @@ _HISTORICAL_STATUS_DONE = HistoricalBackfillStatus(
 
 @pytest.fixture
 def client():
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(1, "test", True)
     with TestClient(app) as c:
         yield c
+    app.dependency_overrides.clear()
 
 
 def test_refresh_returns_the_run_summary(monkeypatch: pytest.MonkeyPatch, client: TestClient):

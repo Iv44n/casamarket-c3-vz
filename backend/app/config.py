@@ -29,6 +29,8 @@ HISTORICAL_CLIENT_TIMEOUT_SECONDS = 300.0
 
 _TURSO_KEYS = ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN")
 
+_AUTH_KEYS = ("AUTH_JWT_SECRET", "AUTH_BOOTSTRAP_USERNAME", "AUTH_BOOTSTRAP_PASSWORD")
+
 
 def hoy() -> date:
     return datetime.now(TZ).date()
@@ -95,3 +97,30 @@ def load_turso_config(env_path: Path | None = None) -> TursoConfig:
         )
 
     return TursoConfig(database_url=database_url, auth_token=auth_token)
+
+
+@dataclass(frozen=True)
+class AuthConfig:
+    jwt_secret: str
+    bootstrap_username: str | None
+    bootstrap_password: str | None
+
+
+def load_auth_config(env_path: Path | None = None) -> AuthConfig:
+    path = env_path or PROJECT_ROOT / ".env"
+    values = dict(dotenv_values(path))
+    values.update({k: v for k, v in os.environ.items() if k in _AUTH_KEYS})
+
+    jwt_secret = values.get("AUTH_JWT_SECRET")
+    if not jwt_secret:
+        raise RuntimeError(
+            "Falta variable (AUTH_JWT_SECRET): definila como variable de entorno del proceso, "
+            f"o copia .env.example a {path} y completa el valor (p.ej. con `openssl rand -hex "
+            "32`)."
+        )
+
+    return AuthConfig(
+        jwt_secret=jwt_secret,
+        bootstrap_username=values.get("AUTH_BOOTSTRAP_USERNAME") or None,
+        bootstrap_password=values.get("AUTH_BOOTSTRAP_PASSWORD") or None,
+    )
