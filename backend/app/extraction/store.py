@@ -203,6 +203,31 @@ CREATE TABLE IF NOT EXISTS sync_status (
     status_json  TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS benchmark_result (
+    id_atencion             TEXT NOT NULL,
+    direction               TEXT NOT NULL,
+    agente                  TEXT,
+    campana                 TEXT,
+    estado                  TEXT,
+    fecha_final             TEXT,
+    hora_final              TEXT,
+    cliente                 TEXT,
+    first_response_seconds  REAL,
+    has_greeting            INTEGER,
+    has_farewell            INTEGER,
+    quality_ok              INTEGER,
+    llm_model               TEXT,
+    llm_raw                 TEXT,
+    llm_notes               TEXT,
+    analyzed_at             TEXT,
+    first_recorded_at       TEXT NOT NULL,
+    last_updated_at         TEXT NOT NULL,
+    row_json                TEXT NOT NULL,
+    PRIMARY KEY (id_atencion, direction)
+);
+CREATE INDEX IF NOT EXISTS idx_benchmark_result_agente ON benchmark_result(agente);
+CREATE INDEX IF NOT EXISTS idx_benchmark_result_analyzed_at ON benchmark_result(analyzed_at);
 {_DATE_RANGE_INDEXES}
 """
 
@@ -311,9 +336,47 @@ def _migrate_time_columns(conn: DBConnection) -> None:
         conn.commit()
 
 
+# fecha_final/cliente no existian en benchmark_result cuando esa tabla se creo por primera
+# vez -- mismo motivo/mismo patron que _migrate_time_columns arriba: CREATE TABLE IF NOT
+# EXISTS no agrega columnas a una tabla ya existente en el Turso en vivo. El valor crudo
+# siempre estuvo en row_json (la fila completa de attention/outboundattention que se
+# benchmarkeo), asi que el backfill es gratis via json_extract.
+_NEW_BENCHMARK_COLUMNS: dict[str, str] = {
+    "fecha_final": "Fecha final",
+    "hora_final": "Hora final",
+    "cliente": "Nombre de cliente",
+}
+
+
+def _migrate_benchmark_result_columns(conn: DBConnection) -> None:
+    existing = _existing_columns(conn, "benchmark_result")
+    missing = [column for column in _NEW_BENCHMARK_COLUMNS if column not in existing]
+    for column in missing:
+        conn.execute(f"ALTER TABLE benchmark_result ADD COLUMN {column} TEXT")
+    if missing:
+        conn.commit()
+    for column, source_header in _NEW_BENCHMARK_COLUMNS.items():
+        conn.execute(
+            "UPDATE benchmark_result SET "
+            f"{column} = json_extract(row_json, ?) WHERE {column} IS NULL",
+            (f'$."{source_header}"',),
+        )
+    conn.commit()
+    # El indice sobre fecha_final vive aca (no en _SCHEMA) a proposito: si benchmark_result
+    # ya existia sin esa columna, un CREATE INDEX en el mismo executescript() de _SCHEMA
+    # fallaria (la columna todavia no existe en ese punto) -- crearlo aca garantiza que la
+    # columna ya este presente (recien agregada arriba, o ya estaba en una tabla nueva).
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_benchmark_result_fecha_final_iso "
+        f"ON benchmark_result ({_iso_date_expr('fecha_final')})"
+    )
+    conn.commit()
+
+
 def _init_schema(conn: DBConnection) -> None:
     conn.executescript(_SCHEMA)
     _migrate_time_columns(conn)
+    _migrate_benchmark_result_columns(conn)
 
 
 def _normalize_pk(value: object) -> str | None:
@@ -707,3 +770,244 @@ def load_sync_status(conn: DBConnection, kind: str) -> dict | None:
     )
     row = cursor.fetchone()
     return json.loads(row[0]) if row is not None else None
+
+
+def closed_case_rows(
+    conn: DBConnection,
+    direction: str,
+    *,
+    estados: list[str],
+    date_from: str | None = None,
+) -> dict[str, dict]:
+    """Casos de `direction` ('attention'|'outboundattention') cuyo estado normalizado esta
+    en `estados`, opcionalmente acotado a los cerrados desde `date_from` (fecha ISO,
+    comparada contra `fecha_final` -- el punto de esta consulta es "casos cerrados
+    recientemente", no una ventana de fecha de registro; el matching contra el zip del
+    reporte masivo es por ID, no depende de que este filtro coincida con lo que C3 filtre
+    del otro lado). Devuelve {id_atencion: row_json ya parseado}."""
+    if not estados:
+        return {}
+    table = direction
+    estado_norm = _norm_expr("estado", "Sin estado")
+    placeholders = ", ".join("?" for _ in estados)
+    clauses = [f"{estado_norm} IN ({placeholders})"]
+    params: list = list(estados)
+    if date_from:
+        iso_expr = _iso_date_expr("fecha_final")
+        clauses.append(f"{iso_expr} >= ?")
+        params.append(date_from)
+    where_sql = " AND ".join(clauses)
+    cursor = conn.execute(
+        f"SELECT id_atencion, row_json FROM {table} WHERE {where_sql}", tuple(params)
+    )
+    return {
+        str(id_atencion): json.loads(row_json)
+        for id_atencion, row_json in cursor.fetchall()
+    }
+
+
+def already_benchmarked_ids(
+    conn: DBConnection, direction: str, ids: list[str]
+) -> set[str]:
+    """IDs de `direction` que ya tienen un veredicto de calidad real (`has_greeting IS NOT
+    NULL`) -- no basta con que la fila exista en benchmark_result: un caso cerrado sin PDF
+    en el zip de hoy se registra igual (para no perder su tiempo de primera respuesta de los
+    promedios por agente) pero sigue siendo candidato en la proxima corrida hasta que de
+    verdad se le encuentre un PDF."""
+    if not ids:
+        return set()
+    placeholders = ", ".join("?" for _ in ids)
+    cursor = conn.execute(
+        "SELECT id_atencion FROM benchmark_result WHERE direction = ? AND "
+        f"id_atencion IN ({placeholders}) AND has_greeting IS NOT NULL",
+        (direction, *ids),
+    )
+    return {str(row[0]) for row in cursor.fetchall()}
+
+
+_BENCHMARK_ALL_COLUMNS = (
+    "id_atencion",
+    "direction",
+    "agente",
+    "campana",
+    "estado",
+    "fecha_final",
+    "hora_final",
+    "cliente",
+    "first_response_seconds",
+    "has_greeting",
+    "has_farewell",
+    "quality_ok",
+    "llm_model",
+    "llm_raw",
+    "llm_notes",
+    "analyzed_at",
+    "first_recorded_at",
+    "last_updated_at",
+    "row_json",
+)
+# id_atencion/direction son la PK (no se actualizan); first_recorded_at se preserva del
+# primer insert (mismo espiritu que first_seen_at en _upsert_by_pk) -- todo lo demas se
+# sobreescribe con el valor de esta corrida.
+_BENCHMARK_UPDATE_COLUMNS = (
+    "agente",
+    "campana",
+    "estado",
+    "fecha_final",
+    "hora_final",
+    "cliente",
+    "first_response_seconds",
+    "has_greeting",
+    "has_farewell",
+    "quality_ok",
+    "llm_model",
+    "llm_raw",
+    "llm_notes",
+    "analyzed_at",
+    "last_updated_at",
+    "row_json",
+)
+
+
+def _sql_bool(value: object) -> int | None:
+    return None if value is None else int(bool(value))
+
+
+def upsert_benchmark_results(
+    conn: DBConnection, rows: list[dict], observed_at: str
+) -> IngestResult:
+    """Cada `row` en `rows` es un dict con keys: id_atencion, direction, agente, campana,
+    estado, first_response_seconds, has_greeting (bool|None), has_farewell (bool|None),
+    llm_model, llm_raw, llm_notes, row_json (dict -- la fila completa de
+    attention/outboundattention, de donde se extraen `fecha_final`/`hora_final`/`cliente` para poder
+    filtrar/mostrar sin tener que parsear row_json en el llamador -- `fecha_final` es la
+    fecha REAL de cierre del caso, no cuando se corrio el analisis -- ver
+    first_recorded_at/analyzed_at, que son fechas de proceso, no de negocio).
+    `analyzed_at` se pone a `observed_at` solo cuando el caso trae un veredicto real
+    (has_greeting is not None); si no, queda NULL -- asi already_benchmarked_ids lo sigue
+    tratando como pendiente. El llamador NUNCA debe incluir aca un caso que
+    already_benchmarked_ids ya haya marcado como analizado (evitaria pisar un veredicto
+    real con uno vacio) -- ver pipeline.analyze_direction, que solo construye
+    CaseBenchmark para los IDs pendientes, nunca para los ya benchmarkeados."""
+    rows_skipped = 0
+    valid_rows: list[tuple] = []
+    for row in rows:
+        id_atencion = _normalize_pk(row.get("id_atencion"))
+        if id_atencion is None:
+            rows_skipped += 1
+            continue
+        has_greeting = row.get("has_greeting")
+        has_farewell = row.get("has_farewell")
+        quality_ok = (
+            has_greeting and has_farewell
+            if has_greeting is not None and has_farewell is not None
+            else None
+        )
+        analyzed_at = observed_at if has_greeting is not None else None
+        row_json_dict = row.get("row_json") or {}
+        fecha_final = row_json_dict.get("Fecha final")
+        hora_final = row_json_dict.get("Hora final")
+        cliente = row_json_dict.get("Nombre de cliente")
+        valid_rows.append(
+            (
+                id_atencion,
+                row["direction"],
+                row.get("agente"),
+                row.get("campana"),
+                row.get("estado"),
+                fecha_final,
+                hora_final,
+                cliente,
+                row.get("first_response_seconds"),
+                _sql_bool(has_greeting),
+                _sql_bool(has_farewell),
+                _sql_bool(quality_ok),
+                row.get("llm_model"),
+                row.get("llm_raw"),
+                row.get("llm_notes"),
+                analyzed_at,
+                observed_at,
+                observed_at,
+                json.dumps(row_json_dict, default=str),
+            )
+        )
+
+    if valid_rows:
+        set_clause = ", ".join(f"{col}=excluded.{col}" for col in _BENCHMARK_UPDATE_COLUMNS)
+        row_placeholder = "(" + ", ".join("?" for _ in _BENCHMARK_ALL_COLUMNS) + ")"
+        for batch in _chunked(valid_rows, _BATCH_SIZE):
+            sql = (
+                f"INSERT INTO benchmark_result ({', '.join(_BENCHMARK_ALL_COLUMNS)}) "
+                f"VALUES {', '.join([row_placeholder] * len(batch))} "
+                f"ON CONFLICT(id_atencion, direction) DO UPDATE SET {set_clause}"
+            )
+            params = tuple(value for row_values in batch for value in row_values)
+            conn.execute(sql, params)
+        conn.commit()
+
+    return IngestResult(
+        report_name="benchmark_result",
+        rows_seen=len(rows),
+        rows_upserted=len(valid_rows),
+        rows_skipped=rows_skipped,
+    )
+
+
+_BENCHMARK_RESULT_COLUMNS = (
+    "id_atencion",
+    "direction",
+    "agente",
+    "campana",
+    "estado",
+    "fecha_final",
+    "hora_final",
+    "cliente",
+    "first_response_seconds",
+    "has_greeting",
+    "has_farewell",
+    "quality_ok",
+    "llm_notes",
+    "analyzed_at",
+)
+
+
+def benchmark_result_rows(
+    conn: DBConnection,
+    *,
+    direction: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[dict]:
+    """Lista plana para el frontend -- mismo espiritu que history_rows(), pero devolviendo
+    columnas ya tipadas (no row_json) porque el frontend agrega sobre estos campos
+    directamente, no sobre el xlsx crudo. El filtro de fecha es sobre `fecha_final` (cuando
+    el CASO se cerro de verdad, igual que "terminadas" en /atenciones) -- NO sobre
+    first_recorded_at/analyzed_at (que son fechas de cuando corrio el analisis, no fechas
+    de negocio; un caso cerrado ayer analizado hoy no debe aparecer al filtrar "hoy")."""
+    clauses = ["1=1"]
+    params: list = []
+    if direction:
+        clauses.append("direction = ?")
+        params.append(direction)
+    if date_from:
+        iso_expr = _iso_date_expr("fecha_final")
+        clauses.append(f"{iso_expr} BETWEEN ? AND ?")
+        params.append(date_from)
+        params.append(date_to or date_from)
+    where_sql = " AND ".join(clauses)
+    order_expr = _iso_datetime_expr("fecha_final", "hora_final")
+    cursor = conn.execute(
+        f"SELECT {', '.join(_BENCHMARK_RESULT_COLUMNS)} FROM benchmark_result "
+        f"WHERE {where_sql} ORDER BY {order_expr} DESC, id_atencion",
+        tuple(params),
+    )
+    rows = []
+    for record in cursor.fetchall():
+        row = dict(zip(_BENCHMARK_RESULT_COLUMNS, record))
+        # bool(0/1) por nombre de columna, no por indice posicional -- evita tener que
+        # recalcular numeros a mano cada vez que _BENCHMARK_RESULT_COLUMNS cambia de orden
+        # o largo (ya paso dos veces).
+        for bool_column in ("has_greeting", "has_farewell", "quality_ok"):
+            row[bool_column] = None if row[bool_column] is None else bool(row[bool_column])
+        rows.append(row)
+    return rows

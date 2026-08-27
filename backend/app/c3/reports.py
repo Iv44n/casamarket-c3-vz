@@ -25,6 +25,7 @@ class DownloadButtonInfo:
 @dataclass(frozen=True)
 class ExportMechanism:
     export_endpoint: str
+    massive_endpoint: str
     method: str
     date_param_format: str
     type_param_value: str
@@ -36,6 +37,7 @@ class ExportMechanism:
 EXPORT_MECHANISMS = {
     "attention": ExportMechanism(
         export_endpoint="/user/report_message/attentions-export",
+        massive_endpoint="/user/report_message/attentions-massive",
         method="GET",
         date_param_format="YYYY-MM-DD HH:mm (ej. 2026-08-11 00:00)",
         type_param_value="INBOUND",
@@ -60,6 +62,7 @@ EXPORT_MECHANISMS = {
     ),
     "outboundattention": ExportMechanism(
         export_endpoint="/user/report_message/attentions-export",
+        massive_endpoint="/user/report_message/attentions-massive",
         method="GET",
         date_param_format="YYYY-MM-DD HH:mm (ej. 2026-08-11 00:00)",
         type_param_value="OUTBOUND",
@@ -112,6 +115,8 @@ TRANSFER_EXPORT_DEFAULT_PARAMS = {
     "number": "",
     "status": "",
 }
+
+MASSIVE_LIST_ENDPOINT = "/user/report_general/get_massives"
 
 @dataclass(frozen=True)
 class ReportInspection:

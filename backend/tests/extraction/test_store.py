@@ -586,3 +586,347 @@ def test_attention_records_page_returns_transfers_only_for_ids_on_the_page():
     page = store.attention_records_page(conn, direction="all", page=1, page_size=50)
 
     assert [t["Atención ID"] for t in page.transfers] == ["on_page"]
+
+
+def _closed_attention_row(id_atencion: str, fecha_final: str, estado: str = "Cerrada") -> dict:
+    return {
+        "ID atención": id_atencion,
+        "Estado": estado,
+        "Agente": "Ana",
+        "Campaña": "Soporte",
+        "Fecha registro": "01/08/2026",
+        "Hora registro": "08:00:00",
+        "Fecha final": fecha_final,
+        "Hora final": "09:00:00",
+        "Número cliente": "999999999",
+        "Tiempo de primera respuesta": "00:01:30",
+    }
+
+
+def test_closed_case_rows_filters_by_estado():
+    conn = _conn()
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [
+            _closed_attention_row("1", "18/08/2026", estado="Cerrada"),
+            _closed_attention_row("2", "18/08/2026", estado="Abierta"),
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    rows = store.closed_case_rows(conn, "attention", estados=["Cerrada"])
+
+    assert set(rows) == {"1"}
+    assert rows["1"]["Agente"] == "Ana"
+
+
+def test_closed_case_rows_respects_date_from_against_fecha_final():
+    conn = _conn()
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [
+            _closed_attention_row("old", "01/08/2026"),
+            _closed_attention_row("recent", "18/08/2026"),
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    rows = store.closed_case_rows(
+        conn, "attention", estados=["Cerrada"], date_from="2026-08-15"
+    )
+
+    assert set(rows) == {"recent"}
+
+
+def test_closed_case_rows_returns_empty_dict_when_estados_is_empty():
+    conn = _conn()
+    store.upsert_report_rows(
+        conn, "attention", [_closed_attention_row("1", "18/08/2026")], "2026-08-18T00:00:00"
+    )
+
+    assert store.closed_case_rows(conn, "attention", estados=[]) == {}
+
+
+def test_already_benchmarked_ids_only_counts_real_quality_verdicts():
+    conn = _conn()
+    store.upsert_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "judged",
+                "direction": "attention",
+                "has_greeting": True,
+                "has_farewell": True,
+                "row_json": {},
+            },
+            {
+                "id_atencion": "no_pdf_yet",
+                "direction": "attention",
+                "has_greeting": None,
+                "has_farewell": None,
+                "row_json": {},
+            },
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    already = store.already_benchmarked_ids(
+        conn, "attention", ["judged", "no_pdf_yet", "never_seen"]
+    )
+
+    assert already == {"judged"}
+
+
+def test_already_benchmarked_ids_returns_empty_set_for_no_ids():
+    conn = _conn()
+
+    assert store.already_benchmarked_ids(conn, "attention", []) == set()
+
+
+def test_upsert_benchmark_results_inserts_row_without_quality_when_no_pdf():
+    conn = _conn()
+
+    store.upsert_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "1",
+                "direction": "attention",
+                "agente": "Ana",
+                "campana": "Soporte",
+                "estado": "Cerrada",
+                "first_response_seconds": 90.0,
+                "has_greeting": None,
+                "has_farewell": None,
+                "row_json": {"ID atención": "1"},
+            }
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    rows = store.benchmark_result_rows(conn)
+    assert len(rows) == 1
+    assert rows[0]["has_greeting"] is None
+    assert rows[0]["analyzed_at"] is None
+    assert rows[0]["first_response_seconds"] == 90.0
+
+
+def test_upsert_benchmark_results_extracts_fecha_hora_final_and_cliente_from_row_json():
+    conn = _conn()
+
+    store.upsert_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "1",
+                "direction": "attention",
+                "agente": "Ana",
+                "row_json": {
+                    "ID atención": "1",
+                    "Fecha final": "18/08/2026",
+                    "Hora final": "14:32:10",
+                    "Nombre de cliente": "Ana Perez",
+                },
+            }
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    rows = store.benchmark_result_rows(conn)
+    assert rows[0]["fecha_final"] == "18/08/2026"
+    assert rows[0]["hora_final"] == "14:32:10"
+    assert rows[0]["cliente"] == "Ana Perez"
+
+
+def test_upsert_benchmark_results_adds_quality_on_a_later_run_without_duplicating():
+    conn = _conn()
+    store.upsert_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "1",
+                "direction": "attention",
+                "has_greeting": None,
+                "has_farewell": None,
+                "row_json": {},
+            }
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    store.upsert_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "1",
+                "direction": "attention",
+                "has_greeting": True,
+                "has_farewell": True,
+                "llm_model": "gpt-4o-mini",
+                "row_json": {},
+            }
+        ],
+        "2026-08-19T00:00:00",
+    )
+
+    rows = store.benchmark_result_rows(conn)
+    assert len(rows) == 1
+    assert rows[0]["has_greeting"] is True
+    assert rows[0]["quality_ok"] is True
+    assert rows[0]["analyzed_at"] == "2026-08-19T00:00:00"
+
+    cursor = conn.execute(
+        "SELECT first_recorded_at FROM benchmark_result WHERE id_atencion='1'"
+    )
+    assert cursor.fetchone()[0] == "2026-08-18T00:00:00"
+
+
+def test_upsert_benchmark_results_quality_ok_is_false_when_only_one_flag_true():
+    conn = _conn()
+    store.upsert_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "1",
+                "direction": "attention",
+                "has_greeting": True,
+                "has_farewell": False,
+                "row_json": {},
+            }
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    rows = store.benchmark_result_rows(conn)
+    assert rows[0]["quality_ok"] is False
+
+
+def test_upsert_benchmark_results_skips_rows_without_id_atencion():
+    conn = _conn()
+
+    result = store.upsert_benchmark_results(
+        conn,
+        [{"id_atencion": None, "direction": "attention", "row_json": {}}],
+        "2026-08-18T00:00:00",
+    )
+
+    assert result.rows_upserted == 0
+    assert result.rows_skipped == 1
+
+
+def test_benchmark_result_rows_filters_by_direction_and_date_range():
+    conn = _conn()
+    store.upsert_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "in_dir",
+                "direction": "attention",
+                "row_json": {"Fecha final": "18/08/2026"},
+            },
+            {
+                "id_atencion": "other_dir",
+                "direction": "outboundattention",
+                "row_json": {"Fecha final": "18/08/2026"},
+            },
+        ],
+        "2026-08-18T00:00:00",
+    )
+    store.upsert_benchmark_results(
+        conn,
+        [{"id_atencion": "old", "direction": "attention", "row_json": {"Fecha final": "01/08/2026"}}],
+        "2026-08-01T00:00:00",
+    )
+
+    rows = store.benchmark_result_rows(
+        conn, direction="attention", date_from="2026-08-15", date_to="2026-08-20"
+    )
+
+    assert [r["id_atencion"] for r in rows] == ["in_dir"]
+
+
+def test_benchmark_result_rows_filters_by_the_cases_own_close_date_not_when_it_was_analyzed():
+    # El bug real que motivo este fix: un caso cerrado AYER pero analizado (procesado por
+    # el pipeline) HOY no debe aparecer al filtrar "hoy" -- first_recorded_at/observed_at
+    # son fechas de proceso, no la fecha de negocio real del caso.
+    conn = _conn()
+    store.upsert_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "closed_yesterday",
+                "direction": "attention",
+                "row_json": {"Fecha final": "25/08/2026"},
+            },
+            {
+                "id_atencion": "closed_today",
+                "direction": "attention",
+                "row_json": {"Fecha final": "26/08/2026"},
+            },
+        ],
+        # Ambos casos se procesaron (analizaron) el mismo dia -- 2026-08-26 --
+        # independientemente de que uno cerro ayer.
+        "2026-08-26T23:00:00",
+    )
+
+    rows = store.benchmark_result_rows(conn, date_from="2026-08-26")
+
+    assert [r["id_atencion"] for r in rows] == ["closed_today"]
+
+
+def test_migrate_benchmark_result_columns_backfills_new_columns_from_row_json():
+    # Simula una Turso en vivo donde benchmark_result ya existia ANTES de que fecha_final
+    # se agregara a la tabla -- CREATE TABLE IF NOT EXISTS no le agrega la columna a una
+    # tabla que ya existe, asi que _init_schema depende de esta migracion aparte.
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        """
+        CREATE TABLE benchmark_result (
+            id_atencion TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            agente TEXT,
+            campana TEXT,
+            estado TEXT,
+            first_response_seconds REAL,
+            has_greeting INTEGER,
+            has_farewell INTEGER,
+            quality_ok INTEGER,
+            llm_model TEXT,
+            llm_raw TEXT,
+            llm_notes TEXT,
+            analyzed_at TEXT,
+            first_recorded_at TEXT NOT NULL,
+            last_updated_at TEXT NOT NULL,
+            row_json TEXT NOT NULL,
+            PRIMARY KEY (id_atencion, direction)
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO benchmark_result "
+        "(id_atencion, direction, first_recorded_at, last_updated_at, row_json) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            "1",
+            "attention",
+            "2026-08-01T00:00:00",
+            "2026-08-01T00:00:00",
+            json.dumps(
+                {
+                    "Fecha final": "18/08/2026",
+                    "Hora final": "14:32:10",
+                    "Nombre de cliente": "Ana Perez",
+                }
+            ),
+        ),
+    )
+    conn.commit()
+
+    store._init_schema(conn)
+
+    row = conn.execute(
+        "SELECT fecha_final, hora_final, cliente FROM benchmark_result WHERE id_atencion = '1'"
+    ).fetchone()
+    assert row == ("18/08/2026", "14:32:10", "Ana Perez")

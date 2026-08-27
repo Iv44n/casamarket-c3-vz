@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import config
 from .auth import store as auth_store
-from .routers import auth, data, runs
+from .routers import auth, benchmarks, data, runs
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -35,6 +35,11 @@ TAGS_METADATA = [
     {
         "name": "data",
         "description": "Los reportes ya descargados, parseados a JSON.",
+    },
+    {
+        "name": "benchmarks",
+        "description": "Analisis de calidad de atencion (LLM) y tiempo de primera respuesta "
+        "por agente, a partir del reporte masivo de C3 sobre casos ya cerrados.",
     },
 ]
 
@@ -81,6 +86,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(runs.router)
 app.include_router(data.router)
+app.include_router(benchmarks.router)
 
 
 @app.get("/health", tags=["health"])
