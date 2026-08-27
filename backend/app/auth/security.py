@@ -6,6 +6,11 @@ import jwt
 
 _ALGORITHM = "HS256"
 _TOKEN_LIFETIME = timedelta(days=14)
+# Un solo emisor/audiencia (esta misma API) -- no cambia el modelo de amenaza (el secreto sigue
+# siendo lo unico que efectivamente protege el token), pero validarlos explicitamente rechaza
+# de una un JWT valido-pero-de-otro-contexto si este secreto llegara a reusarse en otro lado.
+_ISSUER = "c3-panel-backend"
+_AUDIENCE = "c3-panel-frontend"
 
 
 def hash_password(password: str) -> str:
@@ -35,6 +40,8 @@ def create_access_token(
             "username": username,
             "is_admin": is_admin,
             "exp": expires_at,
+            "iss": _ISSUER,
+            "aud": _AUDIENCE,
         },
         secret,
         algorithm=_ALGORITHM,
@@ -43,10 +50,13 @@ def create_access_token(
 
 
 def decode_access_token(token: str, secret: str) -> TokenPayload:
-    """Deja propagar jwt.PyJWTError (token expirado, firma invalida, malformado, etc) -- la
-    capa HTTP (auth/dependencies.py) es la que lo convierte en un 401, siguiendo el mismo
-    espiritu "print/HTTP-free" que c3/ y extraction/ ya aplican para sus propias excepciones."""
-    payload = jwt.decode(token, secret, algorithms=[_ALGORITHM])
+    """Deja propagar jwt.PyJWTError (token expirado, firma invalida, malformado, iss/aud que no
+    matchean, etc) -- la capa HTTP (auth/dependencies.py) es la que lo convierte en un 401,
+    siguiendo el mismo espiritu "print/HTTP-free" que c3/ y extraction/ ya aplican para sus
+    propias excepciones."""
+    payload = jwt.decode(
+        token, secret, algorithms=[_ALGORITHM], issuer=_ISSUER, audience=_AUDIENCE
+    )
     return TokenPayload(
         user_id=payload["user_id"], username=payload["username"], is_admin=payload["is_admin"]
     )

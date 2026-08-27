@@ -17,17 +17,36 @@ favor of the frontend driving refreshes on its own configurable interval (see
 `frontend/CLAUDE.md` -- the auto-refresh provider) -- don't add a scheduler back here without
 checking that decision first. Unit tests exist (`tests/`, pytest, no live network); no CI yet.
 
-**Auth**: every endpoint except `POST /auth/login` requires `Authorization: Bearer <jwt>`
-(`app/auth/`, wired onto `runs.router`/`data.router`/`benchmarks.router` via
-`dependencies=[Depends(get_current_user)]` at each `APIRouter(...)` construction --
-`app/auth/dependencies.py`). Individual accounts (`app/auth/store.py`'s `users` table in Turso,
-bcrypt-hashed passwords, no open self-registration -- new accounts are admin-created via
-`POST /auth/users`). The JWT is stateless (14-day expiry, no refresh-token flow, no server-side
-session table) precisely because the browser never calls this API directly -- see the frontend
-integration note below. CORS stays wide open (`allow_origins=["*"]`) on purpose: it was never a
-real security boundary for a server that's only ever called server-to-server (CORS is a
-browser-enforced mechanism, meaningless to a non-browser HTTP client), so narrowing it wouldn't add
-protection -- the JWT check is what actually gates access now.
+**Auth**: every endpoint except `POST /auth/login` and `GET /health` requires
+`Authorization: Bearer <jwt>` (`app/auth/`, wired onto `runs.router`/`data.router`/
+`benchmarks.router` via `dependencies=[Depends(get_current_user)]` at each `APIRouter(...)`
+construction -- `app/auth/dependencies.py`). Individual accounts (`app/auth/store.py`'s `users`
+table in Turso, bcrypt-hashed passwords, no open self-registration -- new accounts are
+admin-created via `POST /auth/users`, listed via `GET /auth/users`). The JWT is stateless (14-day
+expiry, no refresh-token flow, no server-side session table) precisely because the browser never
+calls this API directly -- see the frontend integration note below. Tokens carry `iss`/`aud`
+claims (`app/auth/security.py`) checked on decode -- doesn't change the threat model (the secret is
+still what actually protects the token) but rejects a valid-elsewhere JWT outright if this secret
+were ever reused in another context.
+
+`get_current_user` itself stays fully stateless (trusts the JWT's claims, no Turso round-trip) --
+but `require_admin` (gating `POST`/`GET /auth/users` only) does re-verify `is_admin` against the DB
+on every call, rather than trusting the token's `is_admin` claim blindly. This closes the window
+where demoting an admin wouldn't take effect until their existing token expired (up to 14 days) --
+the extra DB round-trip only affects those two low-traffic admin endpoints, not the rest of the API.
+
+`POST /auth/login` rate-limits failed attempts per (normalized) username -- `app/auth/rate_limit.py`,
+in-memory (module-level dict + lock, same "single process, no `--workers`" architecture as
+`extraction/state.py`'s lock): 5 failures in a 15-minute window -> `429`. A successful login clears
+the counter; the counter is per-username, not global, so hammering one account can't lock out
+others.
+
+CORS (`app/main.py`'s `CORSMiddleware`) is **not** wide open anymore -- `config.load_cors_origins()`
+reads `CORS_ALLOWED_ORIGINS` (comma-separated), defaulting to `http://localhost:3000` (the frontend
+dev server's port) if unset. This is defense-in-depth, not the primary protection (a legitimate
+`backendFetch()` call is server-to-server and was never subject to CORS either way -- CORS is
+browser-enforced), but it does stop a browser page anywhere else from directly querying this API
+and reading the response if a JWT ever leaked through some other channel.
 
 First account: set `AUTH_JWT_SECRET` (required for any endpoint to work -- generate with
 `openssl rand -hex 32`) plus `AUTH_BOOTSTRAP_USERNAME`/`AUTH_BOOTSTRAP_PASSWORD` (optional) as env
@@ -45,13 +64,20 @@ when something actually calls `config.load_auth_config()`): a missing `Authoriza
 surfaces as a 500 -- that's a server misconfiguration, not "your token is invalid," so it's
 deliberately not caught into a 401.
 
-**Frontend integration** (not implemented in this repo -- coordinate with `frontend/CLAUDE.md`):
-the browser never calls this API directly, only the frontend's own server does
+**Frontend integration**: implemented on `frontend/`'s side (coordinate with `frontend/CLAUDE.md`
+for specifics) -- the browser never calls this API directly, only the frontend's own server does
 (`frontend/src/server/backend.server.ts`'s `backendFetch()`, the sole choke point for every backend
-call). The plan is for the frontend to store the JWT returned by `POST /auth/login` in an HttpOnly
-cookie on its own domain (no cross-site cookie issue, since the browser only ever talks to the
-frontend) and forward it as `Authorization: Bearer <token>` on every backend call from that one
-choke point.
+call). The frontend stores the JWT returned by `POST /auth/login` in an HttpOnly cookie on its own
+domain (no cross-site cookie issue, since the browser only ever talks to the frontend) and forwards
+it as `Authorization: Bearer <token>` on every backend call from that one choke point; a 401 from
+the backend clears the cookie and redirects to `/login`.
+
+**Known remaining gap**: a regular (non-admin) user's token stays valid for the full 14 days even
+if their account is deleted/deactivated in the meantime -- `get_current_user` doesn't hit the DB
+(see above). Only the admin-gated endpoints re-verify. Closing this fully would mean either a
+short-lived token + refresh flow, or a revocation list/session table -- neither implemented, since
+this is a small internal tool and the blast radius of a stale non-admin token is "can still view
+reports for a few more days," not privilege escalation.
 
 ## Tooling
 
@@ -462,8 +488,13 @@ a Render-style overridden `$PORT` work with a clean `exec`-based SIGTERM shutdow
   if the next status poll happens to land on a different worker. Don't scale this service horizontally
   (Render's autoscaling / multiple instances included) without moving that state somewhere shared
   (Redis, a DB row) first.
-- **Auth is required, CORS stays wide-open** (see the Auth section near the top of this file) --
-  every route except `/auth/login` and `/health` needs a valid JWT. Set `AUTH_JWT_SECRET` (and
-  optionally `AUTH_BOOTSTRAP_USERNAME`/`AUTH_BOOTSTRAP_PASSWORD` for the very first account) in
-  Render's Environment Variables alongside `C3_USERNAME`/`TURSO_*` -- without `AUTH_JWT_SECRET`,
-  every protected route 500s (fail-lazy, not a startup crash -- see the Auth section).
+- **Auth is required, CORS is scoped to the frontend's real domain(s)** (see the Auth section near
+  the top of this file) -- every route except `/auth/login` and `/health` needs a valid JWT. Set
+  `AUTH_JWT_SECRET` (and optionally `AUTH_BOOTSTRAP_USERNAME`/`AUTH_BOOTSTRAP_PASSWORD` for the very
+  first account) plus `CORS_ALLOWED_ORIGINS` (the deployed frontend's actual URL(s) -- the
+  `localhost:3000` default is dev-only and won't match anything in production) in Render's
+  Environment Variables alongside `C3_USERNAME`/`TURSO_*` -- without `AUTH_JWT_SECRET`, every
+  protected route 500s (fail-lazy, not a startup crash -- see the Auth section). `app/auth/
+  rate_limit.py`'s failed-login counters are in-memory too, same single-process caveat as the
+  bullet above -- don't scale this service horizontally without moving all of this shared state
+  somewhere external first.

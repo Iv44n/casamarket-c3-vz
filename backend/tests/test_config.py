@@ -12,7 +12,11 @@ def clean_credential_env(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv(key, raising=False)
     for key in config._TURSO_KEYS:
         monkeypatch.delenv(key, raising=False)
+    for key in config._LLM_KEYS:
+        monkeypatch.delenv(key, raising=False)
     for key in config._AUTH_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    for key in config._CORS_KEYS:
         monkeypatch.delenv(key, raising=False)
 
 
@@ -146,6 +150,82 @@ def test_load_turso_config_reads_from_process_env_when_file_missing(
     assert turso.auth_token == "envtoken"
 
 
+def test_load_llm_config_defaults_to_minimax_when_provider_unset(tmp_path: Path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "MINIMAX_API_KEY=mm-secreta\n"
+        "MINIMAX_MODEL=MiniMax-M1\n"
+        "MINIMAX_BASE_URL=https://api.minimax.io/v1\n"
+    )
+
+    llm = config.load_llm_config(env_path=env_file)
+
+    assert llm.provider_name == "minimax"
+
+
+def test_load_llm_config_minimax_missing_api_key_raises(tmp_path: Path):
+    with pytest.raises(RuntimeError, match="MINIMAX_API_KEY"):
+        config.load_llm_config(env_path=tmp_path / "no-existe.env")
+
+
+def test_load_llm_config_minimax_success(tmp_path: Path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "LLM_PROVIDER=minimax\n"
+        "MINIMAX_API_KEY=mm-secreta\n"
+        "MINIMAX_MODEL=MiniMax-M1\n"
+        "MINIMAX_BASE_URL=https://api.minimax.io/v1\n"
+    )
+
+    llm = config.load_llm_config(env_path=env_file)
+
+    assert llm.provider_name == "minimax"
+    assert llm.minimax_api_key == "mm-secreta"
+    assert llm.minimax_model == "MiniMax-M1"
+    assert llm.minimax_base_url == "https://api.minimax.io/v1"
+    assert llm.model_label == "MiniMax-M1"
+
+
+def test_load_llm_config_minimax_missing_vars_lists_all_of_them(tmp_path: Path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("LLM_PROVIDER=minimax\n")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        config.load_llm_config(env_path=env_file)
+
+    message = str(exc_info.value)
+    assert "MINIMAX_API_KEY" in message
+    assert "MINIMAX_MODEL" in message
+    assert "MINIMAX_BASE_URL" in message
+
+
+def test_load_llm_config_minimax_reads_from_process_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("LLM_PROVIDER", "minimax")
+    monkeypatch.setenv("MINIMAX_API_KEY", "mm-secreta")
+    monkeypatch.setenv("MINIMAX_MODEL", "MiniMax-M1")
+    monkeypatch.setenv("MINIMAX_BASE_URL", "https://api.minimax.io/v1")
+
+    llm = config.load_llm_config(env_path=tmp_path / "no-existe.env")
+
+    assert llm.provider_name == "minimax"
+
+
+def test_load_llm_config_unknown_provider_raises(tmp_path: Path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("LLM_PROVIDER=anthropic\n")
+
+    with pytest.raises(RuntimeError, match="anthropic"):
+        config.load_llm_config(env_path=env_file)
+
+
+def test_llm_config_model_label_is_none_for_a_provider_with_no_model_field():
+    llm = config.LLMConfig(provider_name="unlisted")
+
+    assert llm.model_label is None
+
+
 def test_load_auth_config_missing_secret_raises(tmp_path: Path):
     with pytest.raises(RuntimeError, match="AUTH_JWT_SECRET"):
         config.load_auth_config(env_path=tmp_path / "no-existe.env")
@@ -196,3 +276,30 @@ def test_load_auth_config_process_env_overrides_file_value(
     auth = config.load_auth_config(env_path=env_file)
 
     assert auth.jwt_secret == "desde-env"
+
+
+def test_load_cors_origins_defaults_to_localhost_3000_when_unset(tmp_path: Path):
+    origins = config.load_cors_origins(env_path=tmp_path / "no-existe.env")
+
+    assert origins == ["http://localhost:3000"]
+
+
+def test_load_cors_origins_splits_a_comma_separated_list(tmp_path: Path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "CORS_ALLOWED_ORIGINS=https://a.example.com, https://b.example.com\n"
+    )
+
+    origins = config.load_cors_origins(env_path=env_file)
+
+    assert origins == ["https://a.example.com", "https://b.example.com"]
+
+
+def test_load_cors_origins_reads_from_process_env_when_file_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://from-env.example.com")
+
+    origins = config.load_cors_origins(env_path=tmp_path / "no-existe.env")
+
+    assert origins == ["https://from-env.example.com"]

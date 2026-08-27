@@ -63,14 +63,14 @@ def _init_schema(conn: DBConnection) -> None:
     conn.executescript(_SCHEMA)
 
 
-def _normalize_username(username: str) -> str:
+def normalize_username(username: str) -> str:
     return username.strip().lower()
 
 
 def get_user_by_username(conn: DBConnection, username: str) -> UserRecord | None:
     cursor = conn.execute(
         "SELECT id, username, password_hash, is_admin, created_at FROM users WHERE username = ?",
-        (_normalize_username(username),),
+        (normalize_username(username),),
     )
     row = cursor.fetchone()
     if row is None:
@@ -86,7 +86,7 @@ def create_user(
     """Check-then-insert en vez de depender de capturar una excepcion IntegrityError especifica
     de turso_serverless (no confirmada en este codigo) -- hay una ventana TOCTOU chica bajo
     concurrencia, aceptable para una operacion admin-only de bajo volumen."""
-    normalized = _normalize_username(username)
+    normalized = normalize_username(username)
     if get_user_by_username(conn, normalized) is not None:
         raise UsernameTakenError(f"El usuario {username!r} ya existe")
 

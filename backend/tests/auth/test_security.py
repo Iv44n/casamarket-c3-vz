@@ -49,3 +49,18 @@ def test_decode_access_token_raises_for_an_expired_token():
 
     with pytest.raises(jwt.PyJWTError):
         security.decode_access_token(token, "test-secret-that-is-long-enough-1234")
+
+
+def test_decode_access_token_raises_for_a_token_missing_issuer_and_audience():
+    # Un JWT valido (misma firma) pero sin los claims iss/aud que create_access_token agrega --
+    # simula un token de otro contexto que reusara el mismo secreto por error.
+    payload = {
+        "user_id": 1,
+        "username": "ana",
+        "is_admin": False,
+        "exp": datetime.now(timezone.utc) + timedelta(days=1),
+    }
+    token = jwt.encode(payload, "test-secret-that-is-long-enough-1234", algorithm="HS256")
+
+    with pytest.raises(jwt.PyJWTError):
+        security.decode_access_token(token, "test-secret-that-is-long-enough-1234")

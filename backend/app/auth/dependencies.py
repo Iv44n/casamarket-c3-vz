@@ -5,7 +5,7 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .. import config
-from . import security
+from . import security, store
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -44,6 +44,18 @@ def get_current_user(
 
 
 def require_admin(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
-    if not user.is_admin:
+    """A diferencia de get_current_user, esta si toca Turso -- re-verifica is_admin contra la DB
+    en vez de confiar ciegamente en el claim del JWT. Solo la gatean 2 endpoints de bajo trafico
+    (POST/GET /auth/users), asi que el costo extra es aceptable a cambio de cerrar la ventana en
+    la que a un admin degradado a usuario normal le seguiria funcionando is_admin=true en su
+    token viejo hasta que expire (14 dias) -- el resto de la API sigue sin este costo porque no
+    le importa is_admin."""
+    conn = store.get_connection()
+    try:
+        current = store.get_user_by_username(conn, user.username)
+    finally:
+        conn.close()
+
+    if current is None or not current.is_admin:
         raise HTTPException(status_code=403, detail="Se requiere una cuenta admin")
     return user

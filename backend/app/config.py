@@ -38,6 +38,30 @@ _LLM_KEYS = (
 
 _AUTH_KEYS = ("AUTH_JWT_SECRET", "AUTH_BOOTSTRAP_USERNAME", "AUTH_BOOTSTRAP_PASSWORD")
 
+_CORS_KEYS = ("CORS_ALLOWED_ORIGINS",)
+# Default de dev: el puerto de `bun run dev` (frontend/CLAUDE.md). En Render/Vercel, seteando
+# CORS_ALLOWED_ORIGINS (lista separada por comas) con el/los dominio(s) reales del frontend.
+_DEFAULT_CORS_ORIGINS = ["http://localhost:3000"]
+
+
+def load_cors_origins(env_path: Path | None = None) -> list[str]:
+    """A diferencia de los otros load_*_config() de aca arriba, no es un secreto -- tiene un
+    default razonable para dev en vez de RuntimeError si falta. No hace falta lidiar con cookies
+    cross-site (la API nunca recibe llamadas de credenciales via cookie, ver app/auth/) pero
+    igual conviene acotar el origin: si un JWT se filtra por otra via (XSS, log, etc), una
+    lista abierta (allow_origins=["*"]) deja que CUALQUIER pagina en un browser lo replique
+    contra esta API y lea la respuesta -- acotarlo a los dominios reales del frontend es
+    defensa en profundidad barata (no afecta las llamadas legitimas: backendFetch() corre
+    server-to-server, CORS ni se evalua para esas)."""
+    path = env_path or PROJECT_ROOT / ".env"
+    values = dict(dotenv_values(path))
+    values.update({k: v for k, v in os.environ.items() if k in _CORS_KEYS})
+
+    raw = values.get("CORS_ALLOWED_ORIGINS")
+    if not raw:
+        return list(_DEFAULT_CORS_ORIGINS)
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
 # Unico lugar del backend donde se asume el valor literal de "Estado" -- el resto del
 # proyecto es deliberadamente agnostico a ese string (ver store.py).
 BENCHMARK_CLOSED_ESTADOS = ["Cerrada"]

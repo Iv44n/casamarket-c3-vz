@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from .. import config
-from ..auth import security, store
+from ..auth import rate_limit, security, store
 from ..auth.dependencies import CurrentUser, get_current_user, require_admin
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -37,6 +37,12 @@ class CreateUserRequest(BaseModel):
 
 @router.post("/login")
 def login(request: LoginRequest) -> TokenResponse:
+    rate_limit_key = store.normalize_username(request.username)
+    try:
+        rate_limit.check(rate_limit_key)
+    except rate_limit.TooManyAttemptsError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+
     conn = store.get_connection()
     try:
         user = store.get_user_by_username(conn, request.username)
@@ -46,8 +52,10 @@ def login(request: LoginRequest) -> TokenResponse:
     # Usuario desconocido y password incorrecta devuelven el mismo 401 generico a proposito --
     # distinguirlos permitiria enumerar usernames validos.
     if user is None or not security.verify_password(request.password, user.password_hash):
+        rate_limit.record_failure(rate_limit_key)
         raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
 
+    rate_limit.clear(rate_limit_key)
     auth_config = config.load_auth_config()
     token, expires_at = security.create_access_token(
         user.id, user.username, user.is_admin, auth_config.jwt_secret
