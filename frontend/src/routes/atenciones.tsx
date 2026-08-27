@@ -12,7 +12,6 @@ import { AgentWorkloadChart } from '#/components/agent-workload-chart'
 import { AttentionRecordsTable } from '#/components/attention-records-table'
 import { CampaignWorkloadChart } from '#/components/campaign-workload-chart'
 import { DateRangeFilter } from '#/components/date-range-filter'
-import { DemandHeatmapChart } from '#/components/demand-heatmap-chart'
 import { IncidentHierarchy } from '#/components/incident-hierarchy'
 import { StatusDonutChart } from '#/components/status-donut-chart'
 import { Badge } from '#/components/ui/badge'
@@ -44,7 +43,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 import {
   buildAgentRanking,
   buildCampaignRanking,
-  buildDemandHeatmap,
   buildStatusChartData,
   buildTopClosers,
   describeAvailability,
@@ -63,7 +61,6 @@ import { cn } from '#/lib/utils'
 import {
   getAttentionRecordsPage,
   getAttentionsAnalytics,
-  getDemandAnalytics,
   getExtractionStatus,
   getIncidentAnalytics,
   triggerBackfill,
@@ -172,15 +169,13 @@ export const Route = createFileRoute('/atenciones')({
   ssr: 'data-only',
   validateSearch: attentionsSearchSchema,
   loader: async ({ location }) => {
-    const { date, dateEnd, demandDate, demandDateEnd } =
-      location.search as AttentionsSearch
-    const [status, attentions, incidents, demand] = await Promise.all([
+    const { date, dateEnd } = location.search as AttentionsSearch
+    const [status, attentions, incidents] = await Promise.all([
       getExtractionStatus(),
       getAttentionsAnalytics({ data: { date, dateEnd } }),
-      getIncidentAnalytics({ data: { date, dateEnd } }),
-      getDemandAnalytics({ data: { date: demandDate, dateEnd: demandDateEnd } })
+      getIncidentAnalytics({ data: { date, dateEnd } })
     ])
-    return { status, attentions, incidents, demand }
+    return { status, attentions, incidents }
   },
   component: AtencionesPage
 })
@@ -197,8 +192,6 @@ function AtencionesPage() {
     plan,
     date,
     dateEnd,
-    demandDate,
-    demandDateEnd,
     demorasPage
   } = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -206,7 +199,6 @@ function AtencionesPage() {
   const backfill = useServerFn(triggerBackfill)
   const fetchAttentionsAnalytics = useServerFn(getAttentionsAnalytics)
   const fetchIncidentAnalytics = useServerFn(getIncidentAnalytics)
-  const fetchDemandAnalytics = useServerFn(getDemandAnalytics)
   const fetchAttentionRecordsPage = useServerFn(getAttentionRecordsPage)
   const fetchExtractionStatus = useServerFn(getExtractionStatus)
   const [pending, setPending] = useState(false)
@@ -215,9 +207,7 @@ function AtencionesPage() {
   const [incidentAnalytics, setIncidentAnalytics] = useState(
     initialData.incidents
   )
-  const [demandAnalytics, setDemandAnalytics] = useState(initialData.demand)
   const [summaryLoading, setSummaryLoading] = useState(false)
-  const [demandLoading, setDemandLoading] = useState(false)
   const [attentionRecordsPage, setAttentionRecordsPage] = useState(
     EMPTY_ATTENTION_RECORDS_PAGE
   )
@@ -253,35 +243,6 @@ function AtencionesPage() {
     }
     refetchSummary(date, dateEnd)
   }, [date, dateEnd, refetchSummary])
-
-  const isFirstDemandRun = useRef(true)
-  const demandRequestIdRef = useRef(0)
-  const refetchDemand = useCallback(
-    async (
-      targetDemandDate: typeof demandDate,
-      targetDemandDateEnd: typeof demandDateEnd
-    ) => {
-      const requestId = ++demandRequestIdRef.current
-      setDemandLoading(true)
-      try {
-        const result = await fetchDemandAnalytics({
-          data: { date: targetDemandDate, dateEnd: targetDemandDateEnd }
-        })
-        if (requestId !== demandRequestIdRef.current) return
-        setDemandAnalytics(result)
-      } finally {
-        if (requestId === demandRequestIdRef.current) setDemandLoading(false)
-      }
-    },
-    [fetchDemandAnalytics]
-  )
-  useEffect(() => {
-    if (isFirstDemandRun.current) {
-      isFirstDemandRun.current = false
-      return
-    }
-    refetchDemand(demandDate, demandDateEnd)
-  }, [demandDate, demandDateEnd, refetchDemand])
 
   useEffect(() => {
     if (view !== 'demoras') return
@@ -338,10 +299,6 @@ function AtencionesPage() {
   const campaigns = useMemo(
     () => buildCampaignRanking(analytics, direction, estados, agentes),
     [analytics, direction, estados, agentes]
-  )
-  const demandHeatmap = useMemo(
-    () => buildDemandHeatmap(demandAnalytics),
-    [demandAnalytics]
   )
   const { blockedMessage, advisoryMessage } = useMemo(
     () => describeAvailability(analytics, direction),
@@ -411,9 +368,8 @@ function AtencionesPage() {
       ),
     [attentionRecordsPage, plan]
   )
-  const isRangeSelected = date !== 'all' && Boolean(dateEnd) && dateEnd !== date
-  const isPastDaySelected =
-    date !== 'all' && !isRangeSelected && date !== todayIsoDate()
+  const isRangeSelected = Boolean(dateEnd) && dateEnd !== date
+  const isPastDaySelected = !isRangeSelected && date !== todayIsoDate()
   async function handleRefresh() {
     setPending(true)
     try {
@@ -426,7 +382,6 @@ function AtencionesPage() {
       }
       await Promise.all([
         refetchSummary(date, dateEnd),
-        refetchDemand(demandDate, demandDateEnd),
         fetchExtractionStatus().then(setExtractionStatus)
       ])
     } catch (err) {
@@ -898,60 +853,6 @@ function AtencionesPage() {
                           agents={agents}
                           onAgentClick={goToAgentIncidents}
                         />
-                      )}
-                    </CardContent>
-                  </Card>
-                </section>
-
-                <section
-                  aria-label="Mapa de calor de demanda"
-                  className="flex flex-col lg:col-span-2"
-                >
-                  <Card size="sm" className="flex h-full flex-col">
-                    <CardHeader className="shrink-0 gap-0.5 border-b">
-                      <CardTitle className="text-base font-medium text-muted-foreground">
-                        Mapa de calor de demanda
-                      </CardTitle>
-                      <CardDescription className="text-sm">
-                        Volumen de tickets por día de la semana y hora --
-                        identifica picos de capacidad. Elegi cualquier rango de
-                        fechas (puede abarcar varias semanas); usa su propio
-                        filtro, independiente del filtro de arriba.
-                      </CardDescription>
-                      <CardAction>
-                        <DateRangeFilter
-                          date={demandDate}
-                          dateEnd={demandDateEnd}
-                          disabled={demandLoading}
-                          onChange={(newDate, newDateEnd) =>
-                            navigate({
-                              search: prev => ({
-                                ...prev,
-                                demandDate: newDate,
-                                demandDateEnd:
-                                  newDateEnd ??
-                                  (newDate === 'all' ? demandDateEnd : newDate)
-                              }),
-                              replace: true,
-                              resetScroll: false
-                            })
-                          }
-                          clearLabel="Quitar filtro de fecha del mapa de calor"
-                        />
-                      </CardAction>
-                    </CardHeader>
-                    <CardContent
-                      className={cn(
-                        'flex flex-1 items-center transition-opacity',
-                        demandLoading && 'opacity-50'
-                      )}
-                    >
-                      {demandHeatmap.total === 0 ? (
-                        <p className="text-sm text-muted-foreground">
-                          Sin registros.
-                        </p>
-                      ) : (
-                        <DemandHeatmapChart heatmap={demandHeatmap} />
                       )}
                     </CardContent>
                   </Card>

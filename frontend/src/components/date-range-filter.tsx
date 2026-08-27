@@ -1,4 +1,4 @@
-import { CalendarIcon, XIcon } from 'lucide-react'
+import { CalendarIcon } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { DateRange } from 'react-day-picker'
 import { es } from 'react-day-picker/locale'
@@ -95,23 +95,18 @@ export function DateRangeFilter({
   date,
   dateEnd,
   onChange,
-  clearLabel = 'Quitar filtro de fecha',
   disabled = false
 }: {
   date: DateFilter
   dateEnd: string | undefined
   onChange: (date: DateFilter, dateEnd: string | undefined) => void
-  clearLabel?: string
   disabled?: boolean
 }) {
-  const isRangeSelected = date !== 'all' && Boolean(dateEnd) && dateEnd !== date
-  const committedRange: DateRange | undefined =
-    date === 'all'
-      ? undefined
-      : {
-          from: parseIsoDateLocal(date),
-          to: dateEnd ? parseIsoDateLocal(dateEnd) : parseIsoDateLocal(date)
-        }
+  const isRangeSelected = Boolean(dateEnd) && dateEnd !== date
+  const committedRange: DateRange = {
+    from: parseIsoDateLocal(date),
+    to: dateEnd ? parseIsoDateLocal(dateEnd) : parseIsoDateLocal(date)
+  }
   const [pendingRange, setPendingRange] = useState<DateRange | undefined>(
     committedRange
   )
@@ -120,12 +115,9 @@ export function DateRangeFilter({
     if (disabled) setOpen(false)
   }, [disabled])
   const presets = useMemo(buildDatePresets, [])
-  const activePreset =
-    date !== 'all'
-      ? presets.find(
-          preset => preset.from === date && preset.to === (dateEnd ?? date)
-        )
-      : undefined
+  const activePreset = presets.find(
+    preset => preset.from === date && preset.to === (dateEnd ?? date)
+  )
   function commitRange(from: Date, to: Date) {
     const fromIso = toIsoDateLocal(from)
     const toIso = toIsoDateLocal(to)
@@ -134,7 +126,7 @@ export function DateRangeFilter({
   function handlePendingRangeSelect(next: DateRange | undefined) {
     setPendingRange(next)
     if (!next?.from) {
-      onChange('all', undefined)
+      onChange(todayIsoDate(), undefined)
       return
     }
     if (!next.to) return
@@ -144,91 +136,61 @@ export function DateRangeFilter({
     onChange(preset.from, preset.to !== preset.from ? preset.to : undefined)
     setOpen(false)
   }
-  function handleClearInPopover() {
-    onChange('all', undefined)
-    setOpen(false)
-  }
   return (
-    <div className="flex items-center gap-1">
-      <Popover
-        open={open}
-        onOpenChange={nextOpen => {
-          if (disabled) return
-          setOpen(nextOpen)
-          if (nextOpen) setPendingRange(committedRange)
-        }}
+    <Popover
+      open={open}
+      onOpenChange={nextOpen => {
+        if (disabled) return
+        setOpen(nextOpen)
+        if (nextOpen) setPendingRange(committedRange)
+      }}
+    >
+      <PopoverTrigger
+        disabled={disabled}
+        render={<Button variant="outline" className="font-normal" />}
       >
-        <PopoverTrigger
-          disabled={disabled}
-          render={<Button variant="outline" className="font-normal" />}
-        >
-          <CalendarIcon data-icon="inline-start" />
-          {date === 'all'
-            ? 'Elegir fecha'
-            : activePreset
-              ? activePreset.label
-              : isRangeSelected
-                ? `${date} — ${dateEnd}`
-                : date}
-        </PopoverTrigger>
-        <PopoverContent className="w-auto p-0">
-          <Tabs
-            defaultValue={date === 'all' || activePreset ? 'quick' : 'range'}
-          >
-            <TabsList className="mx-3 mt-3">
-              <TabsTrigger value="range">Rango</TabsTrigger>
-              <TabsTrigger value="quick">Rápido</TabsTrigger>
-            </TabsList>
-            <TabsContent value="range">
-              <Calendar
-                mode="range"
-                numberOfMonths={2}
-                resetOnSelect
-                selected={pendingRange}
-                onSelect={handlePendingRangeSelect}
-                disabled={disabled ? true : { after: new Date() }}
-                locale={es}
-              />
-            </TabsContent>
-            <TabsContent value="quick" className="flex flex-col gap-1 p-3 pt-2">
+        <CalendarIcon data-icon="inline-start" />
+        {activePreset
+          ? activePreset.label
+          : isRangeSelected
+            ? `${date} — ${dateEnd}`
+            : date}
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-0">
+        <Tabs defaultValue={activePreset ? 'quick' : 'range'}>
+          <TabsList className="mx-3 mt-3">
+            <TabsTrigger value="range">Rango</TabsTrigger>
+            <TabsTrigger value="quick">Rápido</TabsTrigger>
+          </TabsList>
+          <TabsContent value="range">
+            <Calendar
+              mode="range"
+              numberOfMonths={2}
+              resetOnSelect
+              selected={pendingRange}
+              onSelect={handlePendingRangeSelect}
+              disabled={disabled ? true : { after: new Date() }}
+              locale={es}
+            />
+          </TabsContent>
+          <TabsContent value="quick" className="flex flex-col gap-1 p-3 pt-2">
+            {presets.map(preset => (
               <Button
-                variant={date === 'all' ? 'secondary' : 'ghost'}
+                key={preset.key}
+                variant={
+                  activePreset?.key === preset.key ? 'secondary' : 'ghost'
+                }
                 size="sm"
                 className="justify-start"
                 disabled={disabled}
-                onClick={handleClearInPopover}
+                onClick={() => handlePresetSelect(preset)}
               >
-                Todos
+                {preset.label}
               </Button>
-              {presets.map(preset => (
-                <Button
-                  key={preset.key}
-                  variant={
-                    activePreset?.key === preset.key ? 'secondary' : 'ghost'
-                  }
-                  size="sm"
-                  className="justify-start"
-                  disabled={disabled}
-                  onClick={() => handlePresetSelect(preset)}
-                >
-                  {preset.label}
-                </Button>
-              ))}
-            </TabsContent>
-          </Tabs>
-        </PopoverContent>
-      </Popover>
-      {date !== 'all' && (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={clearLabel}
-          disabled={disabled}
-          onClick={() => onChange('all', undefined)}
-        >
-          <XIcon />
-        </Button>
-      )}
-    </div>
+            ))}
+          </TabsContent>
+        </Tabs>
+      </PopoverContent>
+    </Popover>
   )
 }

@@ -40,14 +40,11 @@ export const AGENT_LIMIT_OPTIONS = [5, 10, 15, 20, 25, 'all'] as const
 export type AgentLimit = (typeof AGENT_LIMIT_OPTIONS)[number]
 
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/
-const dateFilterValue = z.union([
-  z.literal('all'),
-  z.string().regex(ISO_DATE_REGEX)
-])
+const dateFilterValue = z.string().regex(ISO_DATE_REGEX)
 export type DateFilter = z.infer<typeof dateFilterValue>
 const dateEndValue = z.string().regex(ISO_DATE_REGEX).optional()
 export const dateFilterSchema = z.object({
-  date: dateFilterValue.default('all'),
+  date: dateFilterValue.default(todayIsoDate),
   dateEnd: dateEndValue
 })
 export function todayIsoDate(): string {
@@ -61,9 +58,9 @@ export function todayIsoDate(): string {
     parts.find(p => p.type === type)?.value ?? ''
   return `${part('year')}-${part('month')}-${part('day')}`
 }
-// Demand heatmap's own date filter defaults to the current week (Monday-Sunday);
-// the user picks any custom range from there via a calendar, same as the page's
-// own date filter -- including a range spanning several weeks at once.
+// Demand heatmap's date filter defaults to the current week (Monday-Sunday); the
+// user picks any custom range from there via a calendar -- including a range
+// spanning several weeks at once.
 function pad2(value: number): string {
   return String(value).padStart(2, '0')
 }
@@ -85,6 +82,15 @@ export function mondayOfWeek(isoDate: string): string {
 export function firstDayOfMonthIso(isoDate: string): string {
   const [year, month] = isoDate.split('-')
   return `${year}-${month}-01`
+}
+export function enumerateIsoDates(from: string, to: string): string[] {
+  const days: string[] = []
+  let cursor = from
+  while (cursor <= to) {
+    days.push(cursor)
+    cursor = addDaysIso(cursor, 1)
+  }
+  return days
 }
 function defaultDemandWeekStart(): string {
   return mondayOfWeek(todayIsoDate())
@@ -129,11 +135,16 @@ export const attentionsSearchSchema = z.object({
   plan: z.string().default('all'),
   date: dateFilterValue.default(todayIsoDate),
   dateEnd: dateEndValue,
-  demandDate: dateFilterValue.default(defaultDemandWeekStart),
-  demandDateEnd: dateEndValue.default(defaultDemandWeekEnd),
   demorasPage: z.number().int().min(1).default(1)
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
+export const tendenciasHistoricasSearchSchema = z.object({
+  date: dateFilterValue.default(defaultDemandWeekStart),
+  dateEnd: dateEndValue.default(defaultDemandWeekEnd)
+})
+export type TendenciasHistoricasSearch = z.infer<
+  typeof tendenciasHistoricasSearchSchema
+>
 export type EstadosFilter = AttentionsSearch['estados']
 export type AgentesFilter = AttentionsSearch['agentes']
 export const DIRECTION_REPORT_NAME: Record<AttentionDirection, ReportName> = {
@@ -202,7 +213,7 @@ export const attentionRecordsPageRequestSchema = z.object({
   estados: z.union([z.literal('all'), z.array(z.string())]).default('all'),
   campana: z.string().default('all'),
   agentes: z.union([z.literal('all'), z.array(z.string())]).default('all'),
-  date: dateFilterValue.default('all'),
+  date: dateFilterValue.default(todayIsoDate),
   dateEnd: dateEndValue,
   page: z.number().int().min(1).default(1),
   pageSize: z.number().int().min(1).max(200).default(50)
@@ -224,6 +235,14 @@ export type DemandBucketCount = {
 export type DemandAnalytics = {
   available: boolean
   buckets: DemandBucketCount[]
+}
+export type DailyCaseCount = {
+  date: string // yyyy-mm-dd (Lima)
+  count: number
+}
+export type DailyTrendAnalytics = {
+  available: boolean
+  days: DailyCaseCount[]
 }
 export type IncidentRecord = {
   categoryOrder: IncidentCategory[]

@@ -1,5 +1,10 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { ActivityIcon, BarChartHorizontalIcon, TableIcon } from 'lucide-react'
+import {
+  ActivityIcon,
+  BarChartHorizontalIcon,
+  TableIcon,
+  TrendingUpIcon
+} from 'lucide-react'
 import { ModeToggle } from '#/components/mode-toggle'
 import {
   Sidebar,
@@ -20,6 +25,11 @@ const NAV_ITEMS = [
     to: '/atenciones' as const,
     label: 'Atenciones',
     icon: BarChartHorizontalIcon
+  },
+  {
+    to: '/tendencias-historicas' as const,
+    label: 'Tendencias históricas',
+    icon: TrendingUpIcon
   },
   { to: '/status' as const, label: 'Extraction status', icon: ActivityIcon }
 ] as const

@@ -4,6 +4,7 @@ import {
   type AttentionDirection,
   type AttentionFilter,
   type AttentionsAnalytics,
+  type DailyTrendAnalytics,
   type DemandAnalytics,
   DIRECTION_REPORT_NAME,
   type EstadosFilter
@@ -363,6 +364,82 @@ export type DemandHeatmap = {
   rows: DemandHeatmapRow[]
   total: number
 }
+const TREND_MONTH_SHORT = [
+  'ene',
+  'feb',
+  'mar',
+  'abr',
+  'may',
+  'jun',
+  'jul',
+  'ago',
+  'sep',
+  'oct',
+  'nov',
+  'dic'
+]
+function formatTrendDayLabel(iso: string): string {
+  const [, month, day] = iso.split('-').map(Number)
+  return `${day} ${TREND_MONTH_SHORT[month - 1]}`
+}
+// Ventana de 7 dias para el promedio movil una vez que hay suficiente historia;
+// en rangos mas cortos se reduce para que la linea de tendencia no quede plana
+// por promediar sobre casi todo el rango.
+function trendMovingAverageWindow(pointCount: number): number {
+  return pointCount >= 14 ? 7 : Math.max(2, Math.floor(pointCount / 2))
+}
+export type DailyTrendPoint = {
+  date: string
+  label: string
+  count: number
+  movingAverage: number
+}
+export type DailyTrendSeries = {
+  available: boolean
+  points: DailyTrendPoint[]
+  total: number
+  average: number
+  peak: { date: string; label: string; count: number } | null
+}
+export function buildDailyTrend(
+  analytics: DailyTrendAnalytics
+): DailyTrendSeries {
+  const { days } = analytics
+  if (!analytics.available || days.length === 0) {
+    return {
+      available: analytics.available,
+      points: [],
+      total: 0,
+      average: 0,
+      peak: null
+    }
+  }
+  const windowSize = trendMovingAverageWindow(days.length)
+  const counts = days.map(d => d.count)
+  const points = days.map((d, i) => {
+    const start = Math.max(0, i - windowSize + 1)
+    const slice = counts.slice(start, i + 1)
+    return {
+      date: d.date,
+      label: formatTrendDayLabel(d.date),
+      count: d.count,
+      movingAverage: slice.reduce((sum, v) => sum + v, 0) / slice.length
+    }
+  })
+  const total = counts.reduce((sum, v) => sum + v, 0)
+  const peak = points.reduce(
+    (best, point) => (point.count > best.count ? point : best),
+    points[0]
+  )
+  return {
+    available: true,
+    points,
+    total,
+    average: total / counts.length,
+    peak: { date: peak.date, label: peak.label, count: peak.count }
+  }
+}
+
 export function buildDemandHeatmap(demand: DemandAnalytics): DemandHeatmap {
   const counts = new Map<string, number>()
   let total = 0

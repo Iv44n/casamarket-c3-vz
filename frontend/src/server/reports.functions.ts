@@ -17,6 +17,7 @@ import {
   fetchContactsSyncStatus,
   fetchExtractionStatus,
   fetchHistoricalBackfillStatus,
+  fetchReportDailyCounts,
   fetchReportRows,
   fetchReportRowsHistory,
   fetchReportRowsPage,
@@ -30,6 +31,7 @@ import type {
   AttentionRecord,
   AttentionRecordsPage,
   AttentionsAnalytics,
+  DailyTrendAnalytics,
   DemandAnalytics,
   DemandBucketCount,
   DirectionAnalytics,
@@ -43,6 +45,7 @@ import {
   attentionRecordsPageRequestSchema,
   backfillRequestSchema,
   dateFilterSchema,
+  enumerateIsoDates,
   historicalBackfillRequestSchema,
   reportNameSchema,
   reportRowsPageRequestSchema
@@ -304,8 +307,7 @@ function deriveDirectionAnalytics(
 function toHistoryDateRange(
   date: string,
   dateEnd: string | undefined
-): { dateFrom?: string; dateTo?: string } {
-  if (date === 'all') return {}
+): { dateFrom: string; dateTo: string } {
   return { dateFrom: date, dateTo: dateEnd ?? date }
 }
 
@@ -488,6 +490,32 @@ export const getDemandAnalytics = createServerFn({ method: 'GET' })
               )
         )
       ]
+    }
+  })
+
+// Usa /history/daily-counts (agregado con GROUP BY en SQL del lado del backend) en vez de
+// fetchReportRowsHistory -- para un rango de 30 dias eso es ~30 filas en vez de miles de
+// filas completas, sub-segundo en vez de los 8s+ medidos con el endpoint de detalle.
+export const getDailyCaseTrend = createServerFn({ method: 'GET' })
+  .validator(dateFilterSchema)
+  .handler(async ({ data }): Promise<DailyTrendAnalytics> => {
+    const { dateFrom, dateTo } = toHistoryDateRange(data.date, data.dateEnd)
+    const [attentionCounts, outboundCounts] = await Promise.all([
+      fetchReportDailyCounts('attention', dateFrom, dateTo),
+      fetchReportDailyCounts('outboundattention', dateFrom, dateTo)
+    ])
+    const counts = new Map<string, number>()
+    for (const dailyCounts of [attentionCounts, outboundCounts]) {
+      if (dailyCounts === null) continue
+      for (const { date, count } of dailyCounts) {
+        counts.set(date, (counts.get(date) ?? 0) + count)
+      }
+    }
+    return {
+      available: attentionCounts !== null || outboundCounts !== null,
+      days: enumerateIsoDates(data.date, data.dateEnd ?? data.date).map(
+        date => ({ date, count: counts.get(date) ?? 0 })
+      )
     }
   })
 

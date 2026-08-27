@@ -3,6 +3,7 @@ import type {
   BackfillRunSummary,
   BackfillStatus,
   ContactsSyncStatus,
+  DailyCaseCount,
   ExtractionStatus,
   HistoricalBackfillStatus,
   ReportRow,
@@ -66,7 +67,18 @@ export async function fetchReportRowsPage(
   return response.status === 404 ? null : await response.json()
 }
 
-const inFlightHistoryFetches = new Map<string, Promise<ReportRow[] | null>>()
+// TTL cache (not just in-flight dedup): history fetches are expensive on the backend
+// (full row-level data for every day in range, no server-side caching there -- a 30-day
+// attention history costs ~8s measured live), and this app now has multiple analytics
+// functions (heatmap + daily trend on /tendencias-historicas, summary + incidents on
+// /atenciones) that each need the same report/range history concurrently or in quick
+// succession. Caching the promise itself (not just the resolved value) covers the
+// concurrent case too, same as fetchReportRows above.
+const _historyRowsCache = new Map<
+  string,
+  { promise: Promise<ReportRow[] | null>; expiresAt: number }
+>()
+const HISTORY_ROWS_CACHE_TTL_MS = 60_000
 
 export async function fetchReportRowsHistory(
   reportName: string,
@@ -78,14 +90,42 @@ export async function fetchReportRowsHistory(
   if (dateTo) params.set('date_to', dateTo)
   const query = params.toString()
   const path = `/data/${reportName}/history${query ? `?${query}` : ''}`
-  const existing = inFlightHistoryFetches.get(path)
-  if (existing) return existing
+  const now = Date.now()
+  const cached = _historyRowsCache.get(path)
+  if (cached && cached.expiresAt > now) return cached.promise
+
   const promise = (async () => {
     const response = await backendFetch(path)
     return response.status === 404 ? null : await response.json()
-  })().finally(() => inFlightHistoryFetches.delete(path))
-  inFlightHistoryFetches.set(path, promise)
+  })()
+  _historyRowsCache.set(path, {
+    promise,
+    expiresAt: now + HISTORY_ROWS_CACHE_TTL_MS
+  })
+  promise.catch(() => {
+    const entry = _historyRowsCache.get(path)
+    if (entry?.promise === promise) _historyRowsCache.delete(path)
+  })
   return promise
+}
+
+// Aggregated variant of fetchReportRowsHistory: GROUP BY date in SQL server-side, so a
+// 30-day range comes back as ~30 {date,count} rows instead of thousands of full attention
+// rows -- sub-second instead of the 8s+ measured for /history on the same range. Use this
+// whenever only the daily count is needed (e.g. the trend chart); reach for
+// fetchReportRowsHistory only when the row-level detail itself is required.
+export async function fetchReportDailyCounts(
+  reportName: string,
+  dateFrom: string,
+  dateTo: string
+): Promise<DailyCaseCount[] | null> {
+  const params = new URLSearchParams()
+  params.set('date_from', dateFrom)
+  params.set('date_to', dateTo)
+  const response = await backendFetch(
+    `/data/${reportName}/history/daily-counts?${params.toString()}`
+  )
+  return response.status === 404 ? null : await response.json()
 }
 export async function fetchAttentionRecordsPage(params: {
   direction: AttentionRecordsPageRequest['direction']

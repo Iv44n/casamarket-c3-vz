@@ -19,7 +19,6 @@ export function filterRowsByDate<T extends ReportRow>(
   date: DateFilter,
   dateEnd?: string
 ): T[] {
-  if (date === 'all') return rows
   if (dateEnd && dateEnd !== date) {
     return rows.filter(row => {
       const rowDate = toIsoDate(row[dateField])
