@@ -136,6 +136,61 @@ def test_history_rows_ignores_date_filter_for_reports_without_a_mapped_date_colu
     assert len(history) == 1
 
 
+def test_daily_counts_groups_rows_by_calendar_day():
+    conn = _conn()
+    rows = [
+        _attention_row("a", "18/08/2026"),
+        _attention_row("b", "18/08/2026"),
+        _attention_row("c", "19/08/2026"),
+    ]
+    store.upsert_report_rows(conn, "attention", rows, "2026-08-19T00:00:00")
+
+    counts = store.daily_counts(conn, "attention")
+
+    assert counts == [
+        {"date": "2026-08-18", "count": 2},
+        {"date": "2026-08-19", "count": 1},
+    ]
+
+
+def test_daily_counts_filters_by_date_range():
+    conn = _conn()
+    rows = [
+        _attention_row("before", "27/08/2026"),
+        _attention_row("in_range", "28/08/2026"),
+        _attention_row("after", "01/09/2026"),
+    ]
+    store.upsert_report_rows(conn, "attention", rows, "2026-08-19T00:00:00")
+
+    counts = store.daily_counts(conn, "attention", "2026-08-28", "2026-08-31")
+
+    assert counts == [{"date": "2026-08-28", "count": 1}]
+
+
+def test_daily_counts_single_day_shortcut_when_date_to_omitted():
+    conn = _conn()
+    rows = [_attention_row("today", "18/08/2026"), _attention_row("other", "19/08/2026")]
+    store.upsert_report_rows(conn, "attention", rows, "2026-08-19T00:00:00")
+
+    counts = store.daily_counts(conn, "attention", "2026-08-18")
+
+    assert counts == [{"date": "2026-08-18", "count": 1}]
+
+
+def test_daily_counts_excludes_null_and_malformed_dates():
+    conn = _conn()
+    rows = [
+        _attention_row("valid", "18/08/2026"),
+        _attention_row("null_date", None),
+        _attention_row("malformed", "not-a-date"),
+    ]
+    store.upsert_report_rows(conn, "attention", rows, "2026-08-19T00:00:00")
+
+    counts = store.daily_counts(conn, "attention")
+
+    assert counts == [{"date": "2026-08-18", "count": 1}]
+
+
 def test_migration_adds_time_columns_and_backfills_them_from_row_json():
     conn = sqlite3.connect(":memory:")
     # Simula el esquema pre-migracion (sin hora_registro/hora_final) que ya existe en el Turso

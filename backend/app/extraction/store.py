@@ -503,6 +503,37 @@ def history_rows(
     return rows or None
 
 
+def daily_counts(
+    conn: DBConnection,
+    report_name: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[dict]:
+    """Conteo de filas por dia de calendario, agregado en SQL (GROUP BY) en vez de traer cada
+    row_json solo para contarlas del lado del caller -- pensado para graficos de tendencia
+    ("casos por dia") que no necesitan el detalle fila por fila que history_rows() devuelve.
+    Confirmado en vivo (2026-08-27) que history_rows() para un rango de 30 dias de "attention"
+    transfiere ~3.8MB y tarda 8s+ (json.loads() por fila, tanto en el protocolo de
+    turso_serverless como aca arriba en history_rows) -- GROUP BY server-side reduce eso a un
+    puñado de filas (una por dia) sin ese costo. Solo cubre los reportes en _HISTORY_DATE_COLUMN
+    (no "transfer": ver su comentario arriba sobre por que no se filtra/agrupa por dia)."""
+    date_column = _HISTORY_DATE_COLUMN[report_name]
+    iso_expr = _iso_date_expr(date_column)
+    clauses = [f"{iso_expr} IS NOT NULL"]
+    params: list = []
+    if date_from:
+        clauses.append(f"{iso_expr} BETWEEN ? AND ?")
+        params.append(date_from)
+        params.append(date_to or date_from)
+    where_sql = " AND ".join(clauses)
+    cursor = conn.execute(
+        f"SELECT {iso_expr} AS day, COUNT(*) FROM {report_name} WHERE {where_sql} "
+        "GROUP BY day ORDER BY day",
+        tuple(params),
+    )
+    return [{"date": day, "count": count} for day, count in cursor.fetchall()]
+
+
 _STALE_THRESHOLD_SECONDS = 60 * 60  # espeja STALE_THRESHOLD_SECONDS en attention-records-table.tsx
 
 

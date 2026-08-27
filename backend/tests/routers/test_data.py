@@ -178,6 +178,77 @@ def test_get_report_history_404s_when_nothing_downloaded_yet(client: TestClient)
     assert response.status_code == 404
 
 
+def test_get_report_daily_counts_groups_rows_by_day(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    store._init_schema(conn)
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [
+            {"ID atención": "1", "Fecha registro": "18/08/2026"},
+            {"ID atención": "2", "Fecha registro": "18/08/2026"},
+            {"ID atención": "3", "Fecha registro": "19/08/2026"},
+        ],
+        observed_at="2026-08-19T00:00:00",
+    )
+    monkeypatch.setattr(store, "get_connection", lambda: conn)
+
+    response = client.get("/data/attention/history/daily-counts")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {"date": "2026-08-18", "count": 2},
+        {"date": "2026-08-19", "count": 1},
+    ]
+
+
+def test_get_report_daily_counts_filters_by_date_range_query_params(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    store._init_schema(conn)
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [
+            {"ID atención": "in_range", "Fecha registro": "18/08/2026"},
+            {"ID atención": "out_of_range", "Fecha registro": "01/09/2026"},
+        ],
+        observed_at="2026-08-19T00:00:00",
+    )
+    monkeypatch.setattr(store, "get_connection", lambda: conn)
+
+    response = client.get(
+        "/data/attention/history/daily-counts",
+        params={"date_from": "2026-08-18", "date_to": "2026-08-18"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [{"date": "2026-08-18", "count": 1}]
+
+
+def test_get_report_daily_counts_422s_for_malformed_date_from(client: TestClient):
+    response = client.get(
+        "/data/attention/history/daily-counts", params={"date_from": "18-08-2026"}
+    )
+
+    assert response.status_code == 422
+
+
+def test_get_report_daily_counts_404s_for_unknown_report_name(client: TestClient):
+    response = client.get("/data/not-a-real-report/history/daily-counts")
+
+    assert response.status_code == 404
+
+
+def test_get_report_daily_counts_404s_for_reports_without_a_date_column(client: TestClient):
+    response = client.get("/data/contacts/history/daily-counts")
+
+    assert response.status_code == 404
+
+
 def test_get_attention_records_returns_paginated_shape(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ):

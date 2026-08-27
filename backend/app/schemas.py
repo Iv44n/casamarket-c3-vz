@@ -45,3 +45,8 @@ class HistoricalBackfillStatus(BaseModel):
 
 class NoRunsYet(BaseModel):
     status: Literal["no_runs_yet"] = "no_runs_yet"
+
+
+class DailyCount(BaseModel):
+    date: str
+    count: int

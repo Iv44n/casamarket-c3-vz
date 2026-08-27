@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from ..extraction import parsing, store
+from ..schemas import DailyCount
 
 router = APIRouter(prefix="/data", tags=["data"])
 
@@ -14,6 +15,12 @@ KNOWN_REPORTS = {
     "contacts",
     "transfer",
 }
+
+# Los unicos reportes con una columna de fecha mapeada para agregar por dia (ver
+# store._HISTORY_DATE_COLUMN) -- "contacts" no tiene rango de fechas y "transfer" se
+# correlaciona por id_atencion, no por dia (mismo motivo que ambos quedan afuera del filtro de
+# fecha en history_rows).
+DAILY_COUNT_REPORTS = {"attention", "outboundattention", "callincoming", "calloutgoing"}
 
 DIRECTION_VALUES = {"all", "incoming", "outgoing"}
 
@@ -123,3 +130,25 @@ def get_report_history(
             detail=f"Todavia no se descargo ningun archivo de '{report_name}'.",
         )
     return records
+
+
+@router.get("/{report_name}/history/daily-counts")
+def get_report_daily_counts(
+    report_name: str,
+    date_from: str | None = Query(default=None, pattern=ISO_DATE_PATTERN),
+    date_to: str | None = Query(default=None, pattern=ISO_DATE_PATTERN),
+) -> list[DailyCount]:
+    """Conteo de filas por dia (GROUP BY server-side) para graficos de tendencia -- ver
+    store.daily_counts() para por que existe: no requiere traer/parsear cada row_json como
+    /{report_name}/history, asi que es sensiblemente mas liviano para rangos largos."""
+    if report_name not in DAILY_COUNT_REPORTS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Reporte desconocido: {report_name!r}. Validos: {sorted(DAILY_COUNT_REPORTS)}",
+        )
+
+    conn = store.get_connection()
+    try:
+        return store.daily_counts(conn, report_name, date_from, date_to)
+    finally:
+        conn.close()
