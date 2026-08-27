@@ -105,6 +105,21 @@ export const loginRequestSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1)
 })
+export type CurrentUser = {
+  id: number
+  username: string
+  is_admin: boolean
+  created_at: string
+}
+export const createUserRequestSchema = z.object({
+  username: z.string().min(1),
+  password: z.string().min(1),
+  isAdmin: z.boolean().default(false)
+})
+export type CreateUserResult =
+  | { status: 'created'; user: CurrentUser }
+  | { status: 'duplicate' }
+  | { status: 'forbidden' }
 export const backfillRequestSchema = z.object({
   date: z.string().regex(ISO_DATE_REGEX)
 })

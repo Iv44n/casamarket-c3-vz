@@ -6,6 +6,8 @@ import type {
   BackfillRunSummary,
   BackfillStatus,
   ContactsSyncStatus,
+  CreateUserResult,
+  CurrentUser,
   DailyCaseCount,
   ExtractionStatus,
   HistoricalBackfillStatus,
@@ -24,9 +26,15 @@ function isPublicBackendPath(path: string): boolean {
     publicPath => path === publicPath || path.startsWith(`${publicPath}?`)
   )
 }
+// allowedStatuses: statuses the CALLER wants to inspect itself instead of having
+// backendFetch turn them into a thrown Error -- 404 is always allowed (the established
+// "nothing downloaded yet" signal across this file); a caller like createUserOnBackend
+// below adds 403/409 since those are expected, handled outcomes for that one endpoint,
+// not real failures.
 async function backendFetch(
   path: string,
-  init?: RequestInit
+  init?: RequestInit,
+  opts?: { allowedStatuses?: number[] }
 ): Promise<Response> {
   const isPublic = isPublicBackendPath(path)
   const token = getCookie(SESSION_COOKIE_NAME)
@@ -41,7 +49,8 @@ async function backendFetch(
     deleteCookie(SESSION_COOKIE_NAME, { path: '/' })
     throw redirect({ to: '/login' })
   }
-  if (!response.ok && response.status !== 404) {
+  const allowedStatuses = new Set([404, ...(opts?.allowedStatuses ?? [])])
+  if (!response.ok && !allowedStatuses.has(response.status)) {
     throw new Error(
       `C3 backend ${path} responded ${response.status}: ${await response.text()}`
     )
@@ -60,6 +69,32 @@ export async function authenticateWithBackend(
   if (response.status === 401) return null
   const data: { access_token: string } = await response.json()
   return data.access_token
+}
+export async function fetchCurrentUser(): Promise<CurrentUser> {
+  const response = await backendFetch('/auth/me')
+  return response.json()
+}
+export async function fetchUsers(): Promise<CurrentUser[]> {
+  const response = await backendFetch('/auth/users')
+  return response.json()
+}
+export async function createUserOnBackend(
+  username: string,
+  password: string,
+  isAdmin: boolean
+): Promise<CreateUserResult> {
+  const response = await backendFetch(
+    '/auth/users',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, is_admin: isAdmin })
+    },
+    { allowedStatuses: [403, 409] }
+  )
+  if (response.status === 409) return { status: 'duplicate' }
+  if (response.status === 403) return { status: 'forbidden' }
+  return { status: 'created', user: await response.json() }
 }
 const _reportRowsCache = new Map<
   string,

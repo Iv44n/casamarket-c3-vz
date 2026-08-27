@@ -5,7 +5,8 @@ import {
   BarChartHorizontalIcon,
   LogOutIcon,
   TableIcon,
-  TrendingUpIcon
+  TrendingUpIcon,
+  UsersIcon
 } from 'lucide-react'
 import { ModeToggle } from '#/components/mode-toggle'
 import { Button } from '#/components/ui/button'
@@ -40,6 +41,7 @@ const NAV_ITEMS = [
     label: 'Tendencias históricas',
     icon: TrendingUpIcon
   },
+  { to: '/usuarios' as const, label: 'Usuarios', icon: UsersIcon },
   { to: '/status' as const, label: 'Extraction status', icon: ActivityIcon }
 ] as const
 export function AppSidebar() {
