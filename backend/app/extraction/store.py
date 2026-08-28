@@ -218,6 +218,10 @@ CREATE TABLE IF NOT EXISTS benchmark_result (
     first_response_seconds  REAL,
     has_greeting            INTEGER,
     has_farewell            INTEGER,
+    complexity              TEXT,
+    handled_well_for_complexity INTEGER,
+    had_transfer            INTEGER,
+    informed_transfer       INTEGER,
     quality_ok              INTEGER,
     llm_model               TEXT,
     llm_raw                 TEXT,
@@ -464,11 +468,36 @@ def _migrate_benchmark_result_versioning(conn: DBConnection) -> None:
     conn.commit()
 
 
+# complexity/handled_well_for_complexity/had_transfer/informed_transfer no existian en
+# benchmark_result antes de que se agregara la evaluacion de complejidad/transferencia --
+# mismo patron aditivo que _migrate_benchmark_result_columns (ALTER TABLE ADD COLUMN, no un
+# rebuild -- a diferencia de _migrate_benchmark_result_versioning, esto no toca la PK).
+_NEW_BENCHMARK_QUALITY_COLUMNS: dict[str, str] = {
+    "complexity": "TEXT",
+    "handled_well_for_complexity": "INTEGER",
+    "had_transfer": "INTEGER",
+    "informed_transfer": "INTEGER",
+}
+
+
+def _migrate_benchmark_result_quality_columns(conn: DBConnection) -> None:
+    existing = _existing_columns(conn, "benchmark_result")
+    missing = [c for c in _NEW_BENCHMARK_QUALITY_COLUMNS if c not in existing]
+    for column in missing:
+        conn.execute(
+            f"ALTER TABLE benchmark_result ADD COLUMN {column} "
+            f"{_NEW_BENCHMARK_QUALITY_COLUMNS[column]}"
+        )
+    if missing:
+        conn.commit()
+
+
 def _init_schema(conn: DBConnection) -> None:
     conn.executescript(_SCHEMA)
     _migrate_time_columns(conn)
     _migrate_benchmark_result_columns(conn)
     _migrate_benchmark_result_versioning(conn)
+    _migrate_benchmark_result_quality_columns(conn)
     # run_id esta garantizado presente aca (recien creado por _SCHEMA, o agregado por la
     # migracion de arriba) -- ver el comentario junto a benchmark_result en _SCHEMA sobre por
     # que este indice no puede vivir ahi.
@@ -932,6 +961,22 @@ def already_benchmarked_ids(
     return {str(row[0]) for row in cursor.fetchall()}
 
 
+def transfer_ids_for_cases(conn: DBConnection, ids: list[str]) -> set[str]:
+    """IDs de `ids` que tienen al menos una fila en `transfer` -- se consulta ANTES de armar
+    el prompt del LLM (pipeline.analyze_direction) para saber a que casos corresponde
+    preguntarles por el aviso de transferencia. No filtra por direction -- transfer no
+    distingue attention/outboundattention, se correlaciona solo por id_atencion (ver
+    _upsert_transfer_rows)."""
+    if not ids:
+        return set()
+    placeholders = ", ".join("?" for _ in ids)
+    cursor = conn.execute(
+        f"SELECT DISTINCT id_atencion FROM transfer WHERE id_atencion IN ({placeholders})",
+        tuple(ids),
+    )
+    return {str(row[0]) for row in cursor.fetchall()}
+
+
 _BENCHMARK_ALL_COLUMNS = (
     "run_id",
     "id_atencion",
@@ -945,6 +990,10 @@ _BENCHMARK_ALL_COLUMNS = (
     "first_response_seconds",
     "has_greeting",
     "has_farewell",
+    "complexity",
+    "handled_well_for_complexity",
+    "had_transfer",
+    "informed_transfer",
     "quality_ok",
     "llm_model",
     "llm_raw",
@@ -965,14 +1014,20 @@ def record_benchmark_results(
 ) -> IngestResult:
     """Cada `row` en `rows` es un dict con keys: id_atencion, direction, agente, campana,
     estado, first_response_seconds, has_greeting (bool|None), has_farewell (bool|None),
-    llm_model, llm_raw, llm_notes, row_json (dict -- la fila completa de
-    attention/outboundattention, de donde se extraen `fecha_final`/`hora_final`/`cliente` para poder
-    filtrar/mostrar sin tener que parsear row_json en el llamador -- `fecha_final` es la
-    fecha REAL de cierre del caso, no cuando se corrio el analisis -- ver
-    first_recorded_at/analyzed_at, que son fechas de proceso, no de negocio).
+    complexity (str|None, "baja"/"media"/"alta"), handled_well_for_complexity (bool|None),
+    had_transfer (bool -- hecho, nunca None, ver transfer_ids_for_cases), informed_transfer
+    (bool|None -- None cuando had_transfer es False, no aplica), llm_model, llm_raw,
+    llm_notes, row_json (dict -- la fila completa de attention/outboundattention, de donde se
+    extraen `fecha_final`/`hora_final`/`cliente` para poder filtrar/mostrar sin tener que
+    parsear row_json en el llamador -- `fecha_final` es la fecha REAL de cierre del caso, no
+    cuando se corrio el analisis -- ver first_recorded_at/analyzed_at, que son fechas de
+    proceso, no de negocio).
     `analyzed_at` se pone a `observed_at` solo cuando el caso trae un veredicto real
     (has_greeting is not None); si no, queda NULL -- asi already_benchmarked_ids lo sigue
-    tratando como pendiente.
+    tratando como pendiente. `quality_ok` combina has_greeting/has_farewell/
+    handled_well_for_complexity siempre, y ademas informed_transfer SOLO cuando had_transfer
+    es True (un caso sin transferencia no debe fallar el veredicto general por un criterio que
+    no le aplica) -- None si falta cualquiera de los criterios que sí aplican.
 
     Siempre hace INSERT (nunca UPDATE) -- benchmark_result ya no tiene una PK sobre
     (id_atencion, direction), asi que una corrida posterior del mismo caso agrega una fila
@@ -989,10 +1044,14 @@ def record_benchmark_results(
             continue
         has_greeting = row.get("has_greeting")
         has_farewell = row.get("has_farewell")
+        handled_well_for_complexity = row.get("handled_well_for_complexity")
+        had_transfer = bool(row.get("had_transfer"))
+        informed_transfer = row.get("informed_transfer")
+        quality_criteria = [has_greeting, has_farewell, handled_well_for_complexity]
+        if had_transfer:
+            quality_criteria.append(informed_transfer)
         quality_ok = (
-            has_greeting and has_farewell
-            if has_greeting is not None and has_farewell is not None
-            else None
+            all(quality_criteria) if all(c is not None for c in quality_criteria) else None
         )
         analyzed_at = observed_at if has_greeting is not None else None
         row_json_dict = row.get("row_json") or {}
@@ -1013,6 +1072,10 @@ def record_benchmark_results(
                 row.get("first_response_seconds"),
                 _sql_bool(has_greeting),
                 _sql_bool(has_farewell),
+                row.get("complexity"),
+                _sql_bool(handled_well_for_complexity),
+                _sql_bool(had_transfer),
+                _sql_bool(informed_transfer),
                 _sql_bool(quality_ok),
                 row.get("llm_model"),
                 row.get("llm_raw"),
@@ -1055,6 +1118,10 @@ _BENCHMARK_RESULT_COLUMNS = (
     "first_response_seconds",
     "has_greeting",
     "has_farewell",
+    "complexity",
+    "handled_well_for_complexity",
+    "had_transfer",
+    "informed_transfer",
     "quality_ok",
     "llm_notes",
     "analyzed_at",
@@ -1106,7 +1173,14 @@ def benchmark_result_rows(
         # bool(0/1) por nombre de columna, no por indice posicional -- evita tener que
         # recalcular numeros a mano cada vez que _BENCHMARK_RESULT_COLUMNS cambia de orden
         # o largo (ya paso dos veces).
-        for bool_column in ("has_greeting", "has_farewell", "quality_ok"):
+        for bool_column in (
+            "has_greeting",
+            "has_farewell",
+            "handled_well_for_complexity",
+            "had_transfer",
+            "informed_transfer",
+            "quality_ok",
+        ):
             row[bool_column] = None if row[bool_column] is None else bool(row[bool_column])
         rows.append(row)
     return rows

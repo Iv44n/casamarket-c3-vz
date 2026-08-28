@@ -725,6 +725,33 @@ def test_already_benchmarked_ids_returns_empty_set_for_no_ids():
     assert store.already_benchmarked_ids(conn, "attention", []) == set()
 
 
+def _transfer_row(id_atencion: str, fecha: str = "2026-08-18", hora: str = "10:00:00") -> dict:
+    return {
+        "Atención ID": id_atencion,
+        "Fecha": fecha,
+        "Hora": hora,
+        "Agente Origen": "Ana",
+        "Destino": "Luis",
+    }
+
+
+def test_transfer_ids_for_cases_returns_only_ids_with_a_transfer_row():
+    conn = _conn()
+    store.upsert_report_rows(
+        conn, "transfer", [_transfer_row("has_transfer")], "2026-08-18T00:00:00"
+    )
+
+    ids = store.transfer_ids_for_cases(conn, ["has_transfer", "no_transfer"])
+
+    assert ids == {"has_transfer"}
+
+
+def test_transfer_ids_for_cases_returns_empty_set_for_no_ids():
+    conn = _conn()
+
+    assert store.transfer_ids_for_cases(conn, []) == set()
+
+
 def test_record_benchmark_results_inserts_row_without_quality_when_no_pdf():
     conn = _conn()
 
@@ -805,6 +832,7 @@ def test_record_benchmark_results_appends_instead_of_overwriting_on_a_later_run(
                 "direction": "attention",
                 "has_greeting": True,
                 "has_farewell": True,
+                "handled_well_for_complexity": True,
                 "llm_model": "gpt-4o-mini",
                 "row_json": {},
             }
@@ -837,6 +865,7 @@ def test_record_benchmark_results_quality_ok_is_false_when_only_one_flag_true():
                 "direction": "attention",
                 "has_greeting": True,
                 "has_farewell": False,
+                "handled_well_for_complexity": True,
                 "row_json": {},
             }
         ],
@@ -845,6 +874,89 @@ def test_record_benchmark_results_quality_ok_is_false_when_only_one_flag_true():
 
     rows = store.benchmark_result_rows(conn)
     assert rows[0]["quality_ok"] is False
+
+
+def test_record_benchmark_results_quality_ok_is_none_when_handled_well_is_missing():
+    conn = _conn()
+    store.record_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "1",
+                "direction": "attention",
+                "has_greeting": True,
+                "has_farewell": True,
+                "row_json": {},
+            }
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    rows = store.benchmark_result_rows(conn)
+    assert rows[0]["quality_ok"] is None
+
+
+def test_record_benchmark_results_quality_ok_requires_informed_transfer_when_had_transfer():
+    conn = _conn()
+
+    store.record_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "no_transfer",
+                "direction": "attention",
+                "has_greeting": True,
+                "has_farewell": True,
+                "handled_well_for_complexity": True,
+                "had_transfer": False,
+                "row_json": {},
+            }
+        ],
+        "2026-08-18T00:00:00",
+    )
+    store.record_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "transferred_not_informed",
+                "direction": "attention",
+                "has_greeting": True,
+                "has_farewell": True,
+                "handled_well_for_complexity": True,
+                "had_transfer": True,
+                "informed_transfer": False,
+                "row_json": {},
+            }
+        ],
+        "2026-08-18T00:00:00",
+    )
+    store.record_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "transferred_and_informed",
+                "direction": "attention",
+                "has_greeting": True,
+                "has_farewell": True,
+                "handled_well_for_complexity": True,
+                "had_transfer": True,
+                "informed_transfer": True,
+                "row_json": {},
+            }
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    rows = {r["id_atencion"]: r for r in store.benchmark_result_rows(conn)}
+    # Sin transferencia -- quality_ok no depende de informed_transfer (queda None en la fila).
+    assert rows["no_transfer"]["had_transfer"] is False
+    assert rows["no_transfer"]["informed_transfer"] is None
+    assert rows["no_transfer"]["quality_ok"] is True
+    # Con transferencia pero sin avisar -- quality_ok pasa a False aunque greeting/farewell/
+    # complejidad esten bien.
+    assert rows["transferred_not_informed"]["quality_ok"] is False
+    # Con transferencia avisada -- los 4 criterios dan bien.
+    assert rows["transferred_and_informed"]["quality_ok"] is True
 
 
 def test_record_benchmark_results_skips_rows_without_id_atencion():
@@ -1024,6 +1136,15 @@ def test_migrate_benchmark_result_columns_backfills_new_columns_from_row_json():
         "SELECT COUNT(*) FROM benchmark_result_pre_versioning"
     ).fetchone()[0]
     assert backup_count == 1
+
+    # _migrate_benchmark_result_quality_columns tambien corrio contra esta tabla vieja (que no
+    # tenia complexity/handled_well_for_complexity/had_transfer/informed_transfer) -- confirma
+    # que las 4 columnas quedaron agregadas y la fila preexistente no se vio afectada (NULL).
+    quality_row = conn.execute(
+        "SELECT complexity, handled_well_for_complexity, had_transfer, informed_transfer "
+        "FROM benchmark_result WHERE id_atencion = '1'"
+    ).fetchone()
+    assert quality_row == (None, None, None, None)
 
 
 def test_migrate_benchmark_result_versioning_allows_duplicate_case_rows_now():

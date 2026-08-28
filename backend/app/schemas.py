@@ -64,6 +64,10 @@ class BenchmarkCaseResult(BaseModel):
     first_response_seconds: float | None
     has_greeting: bool | None
     has_farewell: bool | None
+    complexity: Literal["baja", "media", "alta"] | None
+    handled_well_for_complexity: bool | None
+    had_transfer: bool
+    informed_transfer: bool | None
     quality_ok: bool | None
     llm_notes: str | None
     analyzed_at: str | None

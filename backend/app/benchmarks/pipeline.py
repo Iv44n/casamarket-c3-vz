@@ -52,17 +52,23 @@ class CaseBenchmark:
     estado: str | None
     first_response_seconds: float | None
     conversation_text: str | None
+    # Hecho (de la tabla transfer), no un juicio del LLM -- ver store.transfer_ids_for_cases.
+    had_transfer: bool
     row_json: dict
 
 
 def build_case_benchmarks(
-    rows: dict[str, dict], zip_texts: dict[str, str], direction: str
+    rows: dict[str, dict],
+    zip_texts: dict[str, str],
+    direction: str,
+    transfer_ids: set[str] = frozenset(),
 ) -> list[CaseBenchmark]:
     """Itera `rows` (los casos PENDIENTES de veredicto -- nunca los ya benchmarkeados, ver
     store.already_benchmarked_ids) y hace `zip_texts.get(id)`; un caso cerrado sin PDF en el
     zip de hoy sigue generando un CaseBenchmark (con `conversation_text=None`), para que su
     tiempo de primera respuesta quede registrado igual aunque todavia no tenga veredicto de
-    calidad."""
+    calidad. `transfer_ids` (default vacio, ver store.transfer_ids_for_cases) marca que casos
+    tuvieron una transferencia real -- decide si judge_conversation les pregunta por el aviso."""
     cases = []
     for id_atencion, row in rows.items():
         cases.append(
@@ -76,6 +82,7 @@ def build_case_benchmarks(
                     row.get("Tiempo de primera respuesta")
                 ),
                 conversation_text=zip_texts.get(id_atencion) or None,
+                had_transfer=id_atencion in transfer_ids,
                 row_json=row,
             )
         )
@@ -94,6 +101,14 @@ def _to_benchmark_row(
         "first_response_seconds": case.first_response_seconds,
         "has_greeting": judgement.has_greeting if judgement else None,
         "has_farewell": judgement.has_farewell if judgement else None,
+        "complexity": judgement.complexity if judgement else None,
+        "handled_well_for_complexity": (
+            judgement.handled_well_for_complexity if judgement else None
+        ),
+        # had_transfer es un hecho de `case` (tabla transfer), no del juicio del LLM --
+        # se guarda aunque el caso todavia no tenga PDF/veredicto.
+        "had_transfer": case.had_transfer,
+        "informed_transfer": judgement.informed_transfer if judgement else None,
         "llm_model": llm_model if judgement else None,
         "llm_raw": judgement.raw if judgement else None,
         "llm_notes": judgement.notes if judgement else None,
@@ -158,8 +173,9 @@ def analyze_direction(
             sleep=sleep,
         )
         zip_texts = massive_zip.extract_texts_for_ids(result.path, pending.keys())
+        transfer_ids = store.transfer_ids_for_cases(conn, list(pending))
 
-        cases = build_case_benchmarks(pending, zip_texts, direction)
+        cases = build_case_benchmarks(pending, zip_texts, direction, transfer_ids)
 
         judgements: dict[str, QualityJudgement] = {}
         judgeable = [case for case in cases if case.conversation_text]
@@ -167,7 +183,10 @@ def analyze_direction(
             with ThreadPoolExecutor(max_workers=concurrency) as executor:
                 futures = {
                     executor.submit(
-                        judge_conversation, llm_provider, case.conversation_text
+                        judge_conversation,
+                        llm_provider,
+                        case.conversation_text,
+                        case.had_transfer,
                     ): case
                     for case in judgeable
                 }

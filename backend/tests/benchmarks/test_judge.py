@@ -88,3 +88,69 @@ def test_judge_conversation_returns_none_fields_when_think_block_never_closes():
 
     assert result.has_greeting is None
     assert result.has_farewell is None
+
+
+def test_judge_conversation_parses_complexity_and_handled_well_for_complexity():
+    provider = _FakeProvider(
+        '{"has_greeting": true, "has_farewell": true, "complexity": "alta", '
+        '"handled_well_for_complexity": false, "notes": "caso dificil mal resuelto"}'
+    )
+
+    result = judge_conversation(provider, "conversacion")
+
+    assert result.complexity == "alta"
+    assert result.handled_well_for_complexity is False
+
+
+def test_judge_conversation_discards_an_invalid_complexity_value():
+    provider = _FakeProvider(
+        '{"has_greeting": true, "has_farewell": true, "complexity": "extrema", '
+        '"handled_well_for_complexity": true}'
+    )
+
+    result = judge_conversation(provider, "conversacion")
+
+    assert result.complexity is None
+
+
+def test_judge_conversation_parses_informed_transfer_when_case_had_a_transfer():
+    provider = _FakeProvider(
+        '{"has_greeting": true, "has_farewell": true, "complexity": "media", '
+        '"handled_well_for_complexity": true, "informed_transfer": true}'
+    )
+
+    result = judge_conversation(provider, "conversacion", had_transfer=True)
+
+    assert result.informed_transfer is True
+
+
+def test_judge_conversation_discards_informed_transfer_when_case_had_no_transfer():
+    # El LLM podria responder informed_transfer de todos modos (no se le pidio, pero no esta
+    # prohibido) -- no aplica cuando el caso no tuvo transferencia, asi que se descarta a None
+    # en vez de tomarlo al pie de la letra.
+    provider = _FakeProvider(
+        '{"has_greeting": true, "has_farewell": true, "complexity": "media", '
+        '"handled_well_for_complexity": true, "informed_transfer": true}'
+    )
+
+    result = judge_conversation(provider, "conversacion", had_transfer=False)
+
+    assert result.informed_transfer is None
+
+
+def test_judge_conversation_prompt_includes_transfer_question_only_when_had_transfer():
+    provider_with_transfer = _FakeProvider(
+        '{"has_greeting": true, "has_farewell": true, "complexity": "baja", '
+        '"handled_well_for_complexity": true, "informed_transfer": true}'
+    )
+    provider_without_transfer = _FakeProvider(
+        '{"has_greeting": true, "has_farewell": true, "complexity": "baja", '
+        '"handled_well_for_complexity": true}'
+    )
+
+    judge_conversation(provider_with_transfer, "conversacion", had_transfer=True)
+    judge_conversation(provider_without_transfer, "conversacion", had_transfer=False)
+
+    assert "transferencia" in provider_with_transfer.prompts[0]
+    assert "informed_transfer" in provider_with_transfer.prompts[0]
+    assert "informed_transfer" not in provider_without_transfer.prompts[0]

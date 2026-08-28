@@ -157,6 +157,7 @@ def test_results_returns_rows_from_the_store(monkeypatch: pytest.MonkeyPatch, cl
                 "first_response_seconds": 90.0,
                 "has_greeting": True,
                 "has_farewell": True,
+                "handled_well_for_complexity": True,
                 "row_json": {},
             }
         ],

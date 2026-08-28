@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import zipfile
 from pathlib import Path
@@ -37,7 +38,10 @@ class _FakeProvider:
 
     def complete(self, prompt: str) -> str:
         self.calls.append(prompt)
-        return '{"has_greeting": true, "has_farewell": true, "notes": "ok"}'
+        return (
+            '{"has_greeting": true, "has_farewell": true, "complexity": "baja", '
+            '"handled_well_for_complexity": true, "notes": "ok"}'
+        )
 
 
 def _fake_zip_download_result(zip_path: Path) -> downloads.DownloadResult:
@@ -95,6 +99,27 @@ def test_build_case_benchmarks_maps_fields_and_handles_missing_pdf():
     assert by_id["2"].first_response_seconds is None
 
 
+def test_build_case_benchmarks_marks_had_transfer_from_transfer_ids():
+    rows = {
+        "1": {"Agente": "Ana", "Campaña": "Soporte", "Estado": "Cerrada"},
+        "2": {"Agente": "Luis", "Campaña": "Ventas", "Estado": "Cerrada"},
+    }
+
+    cases = pipeline.build_case_benchmarks(rows, {}, "attention", transfer_ids={"1"})
+    by_id = {c.id_atencion: c for c in cases}
+
+    assert by_id["1"].had_transfer is True
+    assert by_id["2"].had_transfer is False
+
+
+def test_build_case_benchmarks_defaults_had_transfer_to_false_without_transfer_ids():
+    rows = {"1": {"Agente": "Ana", "Campaña": "Soporte", "Estado": "Cerrada"}}
+
+    cases = pipeline.build_case_benchmarks(rows, {}, "attention")
+
+    assert cases[0].had_transfer is False
+
+
 def test_analyze_direction_records_response_time_for_all_pending_and_judges_only_those_with_pdf(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -136,6 +161,87 @@ def test_analyze_direction_records_response_time_for_all_pending_and_judges_only
     assert rows["1"]["first_response_seconds"] == 90.0
     assert rows["2"]["has_greeting"] is None
     assert rows["2"]["first_response_seconds"] == 90.0
+
+
+def test_analyze_direction_asks_about_transfer_only_for_cases_with_a_transfer_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    conn = _conn()
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [_closed_row("has_transfer"), _closed_row("no_transfer")],
+        "2026-08-18T00:00:00",
+    )
+    store.upsert_report_rows(
+        conn,
+        "transfer",
+        [
+            {
+                "Atención ID": "has_transfer",
+                "Fecha": "2026-08-18",
+                "Hora": "10:00:00",
+                "Agente Origen": "Ana",
+                "Destino": "Luis",
+            }
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    zip_path = tmp_path / "attention_masivo.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr(
+            "attention_has_transfer.pdf", minimal_pdf_bytes("Te transfiero, un momento")
+        )
+        zf.writestr("attention_no_transfer.pdf", minimal_pdf_bytes("Hola, buen dia"))
+    fake_result = _fake_zip_download_result(zip_path)
+    monkeypatch.setattr(
+        pipeline.massive, "run_direction", lambda client, direction, **kwargs: fake_result
+    )
+
+    class _TransferAwareProvider:
+        def __init__(self):
+            self.prompts: list[str] = []
+
+        def complete(self, prompt: str) -> str:
+            self.prompts.append(prompt)
+            data = {
+                "has_greeting": True,
+                "has_farewell": True,
+                "complexity": "baja",
+                "handled_well_for_complexity": True,
+                "notes": "ok",
+            }
+            # El prompt solo incluye la clave "informed_transfer" en su forma JSON pedida
+            # cuando judge_conversation recibio had_transfer=True -- confirma que se llamo con
+            # el valor correcto por caso sin depender de mockear judge_conversation.
+            if "informed_transfer" in prompt:
+                data["informed_transfer"] = True
+            return json.dumps(data)
+
+    provider = _TransferAwareProvider()
+
+    pipeline.analyze_direction(
+        object(),
+        provider,
+        conn,
+        "attention",
+        concurrency=2,
+        lookback_days=3650,
+        sleep=lambda s: None,
+    )
+
+    assert len(provider.prompts) == 2
+    asked_transfer = {"informed_transfer" in p for p in provider.prompts}
+    assert asked_transfer == {True, False}
+
+    rows = {r["id_atencion"]: r for r in store.benchmark_result_rows(conn)}
+    assert rows["has_transfer"]["had_transfer"] is True
+    assert rows["has_transfer"]["informed_transfer"] is True
+    assert rows["has_transfer"]["quality_ok"] is True
+    assert rows["no_transfer"]["had_transfer"] is False
+    assert rows["no_transfer"]["informed_transfer"] is None
+    assert rows["no_transfer"]["quality_ok"] is True
 
 
 def test_analyze_direction_does_not_re_spend_llm_on_already_judged_cases(
