@@ -7,6 +7,7 @@ import type {
   BackfillStatus,
   BenchmarkCaseResult,
   BenchmarkDirection,
+  BenchmarkRunRecord,
   BenchmarkRunStatus,
   ContactsSyncStatus,
   CreateUserResult,
@@ -298,13 +299,23 @@ export async function fetchBenchmarkRunStatus(): Promise<BenchmarkRunStatus> {
   const response = await backendFetch('/benchmarks/run/status')
   return response.json()
 }
-export async function triggerBenchmarkAnalysis(
+export async function triggerBenchmarkAnalysis(params: {
   directions?: BenchmarkDirection[]
-): Promise<BenchmarkRunStatus> {
+  dateFrom?: string
+  dateTo?: string
+  forceReanalyze?: boolean
+}): Promise<BenchmarkRunStatus> {
   const response = await backendFetch('/benchmarks/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(directions ? { directions } : {})
+    body: JSON.stringify({
+      ...(params.directions ? { directions: params.directions } : {}),
+      ...(params.dateFrom ? { date_from: params.dateFrom } : {}),
+      ...(params.dateTo ? { date_to: params.dateTo } : {}),
+      ...(params.forceReanalyze
+        ? { force_reanalyze: params.forceReanalyze }
+        : {})
+    })
   })
   return response.json()
 }
@@ -325,6 +336,12 @@ export async function fetchBenchmarkResults(params: {
 }
 export async function fetchLlmSettings(): Promise<LlmSettings> {
   const response = await backendFetch('/benchmarks/settings')
+  return response.json()
+}
+export async function fetchBenchmarkRuns(
+  limit: number
+): Promise<BenchmarkRunRecord[]> {
+  const response = await backendFetch(`/benchmarks/runs?limit=${limit}`)
   return response.json()
 }
 export async function updateLlmSettingsOnBackend(data: {

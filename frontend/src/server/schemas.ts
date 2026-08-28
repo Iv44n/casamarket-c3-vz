@@ -384,8 +384,23 @@ export type BenchmarkRunStatus = {
   error: string | null
 }
 export const benchmarkRunRequestSchema = z.object({
-  directions: z.array(z.enum(BENCHMARK_DIRECTIONS)).optional()
+  directions: z.array(z.enum(BENCHMARK_DIRECTIONS)).optional(),
+  dateFrom: z.string().regex(ISO_DATE_REGEX).optional(),
+  dateTo: z.string().regex(ISO_DATE_REGEX).optional(),
+  forceReanalyze: z.boolean().optional()
 })
+export type BenchmarkRunRecord = {
+  id: number
+  started_at: string
+  finished_at: string | null
+  ok: boolean | null
+  date_from: string | null
+  date_to: string | null
+  force_reanalyze: boolean
+  requested_directions: string[]
+  directions: BenchmarkDirectionSummary[]
+  error: string | null
+}
 export type LlmSettings = {
   provider_name: string
   minimax_model: string | null

@@ -74,18 +74,24 @@ import { cn } from '#/lib/utils'
 import {
   getBenchmarkResults,
   getBenchmarkRunStatus,
+  getBenchmarkRuns,
   getLlmSettings,
   triggerBenchmarkRun,
   updateLlmSettings
 } from '#/server/reports.functions'
-import type { BenchmarkRunStatus, LlmSettings } from '#/server/schemas'
+import type {
+  BenchmarkRunRecord,
+  BenchmarkRunStatus,
+  LlmSettings
+} from '#/server/schemas'
 import {
   AGENT_LIMIT_OPTIONS,
   type AgentLimit,
   BENCHMARK_DIRECTION_LABEL,
   type BenchmarkDirection,
   type BenchmarkDirectionFilter,
-  benchmarksSearchSchema
+  benchmarksSearchSchema,
+  todayIsoDate
 } from '#/server/schemas'
 
 export const Route = createFileRoute('/benchmarks')({
@@ -96,14 +102,15 @@ export const Route = createFileRoute('/benchmarks')({
     const direction = deps.direction === 'all' ? undefined : deps.direction
     const dateFrom = deps.date
     const dateTo = deps.dateEnd ?? deps.date
-    const [runStatus, results, llmSettings] = await Promise.all([
+    const [runStatus, results, llmSettings, runs] = await Promise.all([
       getBenchmarkRunStatus(),
       getBenchmarkResults({ data: { direction, dateFrom, dateTo } }),
       // null para no-admins (403) -- la card de configuracion simplemente no se
       // muestra, en vez de tirar abajo el resto de la pagina para ellos.
-      getLlmSettings().catch(() => null)
+      getLlmSettings().catch(() => null),
+      getBenchmarkRuns()
     ])
-    return { runStatus, results, llmSettings }
+    return { runStatus, results, llmSettings, runs }
   },
   component: BenchmarksPage
 })
@@ -149,7 +156,7 @@ function MultiSelectQuickActions({
 }
 
 function BenchmarksPage() {
-  const { runStatus, results, llmSettings } = Route.useLoaderData()
+  const { runStatus, results, llmSettings, runs } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
   const totals = benchmarkTotals(results)
@@ -292,11 +299,20 @@ function BenchmarksPage() {
       </div>
 
       <div className="mt-4 grid gap-4 md:grid-cols-2">
-        <BenchmarkRunCard initialStatus={runStatus} />
+        <BenchmarkRunCard
+          initialStatus={runStatus}
+          dateFrom={search.date}
+          dateTo={search.dateEnd ?? search.date}
+          directions={
+            search.direction === 'all' ? undefined : [search.direction]
+          }
+        />
         <BenchmarkScheduleCard />
       </div>
 
       {llmSettings && <LlmSettingsCard initialSettings={llmSettings} />}
+
+      <BenchmarkRunHistoryCard runs={runs} />
 
       <Card className="mt-4">
         <CardHeader className="flex-row items-center justify-between">
@@ -585,16 +601,24 @@ function runStatusBadge(phase: BenchmarkRunStatus['phase']): {
 }
 
 function BenchmarkRunCard({
-  initialStatus
+  initialStatus,
+  dateFrom,
+  dateTo,
+  directions
 }: {
   initialStatus: BenchmarkRunStatus
+  dateFrom: string
+  dateTo: string
+  directions?: BenchmarkDirection[]
 }) {
   const router = useRouter()
   const startRun = useServerFn(triggerBenchmarkRun)
   const getStatus = useServerFn(getBenchmarkRunStatus)
   const [status, setStatus] = useState(initialStatus)
   const [confirming, setConfirming] = useState(false)
+  const [forceReanalyze, setForceReanalyze] = useState(false)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const includesToday = dateFrom <= todayIsoDate() && todayIsoDate() <= dateTo
 
   useEffect(() => {
     if (status.phase !== 'running') return
@@ -613,7 +637,9 @@ function BenchmarkRunCard({
   async function handleConfirm() {
     setConfirming(false)
     try {
-      const next = await startRun({ data: {} })
+      const next = await startRun({
+        data: { directions, dateFrom, dateTo, forceReanalyze }
+      })
       setStatus(next)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
@@ -641,11 +667,14 @@ function BenchmarkRunCard({
           <CardDescription>
             Dispara el reporte masivo de C3 (entrantes y salientes) y el
             análisis de calidad para los casos ya cerrados que todavía no tengan
-            veredicto.
+            veredicto, dentro del rango y dirección elegidos arriba.
           </CardDescription>
         </div>
         <Button
-          onClick={() => setConfirming(true)}
+          onClick={() => {
+            setForceReanalyze(false)
+            setConfirming(true)
+          }}
           disabled={isRunning || confirming}
           variant="secondary"
         >
@@ -665,13 +694,41 @@ function BenchmarkRunCard({
           {status.phase === 'error' && `Último error: ${status.error}`}
         </p>
         {confirming && (
-          <div className="flex items-center justify-between gap-3 rounded-xl bg-accent px-3.5 py-2.5">
+          <div className="flex flex-col gap-3 rounded-xl bg-accent px-3.5 py-2.5">
             <p className="text-xs text-accent-foreground">
               Esto le pide a C3 el reporte masivo de atenciones entrantes y
               salientes (puede tardar horas) y después llama a un LLM por cada
-              caso cerrado sin veredicto todavía. ¿Continuar?
+              caso cerrado sin veredicto todavía, entre{' '}
+              <strong>{dateFrom}</strong>
+              {dateTo !== dateFrom && (
+                <>
+                  {' '}
+                  y <strong>{dateTo}</strong>
+                </>
+              )}
+              . ¿Continuar?
             </p>
-            <div className="flex shrink-0 gap-2">
+            {!includesToday && (
+              <p className="text-xs text-destructive">
+                El rango elegido no incluye hoy -- el reporte masivo de C3
+                siempre trae el zip de hoy, así que los casos nuevos de este
+                rango van a quedar sin PDF para analizar.
+              </p>
+            )}
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="benchmark-force-reanalyze"
+                checked={forceReanalyze}
+                onCheckedChange={checked => setForceReanalyze(checked === true)}
+              />
+              <Label
+                htmlFor="benchmark-force-reanalyze"
+                className="text-xs font-normal text-accent-foreground"
+              >
+                Reanalizar casos ya evaluados
+              </Label>
+            </div>
+            <div className="flex shrink-0 justify-end gap-2">
               <Button
                 size="sm"
                 variant="ghost"
@@ -950,6 +1007,124 @@ function LlmSettingsCard({
             Última actualización:{' '}
             {new Date(settings.updated_at).toLocaleString()}
           </p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function runOkBadge(ok: boolean | null): { label: string; className: string } {
+  if (ok === null) {
+    return { label: 'En curso', className: 'bg-primary/10 text-primary' }
+  }
+  return ok
+    ? { label: 'Completado', className: 'bg-chart-2/15 text-chart-2' }
+    : { label: 'Error', className: 'bg-destructive/10 text-destructive' }
+}
+
+function BenchmarkRunHistoryCard({ runs }: { runs: BenchmarkRunRecord[] }) {
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle>Historial de corridas</CardTitle>
+        <CardDescription>
+          {runs.length} corrida{runs.length === 1 ? '' : 's'} más reciente
+          {runs.length === 1 ? '' : 's'}.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {runs.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Todavía no hay corridas registradas.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Inicio</TableHead>
+                  <TableHead>Fin</TableHead>
+                  <TableHead>Estado</TableHead>
+                  <TableHead>Rango</TableHead>
+                  <TableHead>Direcciones</TableHead>
+                  <TableHead>Reanalizar</TableHead>
+                  <TableHead>Resultado</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {runs.map(run => {
+                  const badge = runOkBadge(run.ok)
+                  const resultSummary = run.directions
+                    .map(
+                      direction =>
+                        `${BENCHMARK_DIRECTION_LABEL[direction.direction]}: ${
+                          direction.action === 'failed'
+                            ? `falló (${direction.error})`
+                            : `${direction.cases_analyzed}/${direction.cases_pending}`
+                        }`
+                    )
+                    .join(' · ')
+                  return (
+                    <TableRow key={run.id}>
+                      <TableCell>
+                        {new Date(run.started_at).toLocaleString()}
+                      </TableCell>
+                      <TableCell>
+                        {run.finished_at
+                          ? new Date(run.finished_at).toLocaleString()
+                          : '—'}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="secondary" className={badge.className}>
+                          {badge.label}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {run.date_from
+                          ? `${run.date_from}${
+                              run.date_to && run.date_to !== run.date_from
+                                ? ` a ${run.date_to}`
+                                : ''
+                            }`
+                          : 'Todo'}
+                      </TableCell>
+                      <TableCell>
+                        {run.requested_directions.length > 0
+                          ? run.requested_directions
+                              .map(
+                                direction =>
+                                  BENCHMARK_DIRECTION_LABEL[
+                                    direction as BenchmarkDirection
+                                  ] ?? direction
+                              )
+                              .join(', ')
+                          : 'Todas'}
+                      </TableCell>
+                      <TableCell>{run.force_reanalyze ? 'Sí' : 'No'}</TableCell>
+                      <TableCell className="max-w-64">
+                        {run.error ? (
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <span className="block truncate text-destructive" />
+                              }
+                            >
+                              {run.error}
+                            </TooltipTrigger>
+                            <TooltipContent>{run.error}</TooltipContent>
+                          </Tooltip>
+                        ) : (
+                          <span className="block truncate text-muted-foreground">
+                            {resultSummary || '—'}
+                          </span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </CardContent>
     </Card>

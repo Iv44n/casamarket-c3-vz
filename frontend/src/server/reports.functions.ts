@@ -16,6 +16,7 @@ import {
   fetchBackfillStatus,
   fetchBenchmarkResults,
   fetchBenchmarkRunStatus,
+  fetchBenchmarkRuns,
   fetchContactsSyncStatus,
   fetchExtractionStatus,
   fetchHistoricalBackfillStatus,
@@ -645,7 +646,7 @@ export const getBenchmarkRunStatus = createServerFn({ method: 'GET' }).handler(
 export const triggerBenchmarkRun = createServerFn({ method: 'POST' })
   .validator(benchmarkRunRequestSchema)
   .handler(async ({ data }) => {
-    return triggerBenchmarkAnalysis(data.directions)
+    return triggerBenchmarkAnalysis(data)
   })
 
 export const getBenchmarkResults = createServerFn({ method: 'GET' })
@@ -653,6 +654,10 @@ export const getBenchmarkResults = createServerFn({ method: 'GET' })
   .handler(async ({ data }) => {
     return fetchBenchmarkResults(data)
   })
+
+export const getBenchmarkRuns = createServerFn({ method: 'GET' }).handler(
+  async () => fetchBenchmarkRuns(50)
+)
 
 export const getLlmSettings = createServerFn({ method: 'GET' }).handler(
   async () => fetchLlmSettings()
