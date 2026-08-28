@@ -7,7 +7,7 @@ import {
   SettingsIcon,
   XIcon
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { BenchmarkAgentChart } from '#/components/benchmark-agent-chart'
 import { useBenchmarkSchedule } from '#/components/benchmark-schedule-provider'
@@ -70,7 +70,7 @@ import {
 } from '#/lib/benchmark-analytics'
 import { CHART_BIG_NUMBER_FONT_SIZE } from '#/lib/chart-typography'
 import { formatSecondsAsDuration } from '#/lib/duration'
-import { cn } from '#/lib/utils'
+import { cn, withoutScrollReset } from '#/lib/utils'
 import {
   getBenchmarkResults,
   getBenchmarkRunStatus,
@@ -80,6 +80,8 @@ import {
   updateLlmSettings
 } from '#/server/reports.functions'
 import type {
+  BenchmarkComplexity,
+  BenchmarkGreetingLevel,
   BenchmarkRunRecord,
   BenchmarkRunStatus,
   LlmSettings
@@ -90,6 +92,7 @@ import {
   BENCHMARK_DIRECTION_LABEL,
   type BenchmarkDirection,
   type BenchmarkDirectionFilter,
+  type BenchmarksSearch,
   benchmarksSearchSchema,
   todayIsoDate
 } from '#/server/schemas'
@@ -97,11 +100,16 @@ import {
 export const Route = createFileRoute('/benchmarks')({
   ssr: 'data-only',
   validateSearch: benchmarksSearchSchema,
-  loaderDeps: ({ search }) => search,
-  loader: async ({ deps }) => {
-    const direction = deps.direction === 'all' ? undefined : deps.direction
-    const dateFrom = deps.date
-    const dateTo = deps.dateEnd ?? deps.date
+  // Sin loaderDeps a proposito: si el loader reaccionara al search, TanStack Router
+  // muestra su spinner de pagina completa en cada cambio de filtro (incluidos
+  // agentLimit/agentes, que ni siquiera pegan al servidor -- se resuelven client-side
+  // mas abajo). El resultado de la tabla se refetchea a mano en el componente, igual
+  // que ya hacen /atenciones y /tendencias-historicas.
+  loader: async ({ location }) => {
+    const search = location.search as BenchmarksSearch
+    const direction = search.direction === 'all' ? undefined : search.direction
+    const dateFrom = search.date
+    const dateTo = search.dateEnd ?? search.date
     const [runStatus, results, llmSettings, runs] = await Promise.all([
       getBenchmarkRunStatus(),
       getBenchmarkResults({ data: { direction, dateFrom, dateTo } }),
@@ -156,9 +164,64 @@ function MultiSelectQuickActions({
 }
 
 function BenchmarksPage() {
-  const { runStatus, results, llmSettings, runs } = Route.useLoaderData()
+  const {
+    runStatus,
+    results: initialResults,
+    llmSettings,
+    runs
+  } = Route.useLoaderData()
   const search = Route.useSearch()
-  const navigate = Route.useNavigate()
+  const navigate = withoutScrollReset(Route.useNavigate())
+  const fetchResults = useServerFn(getBenchmarkResults)
+
+  const [results, setResults] = useState(initialResults)
+  const [resultsLoading, setResultsLoading] = useState(false)
+  const isFirstResultsRun = useRef(true)
+  const resultsRequestIdRef = useRef(0)
+
+  // El loader solo corre en el mount inicial y cuando algo llama a router.invalidate()
+  // (p.ej. al terminar una corrida) -- este efecto sincroniza ese refresco "de fondo"
+  // con el estado local de abajo, sin pasar por un refetch manual.
+  useEffect(() => {
+    setResults(initialResults)
+  }, [initialResults])
+
+  const refetchResults = useCallback(
+    async (
+      direction: BenchmarksSearch['direction'],
+      date: string,
+      dateEnd: string | undefined
+    ) => {
+      const requestId = ++resultsRequestIdRef.current
+      setResultsLoading(true)
+      try {
+        const next = await fetchResults({
+          data: {
+            direction: direction === 'all' ? undefined : direction,
+            dateFrom: date,
+            dateTo: dateEnd ?? date
+          }
+        })
+        if (requestId !== resultsRequestIdRef.current) return
+        setResults(next)
+      } catch (err) {
+        if (requestId === resultsRequestIdRef.current) {
+          toast.error(err instanceof Error ? err.message : String(err))
+        }
+      } finally {
+        if (requestId === resultsRequestIdRef.current) setResultsLoading(false)
+      }
+    },
+    [fetchResults]
+  )
+  useEffect(() => {
+    if (isFirstResultsRun.current) {
+      isFirstResultsRun.current = false
+      return
+    }
+    refetchResults(search.direction, search.date, search.dateEnd)
+  }, [search.direction, search.date, search.dateEnd, refetchResults])
+
   const totals = benchmarkTotals(results)
   const agentRanking = buildAgentBenchmarkRanking(results, search.agentLimit)
   const topQualityAgent = bestQualityAgent(
@@ -225,7 +288,12 @@ function BenchmarksPage() {
         masivo de C3.
       </p>
 
-      <div className="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div
+        className={cn(
+          'mt-6 grid grid-cols-2 gap-4 transition-opacity lg:grid-cols-4',
+          resultsLoading && 'opacity-50'
+        )}
+      >
         <Card size="sm">
           <CardHeader className="gap-1">
             <CardTitle className="text-base font-medium text-muted-foreground">
@@ -369,7 +437,9 @@ function BenchmarksPage() {
             </div>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent
+          className={cn('transition-opacity', resultsLoading && 'opacity-50')}
+        >
           {agentRanking.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               Todavía no hay resultados para el rango elegido.
@@ -472,7 +542,9 @@ function BenchmarksPage() {
             />
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent
+          className={cn('transition-opacity', resultsLoading && 'opacity-50')}
+        >
           <BenchmarkResultsTable results={filteredResults} />
         </CardContent>
       </Card>
@@ -507,6 +579,70 @@ function NotesCell({ value }: { value: string | null }) {
   )
 }
 
+const COMPLEXITY_LABEL: Record<BenchmarkComplexity, string> = {
+  baja: 'Baja',
+  media: 'Media',
+  alta: 'Alta'
+}
+const COMPLEXITY_BADGE_CLASS: Record<BenchmarkComplexity, string> = {
+  baja: 'bg-secondary text-secondary-foreground',
+  media: 'bg-chart-4/15 text-chart-4',
+  alta: 'bg-destructive/10 text-destructive'
+}
+function ComplexityCell({ value }: { value: BenchmarkComplexity | null }) {
+  if (value === null) return <span className="text-muted-foreground">—</span>
+  return (
+    <Badge variant="secondary" className={COMPLEXITY_BADGE_CLASS[value]}>
+      {COMPLEXITY_LABEL[value]}
+    </Badge>
+  )
+}
+
+const GREETING_LABEL: Record<BenchmarkGreetingLevel, string> = {
+  ninguno: 'Ninguno',
+  casual: 'Casual',
+  formal: 'Formal'
+}
+// Casual y formal cuentan igual para quality_ok (solo "ninguno" resta) -- por eso
+// comparten el mismo estilo "positivo", nunca uno mejor que el otro.
+const GREETING_BADGE_CLASS: Record<BenchmarkGreetingLevel, string> = {
+  ninguno: 'bg-destructive/10 text-destructive',
+  casual: 'bg-chart-2/15 text-chart-2',
+  formal: 'bg-chart-2/15 text-chart-2'
+}
+function GreetingCell({ value }: { value: BenchmarkGreetingLevel | null }) {
+  if (value === null) return <span className="text-muted-foreground">—</span>
+  return (
+    <Badge variant="secondary" className={GREETING_BADGE_CLASS[value]}>
+      {GREETING_LABEL[value]}
+    </Badge>
+  )
+}
+
+function TransferCell({
+  hadTransfer,
+  informedTransfer
+}: {
+  hadTransfer: boolean
+  informedTransfer: boolean | null
+}) {
+  if (!hadTransfer) {
+    return <span className="text-muted-foreground">Sin transferencia</span>
+  }
+  if (informedTransfer === null) {
+    return <Badge variant="secondary">Transferida</Badge>
+  }
+  return informedTransfer ? (
+    <Badge variant="secondary" className="bg-chart-2/15 text-chart-2">
+      Informada
+    </Badge>
+  ) : (
+    <Badge variant="secondary" className="bg-destructive/10 text-destructive">
+      No informada
+    </Badge>
+  )
+}
+
 function BenchmarkResultsTable({
   results
 }: {
@@ -531,8 +667,12 @@ function BenchmarkResultsTable({
             <TableHead>Agente</TableHead>
             <TableHead>Campaña</TableHead>
             <TableHead>1ra respuesta</TableHead>
-            <TableHead>Presentación</TableHead>
+            <TableHead>Saludo</TableHead>
             <TableHead>Despedida</TableHead>
+            <TableHead>Ortografía</TableHead>
+            <TableHead>Complejidad</TableHead>
+            <TableHead>Manejo adecuado</TableHead>
+            <TableHead>Transferencia</TableHead>
             <TableHead>Notas</TableHead>
           </TableRow>
         </TableHeader>
@@ -563,10 +703,25 @@ function BenchmarkResultsTable({
                 )}
               </TableCell>
               <TableCell>
-                <VerdictCell value={row.has_greeting} />
+                <GreetingCell value={row.greeting_level} />
               </TableCell>
               <TableCell>
                 <VerdictCell value={row.has_farewell} />
+              </TableCell>
+              <TableCell>
+                <VerdictCell value={row.spelling_ok} />
+              </TableCell>
+              <TableCell>
+                <ComplexityCell value={row.complexity} />
+              </TableCell>
+              <TableCell>
+                <VerdictCell value={row.handled_well_for_complexity} />
+              </TableCell>
+              <TableCell>
+                <TransferCell
+                  hadTransfer={row.had_transfer}
+                  informedTransfer={row.informed_transfer}
+                />
               </TableCell>
               <TableCell>
                 <NotesCell value={row.llm_notes} />
@@ -720,6 +875,7 @@ function BenchmarkRunCard({
                 id="benchmark-force-reanalyze"
                 checked={forceReanalyze}
                 onCheckedChange={checked => setForceReanalyze(checked === true)}
+                className="border-accent-foreground"
               />
               <Label
                 htmlFor="benchmark-force-reanalyze"

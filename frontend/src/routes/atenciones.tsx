@@ -57,7 +57,7 @@ import {
   pickDominantCategoryOrder
 } from '#/lib/incident-analytics'
 import { buildIncidentHierarchyPdf } from '#/lib/incident-hierarchy-pdf'
-import { cn } from '#/lib/utils'
+import { cn, withoutScrollReset } from '#/lib/utils'
 import {
   getAttentionRecordsPage,
   getAttentionsAnalytics,
@@ -194,7 +194,7 @@ function AtencionesPage() {
     dateEnd,
     demorasPage
   } = Route.useSearch()
-  const navigate = Route.useNavigate()
+  const navigate = withoutScrollReset(Route.useNavigate())
   const refresh = useServerFn(triggerRefresh)
   const backfill = useServerFn(triggerBackfill)
   const fetchAttentionsAnalytics = useServerFn(getAttentionsAnalytics)

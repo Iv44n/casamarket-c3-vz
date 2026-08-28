@@ -344,6 +344,8 @@ export const BENCHMARK_DIRECTION_LABEL: Record<BenchmarkDirection, string> = {
   attention: 'Entrantes',
   outboundattention: 'Salientes'
 }
+export type BenchmarkComplexity = 'baja' | 'media' | 'alta'
+export type BenchmarkGreetingLevel = 'ninguno' | 'casual' | 'formal'
 export type BenchmarkCaseResult = {
   id_atencion: string
   direction: BenchmarkDirection
@@ -354,11 +356,16 @@ export type BenchmarkCaseResult = {
   hora_final: string | null
   cliente: string | null
   first_response_seconds: number | null
-  has_greeting: boolean | null
+  greeting_level: BenchmarkGreetingLevel | null
+  spelling_ok: boolean | null
   has_farewell: boolean | null
   quality_ok: boolean | null
   llm_notes: string | null
   analyzed_at: string | null
+  complexity: BenchmarkComplexity | null
+  handled_well_for_complexity: boolean | null
+  had_transfer: boolean
+  informed_transfer: boolean | null
 }
 export type BenchmarkDirectionSummary = {
   direction: BenchmarkDirection

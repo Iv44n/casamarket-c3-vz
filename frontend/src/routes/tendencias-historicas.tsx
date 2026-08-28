@@ -24,7 +24,7 @@ import { Label } from '#/components/ui/label'
 import { Separator } from '#/components/ui/separator'
 import { Skeleton } from '#/components/ui/skeleton'
 import { buildDailyTrend, buildDemandHeatmap } from '#/lib/attentions-analytics'
-import { cn } from '#/lib/utils'
+import { cn, withoutScrollReset } from '#/lib/utils'
 import {
   getDailyCaseTrend,
   getDemandAnalytics
@@ -124,7 +124,7 @@ function DailyTrendError({
 function TendenciasHistoricasPage() {
   const initialData = Route.useLoaderData()
   const { date, dateEnd, agentes } = Route.useSearch()
-  const navigate = Route.useNavigate()
+  const navigate = withoutScrollReset(Route.useNavigate())
   const fetchDailyTrend = useServerFn(getDailyCaseTrend)
   const fetchDemandAnalytics = useServerFn(getDemandAnalytics)
 

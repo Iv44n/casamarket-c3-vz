@@ -12,3 +12,16 @@ export function sequentialChartMix(colorVar: string, percent: number): string {
 export function tintChartBackground(colorVar: string): string {
   return sequentialChartMix(colorVar, 8)
 }
+// TanStack Router's navigate() defaults resetScroll to true, so every filter change
+// (a same-route search-only navigate) yanks the scroll back to the top. Wraps a route's
+// navigate to default it to false instead, still overridable per call. The `any` here
+// is what lets this wrap ANY route's differently-shaped, generic navigate() without
+// losing its exact overloads -- the `as T` cast below restores the original type for
+// callers, so every existing call site stays fully type-checked.
+// biome-ignore lint/suspicious/noExplicitAny: see comment above
+export function withoutScrollReset<T extends (opts: any) => any>(
+  navigate: T
+): T {
+  return ((opts: Parameters<T>[0]) =>
+    navigate({ resetScroll: false, ...opts })) as T
+}
