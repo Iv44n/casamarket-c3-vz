@@ -39,8 +39,8 @@ class _FakeProvider:
     def complete(self, prompt: str) -> str:
         self.calls.append(prompt)
         return (
-            '{"has_greeting": true, "has_farewell": true, "complexity": "baja", '
-            '"handled_well_for_complexity": true, "notes": "ok"}'
+            '{"greeting_level": "formal", "has_farewell": true, "complexity": "baja", '
+            '"handled_well_for_complexity": true, "spelling_ok": true, "notes": "ok"}'
         )
 
 
@@ -156,10 +156,10 @@ def test_analyze_direction_records_response_time_for_all_pending_and_judges_only
     assert len(provider.calls) == 1
 
     rows = {r["id_atencion"]: r for r in store.benchmark_result_rows(conn)}
-    assert rows["1"]["has_greeting"] is True
+    assert rows["1"]["greeting_level"] == "formal"
     assert rows["1"]["quality_ok"] is True
     assert rows["1"]["first_response_seconds"] == 90.0
-    assert rows["2"]["has_greeting"] is None
+    assert rows["2"]["greeting_level"] is None
     assert rows["2"]["first_response_seconds"] == 90.0
 
 
@@ -206,10 +206,11 @@ def test_analyze_direction_asks_about_transfer_only_for_cases_with_a_transfer_ro
         def complete(self, prompt: str) -> str:
             self.prompts.append(prompt)
             data = {
-                "has_greeting": True,
+                "greeting_level": "formal",
                 "has_farewell": True,
                 "complexity": "baja",
                 "handled_well_for_complexity": True,
+                "spelling_ok": True,
                 "notes": "ok",
             }
             # El prompt solo incluye la clave "informed_transfer" en su forma JSON pedida
@@ -308,7 +309,7 @@ def test_analyze_direction_force_reanalyze_does_not_overwrite_a_real_verdict_wit
             {
                 "id_atencion": "1",
                 "direction": "attention",
-                "has_greeting": True,
+                "greeting_level": "formal",
                 "has_farewell": True,
                 "row_json": {},
             }
@@ -337,7 +338,7 @@ def test_analyze_direction_force_reanalyze_does_not_overwrite_a_real_verdict_wit
 
     rows = store.benchmark_result_rows(conn)
     assert len(rows) == 1
-    assert rows[0]["has_greeting"] is True  # el veredicto bueno sigue siendo el que se muestra
+    assert rows[0]["greeting_level"] == "formal"  # el veredicto bueno sigue siendo el que se muestra
 
 
 def test_analyze_direction_uses_the_given_date_range_instead_of_the_default_lookback(

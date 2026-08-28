@@ -62,10 +62,11 @@ class BenchmarkCaseResult(BaseModel):
     hora_final: str | None
     cliente: str | None
     first_response_seconds: float | None
-    has_greeting: bool | None
+    greeting_level: Literal["ninguno", "casual", "formal"] | None
     has_farewell: bool | None
     complexity: Literal["baja", "media", "alta"] | None
     handled_well_for_complexity: bool | None
+    spelling_ok: bool | None
     had_transfer: bool
     informed_transfer: bool | None
     quality_ok: bool | None

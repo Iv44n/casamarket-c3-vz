@@ -13,12 +13,12 @@ class _FakeProvider:
 
 def test_judge_conversation_parses_a_well_formed_response():
     provider = _FakeProvider(
-        '{"has_greeting": true, "has_farewell": false, "notes": "no se despidio"}'
+        '{"greeting_level": "formal", "has_farewell": false, "notes": "no se despidio"}'
     )
 
     result = judge_conversation(provider, "Hola, buenos dias...")
 
-    assert result.has_greeting is True
+    assert result.greeting_level == "formal"
     assert result.has_farewell is False
     assert result.notes == "no se despidio"
     assert "Hola, buenos dias" in provider.prompts[0]
@@ -29,7 +29,7 @@ def test_judge_conversation_returns_none_fields_on_malformed_json():
 
     result = judge_conversation(provider, "conversacion")
 
-    assert result.has_greeting is None
+    assert result.greeting_level is None
     assert result.has_farewell is None
     assert result.raw == "esto no es json"
 
@@ -39,18 +39,21 @@ def test_judge_conversation_returns_none_fields_when_keys_are_missing():
 
     result = judge_conversation(provider, "conversacion")
 
-    assert result.has_greeting is None
+    assert result.greeting_level is None
     assert result.has_farewell is None
     assert result.notes is None
 
 
 def test_judge_conversation_ignores_wrong_typed_values():
-    provider = _FakeProvider('{"has_greeting": "si", "has_farewell": 1, "notes": 123}')
+    provider = _FakeProvider(
+        '{"greeting_level": 1, "has_farewell": 1, "spelling_ok": "si", "notes": 123}'
+    )
 
     result = judge_conversation(provider, "conversacion")
 
-    assert result.has_greeting is None
+    assert result.greeting_level is None
     assert result.has_farewell is None
+    assert result.spelling_ok is None
     assert result.notes is None
 
 
@@ -58,13 +61,13 @@ def test_judge_conversation_strips_a_leading_think_block_before_parsing():
     raw = (
         "<think>\nVoy a analizar la conversacion para evaluar el comportamiento del "
         "agente...\n</think>\n"
-        '{"has_greeting": true, "has_farewell": true, "notes": "saludo y despedida ok"}'
+        '{"greeting_level": "formal", "has_farewell": true, "notes": "saludo y despedida ok"}'
     )
     provider = _FakeProvider(raw)
 
     result = judge_conversation(provider, "conversacion")
 
-    assert result.has_greeting is True
+    assert result.greeting_level == "formal"
     assert result.has_farewell is True
     assert result.notes == "saludo y despedida ok"
     # raw se guarda completo, incluido el bloque <think>, para auditoria.
@@ -72,12 +75,12 @@ def test_judge_conversation_strips_a_leading_think_block_before_parsing():
 
 
 def test_judge_conversation_extracts_json_surrounded_by_explanatory_text():
-    raw = 'Aqui esta mi analisis: {"has_greeting": false, "has_farewell": false} listo.'
+    raw = 'Aqui esta mi analisis: {"greeting_level": "ninguno", "has_farewell": false} listo.'
     provider = _FakeProvider(raw)
 
     result = judge_conversation(provider, "conversacion")
 
-    assert result.has_greeting is False
+    assert result.greeting_level == "ninguno"
     assert result.has_farewell is False
 
 
@@ -86,13 +89,34 @@ def test_judge_conversation_returns_none_fields_when_think_block_never_closes():
 
     result = judge_conversation(provider, "conversacion")
 
-    assert result.has_greeting is None
+    assert result.greeting_level is None
     assert result.has_farewell is None
+
+
+def test_judge_conversation_parses_a_casual_greeting():
+    # El caso real que motivo este criterio: un saludo breve seguido de inmediato por un
+    # pedido debe calzar en "casual", no en "ninguno".
+    provider = _FakeProvider(
+        '{"greeting_level": "casual", "has_farewell": false, '
+        '"notes": "saludo casual, sin despedida"}'
+    )
+
+    result = judge_conversation(provider, "Buenos Dias me indica su codigo anydesk...")
+
+    assert result.greeting_level == "casual"
+
+
+def test_judge_conversation_discards_an_invalid_greeting_level():
+    provider = _FakeProvider('{"greeting_level": "amable", "has_farewell": true}')
+
+    result = judge_conversation(provider, "conversacion")
+
+    assert result.greeting_level is None
 
 
 def test_judge_conversation_parses_complexity_and_handled_well_for_complexity():
     provider = _FakeProvider(
-        '{"has_greeting": true, "has_farewell": true, "complexity": "alta", '
+        '{"greeting_level": "formal", "has_farewell": true, "complexity": "alta", '
         '"handled_well_for_complexity": false, "notes": "caso dificil mal resuelto"}'
     )
 
@@ -104,7 +128,7 @@ def test_judge_conversation_parses_complexity_and_handled_well_for_complexity():
 
 def test_judge_conversation_discards_an_invalid_complexity_value():
     provider = _FakeProvider(
-        '{"has_greeting": true, "has_farewell": true, "complexity": "extrema", '
+        '{"greeting_level": "formal", "has_farewell": true, "complexity": "extrema", '
         '"handled_well_for_complexity": true}'
     )
 
@@ -113,9 +137,28 @@ def test_judge_conversation_discards_an_invalid_complexity_value():
     assert result.complexity is None
 
 
+def test_judge_conversation_parses_spelling_ok():
+    provider = _FakeProvider(
+        '{"greeting_level": "formal", "has_farewell": true, "spelling_ok": false, '
+        '"notes": "varios errores de tipeo"}'
+    )
+
+    result = judge_conversation(provider, "conversacion")
+
+    assert result.spelling_ok is False
+
+
+def test_judge_conversation_returns_none_spelling_ok_when_missing():
+    provider = _FakeProvider('{"greeting_level": "formal", "has_farewell": true}')
+
+    result = judge_conversation(provider, "conversacion")
+
+    assert result.spelling_ok is None
+
+
 def test_judge_conversation_parses_informed_transfer_when_case_had_a_transfer():
     provider = _FakeProvider(
-        '{"has_greeting": true, "has_farewell": true, "complexity": "media", '
+        '{"greeting_level": "formal", "has_farewell": true, "complexity": "media", '
         '"handled_well_for_complexity": true, "informed_transfer": true}'
     )
 
@@ -129,7 +172,7 @@ def test_judge_conversation_discards_informed_transfer_when_case_had_no_transfer
     # prohibido) -- no aplica cuando el caso no tuvo transferencia, asi que se descarta a None
     # en vez de tomarlo al pie de la letra.
     provider = _FakeProvider(
-        '{"has_greeting": true, "has_farewell": true, "complexity": "media", '
+        '{"greeting_level": "formal", "has_farewell": true, "complexity": "media", '
         '"handled_well_for_complexity": true, "informed_transfer": true}'
     )
 
@@ -140,11 +183,11 @@ def test_judge_conversation_discards_informed_transfer_when_case_had_no_transfer
 
 def test_judge_conversation_prompt_includes_transfer_question_only_when_had_transfer():
     provider_with_transfer = _FakeProvider(
-        '{"has_greeting": true, "has_farewell": true, "complexity": "baja", '
+        '{"greeting_level": "casual", "has_farewell": true, "complexity": "baja", '
         '"handled_well_for_complexity": true, "informed_transfer": true}'
     )
     provider_without_transfer = _FakeProvider(
-        '{"has_greeting": true, "has_farewell": true, "complexity": "baja", '
+        '{"greeting_level": "casual", "has_farewell": true, "complexity": "baja", '
         '"handled_well_for_complexity": true}'
     )
 
@@ -154,3 +197,13 @@ def test_judge_conversation_prompt_includes_transfer_question_only_when_had_tran
     assert "transferencia" in provider_with_transfer.prompts[0]
     assert "informed_transfer" in provider_with_transfer.prompts[0]
     assert "informed_transfer" not in provider_without_transfer.prompts[0]
+
+
+def test_judge_conversation_prompt_always_includes_greeting_and_spelling_questions():
+    provider = _FakeProvider('{"greeting_level": "formal", "has_farewell": true}')
+
+    judge_conversation(provider, "conversacion")
+
+    prompt = provider.prompts[0]
+    assert "casual" in prompt and "formal" in prompt
+    assert "ortografia" in prompt

@@ -700,14 +700,14 @@ def test_already_benchmarked_ids_only_counts_real_quality_verdicts():
             {
                 "id_atencion": "judged",
                 "direction": "attention",
-                "has_greeting": True,
+                "greeting_level": "formal",
                 "has_farewell": True,
                 "row_json": {},
             },
             {
                 "id_atencion": "no_pdf_yet",
                 "direction": "attention",
-                "has_greeting": None,
+                "greeting_level": None,
                 "has_farewell": None,
                 "row_json": {},
             },
@@ -720,6 +720,26 @@ def test_already_benchmarked_ids_only_counts_real_quality_verdicts():
     )
 
     assert already == {"judged"}
+
+
+def test_already_benchmarked_ids_counts_a_legacy_row_with_analyzed_at_but_no_greeting_level():
+    # Fila grabada ANTES de que greeting_level existiera (analyzed_at real, pero
+    # greeting_level NULL porque la columna todavia no existia) -- already_benchmarked_ids no
+    # debe tratarla como "todavia pendiente" solo porque le falta el campo nuevo, o se
+    # re-analizaria sola en la proxima corrida normal (ver docstring de already_benchmarked_ids).
+    conn = _conn()
+    conn.execute(
+        "INSERT INTO benchmark_result "
+        "(id_atencion, direction, analyzed_at, first_recorded_at, last_updated_at, row_json) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        ("legacy", "attention", "2026-08-01T00:00:00", "2026-08-01T00:00:00",
+         "2026-08-01T00:00:00", "{}"),
+    )
+    conn.commit()
+
+    already = store.already_benchmarked_ids(conn, "attention", ["legacy"])
+
+    assert already == {"legacy"}
 
 
 def test_already_benchmarked_ids_returns_empty_set_for_no_ids():
@@ -814,7 +834,7 @@ def test_record_benchmark_results_inserts_row_without_quality_when_no_pdf():
                 "campana": "Soporte",
                 "estado": "Cerrada",
                 "first_response_seconds": 90.0,
-                "has_greeting": None,
+                "greeting_level": None,
                 "has_farewell": None,
                 "row_json": {"ID atención": "1"},
             }
@@ -824,7 +844,7 @@ def test_record_benchmark_results_inserts_row_without_quality_when_no_pdf():
 
     rows = store.benchmark_result_rows(conn)
     assert len(rows) == 1
-    assert rows[0]["has_greeting"] is None
+    assert rows[0]["greeting_level"] is None
     assert rows[0]["analyzed_at"] is None
     assert rows[0]["first_response_seconds"] == 90.0
 
@@ -864,7 +884,7 @@ def test_record_benchmark_results_appends_instead_of_overwriting_on_a_later_run(
             {
                 "id_atencion": "1",
                 "direction": "attention",
-                "has_greeting": None,
+                "greeting_level": None,
                 "has_farewell": None,
                 "row_json": {},
             }
@@ -879,9 +899,10 @@ def test_record_benchmark_results_appends_instead_of_overwriting_on_a_later_run(
             {
                 "id_atencion": "1",
                 "direction": "attention",
-                "has_greeting": True,
+                "greeting_level": "formal",
                 "has_farewell": True,
                 "handled_well_for_complexity": True,
+                "spelling_ok": True,
                 "llm_model": "gpt-4o-mini",
                 "row_json": {},
             }
@@ -892,14 +913,14 @@ def test_record_benchmark_results_appends_instead_of_overwriting_on_a_later_run(
 
     # Dos filas, no una -- la corrida anterior no se pisa, queda de historial.
     all_rows = conn.execute(
-        "SELECT run_id, has_greeting FROM benchmark_result WHERE id_atencion = '1' ORDER BY id"
+        "SELECT run_id, greeting_level FROM benchmark_result WHERE id_atencion = '1' ORDER BY id"
     ).fetchall()
-    assert all_rows == [(1, None), (2, 1)]
+    assert all_rows == [(1, None), (2, "formal")]
 
     # benchmark_result_rows() sigue mostrando solo la version mas reciente.
     rows = store.benchmark_result_rows(conn)
     assert len(rows) == 1
-    assert rows[0]["has_greeting"] is True
+    assert rows[0]["greeting_level"] == "formal"
     assert rows[0]["quality_ok"] is True
     assert rows[0]["analyzed_at"] == "2026-08-19T00:00:00"
 
@@ -912,9 +933,10 @@ def test_record_benchmark_results_quality_ok_is_false_when_only_one_flag_true():
             {
                 "id_atencion": "1",
                 "direction": "attention",
-                "has_greeting": True,
+                "greeting_level": "formal",
                 "has_farewell": False,
                 "handled_well_for_complexity": True,
+                "spelling_ok": True,
                 "row_json": {},
             }
         ],
@@ -933,8 +955,9 @@ def test_record_benchmark_results_quality_ok_is_none_when_handled_well_is_missin
             {
                 "id_atencion": "1",
                 "direction": "attention",
-                "has_greeting": True,
+                "greeting_level": "formal",
                 "has_farewell": True,
+                "spelling_ok": True,
                 "row_json": {},
             }
         ],
@@ -943,6 +966,68 @@ def test_record_benchmark_results_quality_ok_is_none_when_handled_well_is_missin
 
     rows = store.benchmark_result_rows(conn)
     assert rows[0]["quality_ok"] is None
+
+
+def test_record_benchmark_results_quality_ok_treats_casual_greeting_same_as_formal():
+    # El pedido original: un saludo casual no debe restar en el veredicto combinado, solo
+    # "ninguno" cuenta como ausencia de saludo.
+    conn = _conn()
+    store.record_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "casual",
+                "direction": "attention",
+                "greeting_level": "casual",
+                "has_farewell": True,
+                "handled_well_for_complexity": True,
+                "spelling_ok": True,
+                "row_json": {},
+            }
+        ],
+        "2026-08-18T00:00:00",
+    )
+    store.record_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "ninguno",
+                "direction": "attention",
+                "greeting_level": "ninguno",
+                "has_farewell": True,
+                "handled_well_for_complexity": True,
+                "spelling_ok": True,
+                "row_json": {},
+            }
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    rows = {r["id_atencion"]: r for r in store.benchmark_result_rows(conn)}
+    assert rows["casual"]["quality_ok"] is True
+    assert rows["ninguno"]["quality_ok"] is False
+
+
+def test_record_benchmark_results_quality_ok_is_false_when_spelling_has_errors():
+    conn = _conn()
+    store.record_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "1",
+                "direction": "attention",
+                "greeting_level": "formal",
+                "has_farewell": True,
+                "handled_well_for_complexity": True,
+                "spelling_ok": False,
+                "row_json": {},
+            }
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    rows = store.benchmark_result_rows(conn)
+    assert rows[0]["quality_ok"] is False
 
 
 def test_record_benchmark_results_quality_ok_requires_informed_transfer_when_had_transfer():
@@ -954,9 +1039,10 @@ def test_record_benchmark_results_quality_ok_requires_informed_transfer_when_had
             {
                 "id_atencion": "no_transfer",
                 "direction": "attention",
-                "has_greeting": True,
+                "greeting_level": "formal",
                 "has_farewell": True,
                 "handled_well_for_complexity": True,
+                "spelling_ok": True,
                 "had_transfer": False,
                 "row_json": {},
             }
@@ -969,9 +1055,10 @@ def test_record_benchmark_results_quality_ok_requires_informed_transfer_when_had
             {
                 "id_atencion": "transferred_not_informed",
                 "direction": "attention",
-                "has_greeting": True,
+                "greeting_level": "formal",
                 "has_farewell": True,
                 "handled_well_for_complexity": True,
+                "spelling_ok": True,
                 "had_transfer": True,
                 "informed_transfer": False,
                 "row_json": {},
@@ -985,9 +1072,10 @@ def test_record_benchmark_results_quality_ok_requires_informed_transfer_when_had
             {
                 "id_atencion": "transferred_and_informed",
                 "direction": "attention",
-                "has_greeting": True,
+                "greeting_level": "formal",
                 "has_farewell": True,
                 "handled_well_for_complexity": True,
+                "spelling_ok": True,
                 "had_transfer": True,
                 "informed_transfer": True,
                 "row_json": {},
@@ -1089,7 +1177,7 @@ def test_benchmark_result_rows_returns_only_the_latest_version_per_case():
             {
                 "id_atencion": "1",
                 "direction": "attention",
-                "has_greeting": False,
+                "greeting_level": "ninguno",
                 "has_farewell": False,
                 "row_json": {"Fecha final": "18/08/2026"},
             }
@@ -1103,7 +1191,7 @@ def test_benchmark_result_rows_returns_only_the_latest_version_per_case():
             {
                 "id_atencion": "1",
                 "direction": "attention",
-                "has_greeting": True,
+                "greeting_level": "formal",
                 "has_farewell": True,
                 "row_json": {"Fecha final": "18/08/2026"},
             }
@@ -1115,7 +1203,7 @@ def test_benchmark_result_rows_returns_only_the_latest_version_per_case():
     rows = store.benchmark_result_rows(conn)
 
     assert len(rows) == 1
-    assert rows[0]["has_greeting"] is True
+    assert rows[0]["greeting_level"] == "formal"
     assert rows[0]["analyzed_at"] == "2026-08-19T00:00:00"
 
 
@@ -1196,6 +1284,14 @@ def test_migrate_benchmark_result_columns_backfills_new_columns_from_row_json():
         "FROM benchmark_result WHERE id_atencion = '1'"
     ).fetchone()
     assert quality_row == (None, None, 0, None)
+
+    # greeting_level/spelling_ok tampoco existian en esta tabla vieja -- confirma que quedaron
+    # agregadas (NULL, no se puede reconstruir retroactivamente que nivel de saludo hubo ni si
+    # habia errores de ortografia sin volver a correr el LLM).
+    greeting_row = conn.execute(
+        "SELECT greeting_level, spelling_ok FROM benchmark_result WHERE id_atencion = '1'"
+    ).fetchone()
+    assert greeting_row == (None, None)
 
 
 def test_migrate_benchmark_result_quality_columns_backfills_had_transfer_true_from_transfer_table():

@@ -30,21 +30,35 @@ def _extract_json_object(text: str) -> str:
 
 
 _COMPLEXITY_LEVELS = ("baja", "media", "alta")
+_GREETING_LEVELS = ("ninguno", "casual", "formal")
 
 _PROMPT_TEMPLATE = """Eres un auditor de calidad de atencion al cliente. A continuacion \
 esta la transcripcion de una conversacion de WhatsApp entre un agente de soporte y un \
 cliente. Tu tarea es evaluar UNICAMENTE el comportamiento del AGENTE (no del cliente):
 
-1. ¿El agente abrio la conversacion con un saludo/presentacion?
+1. ¿El agente saludo al cliente? Elegi UNA opcion: "ninguno", "casual" o "formal".
+   - "ninguno": no hubo ningun saludo, el agente fue directo al tema.
+   - "casual": un saludo breve (ej. "Buenos dias", "Hola", "Buenas tardes"), aunque venga \
+seguido de inmediato por una pregunta o pedido, sin presentacion mas completa. Ejemplo que SI \
+cuenta como "casual" (no como "ninguno"): "Buenos Dias me indica su codigo anydesk para poder \
+subirlo".
+   - "formal": un saludo mas completo, con presentacion propia y/o de la empresa y/o un \
+ofrecimiento explicito de ayuda (ej. "Buenas tardes, gracias por contactar a Casa Market, mi \
+nombre es Ana, ¿en que puedo ayudarle?").
 2. ¿El agente cerro la conversacion con una despedida?
 3. ¿Que tan compleja fue la consulta o problema del cliente? Elegi UNA opcion: "baja", "media" \
 o "alta".
 4. Considerando esa complejidad, ¿el agente manejo el caso de forma adecuada (con una \
 resolucion o derivacion acorde a la dificultad real del caso)?
+5. ¿La ortografia y redaccion del AGENTE (no la del cliente) fue correcta, sin errores de \
+escritura evidentes? NO cuentes como error la falta de tildes/acentos (muy comun en chat \
+informal, ej. "como"/"aqui" sin tilde) -- solo palabras mal escritas o errores de digitacion \
+reales.
 {transfer_question}
 Responde SOLO con un objeto JSON, sin texto adicional, con esta forma exacta:
-{{"has_greeting": true|false, "has_farewell": true|false, "complexity": "baja"|"media"|"alta", \
-"handled_well_for_complexity": true|false{transfer_json_key}, "notes": "una frase breve"}}
+{{"greeting_level": "ninguno"|"casual"|"formal", "has_farewell": true|false, \
+"complexity": "baja"|"media"|"alta", "handled_well_for_complexity": true|false, \
+"spelling_ok": true|false{transfer_json_key}, "notes": "una frase breve"}}
 
 Transcripcion:
 ---
@@ -53,7 +67,7 @@ Transcripcion:
 """
 
 _TRANSFER_QUESTION = (
-    "5. Esta conversacion incluyo una transferencia del caso a otro agente o area. "
+    "6. Esta conversacion incluyo una transferencia del caso a otro agente o area. "
     "¿El agente le avisó al cliente, ANTES de transferirlo, que iba a ser transferido?\n"
 )
 _TRANSFER_JSON_KEY = ', "informed_transfer": true|false'
@@ -61,10 +75,11 @@ _TRANSFER_JSON_KEY = ', "informed_transfer": true|false'
 
 @dataclass(frozen=True)
 class QualityJudgement:
-    has_greeting: bool | None
+    greeting_level: str | None
     has_farewell: bool | None
     complexity: str | None
     handled_well_for_complexity: bool | None
+    spelling_ok: bool | None
     # None cuando la conversacion no tuvo una transferencia real (no aplica) -- distinto de
     # False ("no avisó" implica que sí habia algo que avisar).
     informed_transfer: bool | None
@@ -102,28 +117,31 @@ def judge_conversation(
     except (ValueError, TypeError) as exc:
         logger.warning("Respuesta del LLM no es JSON valido: %s -- %r", exc, raw[:200])
         return QualityJudgement(
-            has_greeting=None,
+            greeting_level=None,
             has_farewell=None,
             complexity=None,
             handled_well_for_complexity=None,
+            spelling_ok=None,
             informed_transfer=None,
             notes=None,
             raw=raw,
         )
 
-    has_greeting = data.get("has_greeting")
+    greeting_level = data.get("greeting_level")
     has_farewell = data.get("has_farewell")
     complexity = data.get("complexity")
     handled_well_for_complexity = data.get("handled_well_for_complexity")
+    spelling_ok = data.get("spelling_ok")
     informed_transfer = data.get("informed_transfer")
     notes = data.get("notes")
     return QualityJudgement(
-        has_greeting=has_greeting if isinstance(has_greeting, bool) else None,
+        greeting_level=greeting_level if greeting_level in _GREETING_LEVELS else None,
         has_farewell=has_farewell if isinstance(has_farewell, bool) else None,
         complexity=complexity if complexity in _COMPLEXITY_LEVELS else None,
         handled_well_for_complexity=(
             handled_well_for_complexity if isinstance(handled_well_for_complexity, bool) else None
         ),
+        spelling_ok=spelling_ok if isinstance(spelling_ok, bool) else None,
         informed_transfer=(
             informed_transfer
             if had_transfer and isinstance(informed_transfer, bool)

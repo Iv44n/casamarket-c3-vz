@@ -99,12 +99,13 @@ def _to_benchmark_row(
         "campana": case.campana,
         "estado": case.estado,
         "first_response_seconds": case.first_response_seconds,
-        "has_greeting": judgement.has_greeting if judgement else None,
+        "greeting_level": judgement.greeting_level if judgement else None,
         "has_farewell": judgement.has_farewell if judgement else None,
         "complexity": judgement.complexity if judgement else None,
         "handled_well_for_complexity": (
             judgement.handled_well_for_complexity if judgement else None
         ),
+        "spelling_ok": judgement.spelling_ok if judgement else None,
         # had_transfer es un hecho de `case` (tabla transfer), no del juicio del LLM --
         # se guarda aunque el caso todavia no tenga PDF/veredicto.
         "had_transfer": case.had_transfer,
@@ -214,7 +215,7 @@ def analyze_direction(
             rows_to_store = [
                 row
                 for row in rows_to_store
-                if row["id_atencion"] not in already_verdicts or row["has_greeting"] is not None
+                if row["id_atencion"] not in already_verdicts or row["greeting_level"] is not None
             ]
         if rows_to_store:
             store.record_benchmark_results(conn, rows_to_store, observed_at, run_id=run_id)

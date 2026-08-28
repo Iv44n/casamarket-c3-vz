@@ -155,9 +155,10 @@ def test_results_returns_rows_from_the_store(monkeypatch: pytest.MonkeyPatch, cl
                 "campana": "Soporte",
                 "estado": "Cerrada",
                 "first_response_seconds": 90.0,
-                "has_greeting": True,
+                "greeting_level": "formal",
                 "has_farewell": True,
                 "handled_well_for_complexity": True,
+                "spelling_ok": True,
                 "row_json": {},
             }
         ],
