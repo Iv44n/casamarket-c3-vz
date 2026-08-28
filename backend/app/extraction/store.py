@@ -490,6 +490,19 @@ def _migrate_benchmark_result_quality_columns(conn: DBConnection) -> None:
         )
     if missing:
         conn.commit()
+    # had_transfer, a diferencia de informed_transfer, no es un juicio del LLM -- es un hecho
+    # verificable ahora mismo contra la tabla transfer, sin importar cuando corrio el analisis
+    # que grabo la fila. Las filas grabadas ANTES de que esta columna existiera quedan en NULL
+    # tras el ALTER TABLE de arriba; sin este backfill, BenchmarkCaseResult.had_transfer (bool,
+    # no-nullable) rompe /benchmarks/results con un ResponseValidationError para cada fila
+    # vieja (confirmado en vivo el 2026-08-28). informed_transfer sigue en NULL para esas filas
+    # a proposito -- eso si de verdad no se puede saber sin haberle preguntado al LLM.
+    conn.execute(
+        "UPDATE benchmark_result SET had_transfer = 1 WHERE had_transfer IS NULL "
+        "AND id_atencion IN (SELECT DISTINCT id_atencion FROM transfer)"
+    )
+    conn.execute("UPDATE benchmark_result SET had_transfer = 0 WHERE had_transfer IS NULL")
+    conn.commit()
 
 
 def _init_schema(conn: DBConnection) -> None:

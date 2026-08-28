@@ -1139,12 +1139,78 @@ def test_migrate_benchmark_result_columns_backfills_new_columns_from_row_json():
 
     # _migrate_benchmark_result_quality_columns tambien corrio contra esta tabla vieja (que no
     # tenia complexity/handled_well_for_complexity/had_transfer/informed_transfer) -- confirma
-    # que las 4 columnas quedaron agregadas y la fila preexistente no se vio afectada (NULL).
+    # que las 4 columnas quedaron agregadas. had_transfer se backfillea a 0/False (no queda en
+    # NULL, a diferencia de las demas) porque es un hecho verificable contra `transfer` ahora
+    # mismo -- este caso no tiene fila en `transfer`, asi que backfillea a False.
     quality_row = conn.execute(
         "SELECT complexity, handled_well_for_complexity, had_transfer, informed_transfer "
         "FROM benchmark_result WHERE id_atencion = '1'"
     ).fetchone()
-    assert quality_row == (None, None, None, None)
+    assert quality_row == (None, None, 0, None)
+
+
+def test_migrate_benchmark_result_quality_columns_backfills_had_transfer_true_from_transfer_table():
+    # Mismo escenario que el test de arriba, pero esta vez el caso SI tiene una fila en
+    # `transfer` -- had_transfer debe backfillear a 1/True, no a 0, aunque la fila de
+    # benchmark_result sea de antes de que esta columna existiera.
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        """
+        CREATE TABLE benchmark_result (
+            id_atencion TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            agente TEXT,
+            campana TEXT,
+            estado TEXT,
+            first_response_seconds REAL,
+            has_greeting INTEGER,
+            has_farewell INTEGER,
+            quality_ok INTEGER,
+            llm_model TEXT,
+            llm_raw TEXT,
+            llm_notes TEXT,
+            analyzed_at TEXT,
+            first_recorded_at TEXT NOT NULL,
+            last_updated_at TEXT NOT NULL,
+            row_json TEXT NOT NULL,
+            PRIMARY KEY (id_atencion, direction)
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO benchmark_result "
+        "(id_atencion, direction, first_recorded_at, last_updated_at, row_json) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("transferred", "attention", "2026-08-01T00:00:00", "2026-08-01T00:00:00", "{}"),
+    )
+    conn.commit()
+
+    # Crea `transfer` de forma aislada (no via executescript(_SCHEMA) completo -- ese script
+    # tambien tiene un CREATE INDEX sobre columnas de benchmark_result que esta conexion
+    # todavia no tiene en su forma vieja, mismo problema que ya resolvieron las otras
+    # migraciones de este archivo).
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS transfer (
+            id_atencion     TEXT NOT NULL,
+            fecha           TEXT NOT NULL,
+            hora            TEXT NOT NULL,
+            agente_origen   TEXT NOT NULL DEFAULT '',
+            destino         TEXT NOT NULL DEFAULT '',
+            first_seen_at   TEXT NOT NULL,
+            last_seen_at    TEXT NOT NULL,
+            row_json        TEXT NOT NULL,
+            PRIMARY KEY (id_atencion, fecha, hora, agente_origen, destino)
+        )
+        """
+    )
+    store._upsert_transfer_rows(conn, [_transfer_row("transferred")], "2026-08-01T00:00:00")
+    store._init_schema(conn)
+
+    had_transfer = conn.execute(
+        "SELECT had_transfer FROM benchmark_result WHERE id_atencion = 'transferred'"
+    ).fetchone()[0]
+    assert had_transfer == 1
 
 
 def test_migrate_benchmark_result_versioning_allows_duplicate_case_rows_now():
