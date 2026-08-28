@@ -955,6 +955,30 @@ def closed_case_rows(
     }
 
 
+def _execute_retrying(conn: DBConnection, sql: str, params: tuple = ()):
+    """conn.execute() reintentado UNA vez si turso_serverless levanta OperationalError.
+
+    turso_serverless mantiene un stream HTTP con estado (un "baton") por conexion; si esa
+    conexion queda inactiva demasiado tiempo, Turso lo expira server-side y la siguiente
+    query falla con OperationalError("HTTP status 404: stream not found: ...") -- confirmado
+    en vivo el 2026-08-28, disparado por el loop de polling de analyze_direction esperando el
+    reporte masivo de C3 (hasta config.BENCHMARK_MASSIVE_TIMEOUT_SECONDS = 6h) con `conn`
+    ociosa mientras tanto. turso_serverless resetea su baton local en cualquier falla de
+    transporte (session.Session._reset_stream()), asi que la proxima llamada abre un stream
+    nuevo sola -- ver el docstring de _post() en esa libreria: "the driver never re-sends a
+    request on its own; whether re-running a failed statement is safe is the application's
+    call". Es seguro reintentar aca: "stream not found" significa que el servidor nunca
+    encontro el stream para ejecutar el statement, o sea que no se aplico nada la primera vez.
+
+    Deliberadamente envuelve la llamada a conn.execute() en si, no toda una funcion que haga
+    varias -- ver record_benchmark_results, donde reintentar la funcion completa duplicaria
+    los batches que ya se habian insertado antes del que fallo."""
+    try:
+        return conn.execute(sql, params)
+    except turso_serverless.OperationalError:
+        return conn.execute(sql, params)
+
+
 def already_benchmarked_ids(
     conn: DBConnection, direction: str, ids: list[str]
 ) -> set[str]:
@@ -966,7 +990,8 @@ def already_benchmarked_ids(
     if not ids:
         return set()
     placeholders = ", ".join("?" for _ in ids)
-    cursor = conn.execute(
+    cursor = _execute_retrying(
+        conn,
         "SELECT id_atencion FROM benchmark_result WHERE direction = ? AND "
         f"id_atencion IN ({placeholders}) AND has_greeting IS NOT NULL",
         (direction, *ids),
@@ -979,11 +1004,13 @@ def transfer_ids_for_cases(conn: DBConnection, ids: list[str]) -> set[str]:
     el prompt del LLM (pipeline.analyze_direction) para saber a que casos corresponde
     preguntarles por el aviso de transferencia. No filtra por direction -- transfer no
     distingue attention/outboundattention, se correlaciona solo por id_atencion (ver
-    _upsert_transfer_rows)."""
+    _upsert_transfer_rows). Justo despues del polling largo de massive.run_direction() -- ver
+    _execute_retrying."""
     if not ids:
         return set()
     placeholders = ", ".join("?" for _ in ids)
-    cursor = conn.execute(
+    cursor = _execute_retrying(
+        conn,
         f"SELECT DISTINCT id_atencion FROM transfer WHERE id_atencion IN ({placeholders})",
         tuple(ids),
     )
@@ -1108,7 +1135,12 @@ def record_benchmark_results(
                 f"VALUES {', '.join([row_placeholder] * len(batch))}"
             )
             params = tuple(value for row_values in batch for value in row_values)
-            conn.execute(sql, params)
+            # _execute_retrying, no conn.execute() liso -- esta funcion corre justo despues
+            # del loop de juicios del LLM en analyze_direction (que puede tardar bastante con
+            # muchos casos concurrentes), mismo riesgo de stream expirado que
+            # transfer_ids_for_cases. Reintentar SOLO este batch (no la funcion entera) evita
+            # duplicar un batch anterior que ya se haya insertado bien.
+            _execute_retrying(conn, sql, params)
         conn.commit()
 
     return IngestResult(

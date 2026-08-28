@@ -2,6 +2,9 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
+import pytest
+import turso_serverless
+
 from app.extraction import store
 
 
@@ -750,6 +753,52 @@ def test_transfer_ids_for_cases_returns_empty_set_for_no_ids():
     conn = _conn()
 
     assert store.transfer_ids_for_cases(conn, []) == set()
+
+
+class _FlakyConn:
+    """conn.execute() falla con turso_serverless.OperationalError la primera vez (imitando un
+    stream de Turso expirado por inactividad) y funciona normal despues -- para probar
+    _execute_retrying sin necesitar un turso_serverless.Connection real."""
+
+    def __init__(self, real_conn, fail_times: int = 1):
+        self._real_conn = real_conn
+        self._fail_times = fail_times
+        self.calls = 0
+
+    def execute(self, sql, params=()):
+        self.calls += 1
+        if self.calls <= self._fail_times:
+            raise turso_serverless.OperationalError("HTTP status 404: stream not found: x:y")
+        return self._real_conn.execute(sql, params)
+
+
+def test_execute_retrying_recovers_from_one_stream_error():
+    real_conn = _conn()
+    flaky = _FlakyConn(real_conn, fail_times=1)
+
+    cursor = store._execute_retrying(flaky, "SELECT 1")
+
+    assert cursor.fetchone() == (1,)
+    assert flaky.calls == 2
+
+
+def test_execute_retrying_raises_after_a_second_consecutive_failure():
+    flaky = _FlakyConn(_conn(), fail_times=2)
+
+    with pytest.raises(turso_serverless.OperationalError):
+        store._execute_retrying(flaky, "SELECT 1")
+
+    assert flaky.calls == 2
+
+
+def test_transfer_ids_for_cases_recovers_from_a_transient_stream_error():
+    conn = _conn()
+    store.upsert_report_rows(
+        conn, "transfer", [_transfer_row("has_transfer")], "2026-08-18T00:00:00"
+    )
+    flaky = _FlakyConn(conn, fail_times=1)
+
+    assert store.transfer_ids_for_cases(flaky, ["has_transfer"]) == {"has_transfer"}
 
 
 def test_record_benchmark_results_inserts_row_without_quality_when_no_pdf():
