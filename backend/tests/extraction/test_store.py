@@ -640,6 +640,46 @@ def test_closed_case_rows_respects_date_from_against_fecha_final():
     assert set(rows) == {"recent"}
 
 
+def test_closed_case_rows_respects_date_to_as_well():
+    conn = _conn()
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [
+            _closed_attention_row("before", "10/08/2026"),
+            _closed_attention_row("in_range", "18/08/2026"),
+            _closed_attention_row("after", "25/08/2026"),
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    rows = store.closed_case_rows(
+        conn, "attention", estados=["Cerrada"], date_from="2026-08-15", date_to="2026-08-20"
+    )
+
+    assert set(rows) == {"in_range"}
+
+
+def test_closed_case_rows_date_from_without_date_to_stays_open_ended():
+    # Sin date_to, el rango sigue abierto hacia adelante (comportamiento historico) -- no usar
+    # el idiom "date_to or date_from" en el caller si se quiere este default.
+    conn = _conn()
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [
+            _closed_attention_row("old", "01/08/2026"),
+            _closed_attention_row("recent", "18/08/2026"),
+            _closed_attention_row("future", "25/08/2026"),
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    rows = store.closed_case_rows(conn, "attention", estados=["Cerrada"], date_from="2026-08-15")
+
+    assert set(rows) == {"recent", "future"}
+
+
 def test_closed_case_rows_returns_empty_dict_when_estados_is_empty():
     conn = _conn()
     store.upsert_report_rows(
@@ -651,7 +691,7 @@ def test_closed_case_rows_returns_empty_dict_when_estados_is_empty():
 
 def test_already_benchmarked_ids_only_counts_real_quality_verdicts():
     conn = _conn()
-    store.upsert_benchmark_results(
+    store.record_benchmark_results(
         conn,
         [
             {
@@ -685,10 +725,10 @@ def test_already_benchmarked_ids_returns_empty_set_for_no_ids():
     assert store.already_benchmarked_ids(conn, "attention", []) == set()
 
 
-def test_upsert_benchmark_results_inserts_row_without_quality_when_no_pdf():
+def test_record_benchmark_results_inserts_row_without_quality_when_no_pdf():
     conn = _conn()
 
-    store.upsert_benchmark_results(
+    store.record_benchmark_results(
         conn,
         [
             {
@@ -713,10 +753,10 @@ def test_upsert_benchmark_results_inserts_row_without_quality_when_no_pdf():
     assert rows[0]["first_response_seconds"] == 90.0
 
 
-def test_upsert_benchmark_results_extracts_fecha_hora_final_and_cliente_from_row_json():
+def test_record_benchmark_results_extracts_fecha_hora_final_and_cliente_from_row_json():
     conn = _conn()
 
-    store.upsert_benchmark_results(
+    store.record_benchmark_results(
         conn,
         [
             {
@@ -740,9 +780,9 @@ def test_upsert_benchmark_results_extracts_fecha_hora_final_and_cliente_from_row
     assert rows[0]["cliente"] == "Ana Perez"
 
 
-def test_upsert_benchmark_results_adds_quality_on_a_later_run_without_duplicating():
+def test_record_benchmark_results_appends_instead_of_overwriting_on_a_later_run():
     conn = _conn()
-    store.upsert_benchmark_results(
+    store.record_benchmark_results(
         conn,
         [
             {
@@ -754,9 +794,10 @@ def test_upsert_benchmark_results_adds_quality_on_a_later_run_without_duplicatin
             }
         ],
         "2026-08-18T00:00:00",
+        run_id=1,
     )
 
-    store.upsert_benchmark_results(
+    store.record_benchmark_results(
         conn,
         [
             {
@@ -769,23 +810,26 @@ def test_upsert_benchmark_results_adds_quality_on_a_later_run_without_duplicatin
             }
         ],
         "2026-08-19T00:00:00",
+        run_id=2,
     )
 
+    # Dos filas, no una -- la corrida anterior no se pisa, queda de historial.
+    all_rows = conn.execute(
+        "SELECT run_id, has_greeting FROM benchmark_result WHERE id_atencion = '1' ORDER BY id"
+    ).fetchall()
+    assert all_rows == [(1, None), (2, 1)]
+
+    # benchmark_result_rows() sigue mostrando solo la version mas reciente.
     rows = store.benchmark_result_rows(conn)
     assert len(rows) == 1
     assert rows[0]["has_greeting"] is True
     assert rows[0]["quality_ok"] is True
     assert rows[0]["analyzed_at"] == "2026-08-19T00:00:00"
 
-    cursor = conn.execute(
-        "SELECT first_recorded_at FROM benchmark_result WHERE id_atencion='1'"
-    )
-    assert cursor.fetchone()[0] == "2026-08-18T00:00:00"
 
-
-def test_upsert_benchmark_results_quality_ok_is_false_when_only_one_flag_true():
+def test_record_benchmark_results_quality_ok_is_false_when_only_one_flag_true():
     conn = _conn()
-    store.upsert_benchmark_results(
+    store.record_benchmark_results(
         conn,
         [
             {
@@ -803,10 +847,10 @@ def test_upsert_benchmark_results_quality_ok_is_false_when_only_one_flag_true():
     assert rows[0]["quality_ok"] is False
 
 
-def test_upsert_benchmark_results_skips_rows_without_id_atencion():
+def test_record_benchmark_results_skips_rows_without_id_atencion():
     conn = _conn()
 
-    result = store.upsert_benchmark_results(
+    result = store.record_benchmark_results(
         conn,
         [{"id_atencion": None, "direction": "attention", "row_json": {}}],
         "2026-08-18T00:00:00",
@@ -818,7 +862,7 @@ def test_upsert_benchmark_results_skips_rows_without_id_atencion():
 
 def test_benchmark_result_rows_filters_by_direction_and_date_range():
     conn = _conn()
-    store.upsert_benchmark_results(
+    store.record_benchmark_results(
         conn,
         [
             {
@@ -834,7 +878,7 @@ def test_benchmark_result_rows_filters_by_direction_and_date_range():
         ],
         "2026-08-18T00:00:00",
     )
-    store.upsert_benchmark_results(
+    store.record_benchmark_results(
         conn,
         [{"id_atencion": "old", "direction": "attention", "row_json": {"Fecha final": "01/08/2026"}}],
         "2026-08-01T00:00:00",
@@ -852,7 +896,7 @@ def test_benchmark_result_rows_filters_by_the_cases_own_close_date_not_when_it_w
     # el pipeline) HOY no debe aparecer al filtrar "hoy" -- first_recorded_at/observed_at
     # son fechas de proceso, no la fecha de negocio real del caso.
     conn = _conn()
-    store.upsert_benchmark_results(
+    store.record_benchmark_results(
         conn,
         [
             {
@@ -874,6 +918,44 @@ def test_benchmark_result_rows_filters_by_the_cases_own_close_date_not_when_it_w
     rows = store.benchmark_result_rows(conn, date_from="2026-08-26")
 
     assert [r["id_atencion"] for r in rows] == ["closed_today"]
+
+
+def test_benchmark_result_rows_returns_only_the_latest_version_per_case():
+    conn = _conn()
+    store.record_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "1",
+                "direction": "attention",
+                "has_greeting": False,
+                "has_farewell": False,
+                "row_json": {"Fecha final": "18/08/2026"},
+            }
+        ],
+        "2026-08-18T00:00:00",
+        run_id=1,
+    )
+    store.record_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "1",
+                "direction": "attention",
+                "has_greeting": True,
+                "has_farewell": True,
+                "row_json": {"Fecha final": "18/08/2026"},
+            }
+        ],
+        "2026-08-19T00:00:00",
+        run_id=2,
+    )
+
+    rows = store.benchmark_result_rows(conn)
+
+    assert len(rows) == 1
+    assert rows[0]["has_greeting"] is True
+    assert rows[0]["analyzed_at"] == "2026-08-19T00:00:00"
 
 
 def test_migrate_benchmark_result_columns_backfills_new_columns_from_row_json():
@@ -930,3 +1012,127 @@ def test_migrate_benchmark_result_columns_backfills_new_columns_from_row_json():
         "SELECT fecha_final, hora_final, cliente FROM benchmark_result WHERE id_atencion = '1'"
     ).fetchone()
     assert row == ("18/08/2026", "14:32:10", "Ana Perez")
+
+    # La migracion de versionado (_migrate_benchmark_result_versioning) corre despues de esta
+    # y reconstruye la tabla -- confirma que preservo la fila (con run_id NULL, de antes de
+    # que existiera benchmark_run) y que la tabla vieja quedo renombrada, no borrada.
+    run_id = conn.execute(
+        "SELECT run_id FROM benchmark_result WHERE id_atencion = '1'"
+    ).fetchone()[0]
+    assert run_id is None
+    backup_count = conn.execute(
+        "SELECT COUNT(*) FROM benchmark_result_pre_versioning"
+    ).fetchone()[0]
+    assert backup_count == 1
+
+
+def test_migrate_benchmark_result_versioning_allows_duplicate_case_rows_now():
+    # La prueba mas directa de que la PK vieja (id_atencion, direction) ya no existe: dos
+    # filas para el mismo caso deben poder convivir despues de la migracion.
+    conn = _conn()
+
+    store.record_benchmark_results(
+        conn,
+        [{"id_atencion": "1", "direction": "attention", "row_json": {}}],
+        "2026-08-18T00:00:00",
+        run_id=1,
+    )
+    store.record_benchmark_results(
+        conn,
+        [{"id_atencion": "1", "direction": "attention", "row_json": {}}],
+        "2026-08-19T00:00:00",
+        run_id=2,
+    )
+
+    count = conn.execute(
+        "SELECT COUNT(*) FROM benchmark_result WHERE id_atencion = '1'"
+    ).fetchone()[0]
+    assert count == 2
+
+
+def test_migrate_benchmark_result_versioning_is_a_noop_once_run_id_exists():
+    conn = _conn()  # _conn() ya corre _init_schema() una vez -- run_id ya existe
+    store.record_benchmark_results(
+        conn,
+        [{"id_atencion": "1", "direction": "attention", "row_json": {}}],
+        "2026-08-18T00:00:00",
+        run_id=1,
+    )
+
+    store._init_schema(conn)  # correrlo de nuevo no debe tocar los datos ni reventar
+
+    count = conn.execute("SELECT COUNT(*) FROM benchmark_result").fetchone()[0]
+    assert count == 1
+    # No debe existir una segunda tabla de respaldo por correr la migracion dos veces.
+    backup_tables = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'benchmark_result_pre_versioning%'"
+    ).fetchall()
+    assert len(backup_tables) == 0
+
+
+def test_create_benchmark_run_then_list_returns_it():
+    conn = _conn()
+
+    run_id = store.create_benchmark_run(
+        conn, "2026-08-27T00:00:00", "2026-08-27", "2026-08-27", False, ["attention"]
+    )
+
+    runs = store.list_benchmark_runs(conn)
+    assert len(runs) == 1
+    assert runs[0]["id"] == run_id
+    assert runs[0]["started_at"] == "2026-08-27T00:00:00"
+    assert runs[0]["finished_at"] is None
+    assert runs[0]["ok"] is None
+    assert runs[0]["date_from"] == "2026-08-27"
+    assert runs[0]["date_to"] == "2026-08-27"
+    assert runs[0]["force_reanalyze"] is False
+    assert runs[0]["directions"] == ["attention"]
+    assert runs[0]["result_directions"] == []
+    assert runs[0]["error"] is None
+
+
+def test_finish_benchmark_run_updates_the_row():
+    conn = _conn()
+    run_id = store.create_benchmark_run(
+        conn, "2026-08-27T00:00:00", None, None, True, ["attention", "outboundattention"]
+    )
+
+    store.finish_benchmark_run(
+        conn,
+        run_id,
+        "2026-08-27T00:05:00",
+        True,
+        '[{"direction": "attention", "action": "analyzed"}]',
+    )
+
+    runs = store.list_benchmark_runs(conn)
+    assert runs[0]["finished_at"] == "2026-08-27T00:05:00"
+    assert runs[0]["ok"] is True
+    assert runs[0]["result_directions"] == [{"direction": "attention", "action": "analyzed"}]
+
+
+def test_finish_benchmark_run_records_the_error_on_failure():
+    conn = _conn()
+    run_id = store.create_benchmark_run(conn, "2026-08-27T00:00:00", None, None, False, ["attention"])
+
+    store.finish_benchmark_run(
+        conn, run_id, "2026-08-27T00:01:00", False, "[]", error="LLM no configurado"
+    )
+
+    runs = store.list_benchmark_runs(conn)
+    assert runs[0]["ok"] is False
+    assert runs[0]["error"] == "LLM no configurado"
+
+
+def test_list_benchmark_runs_orders_most_recent_first_and_respects_limit():
+    conn = _conn()
+    for i in range(3):
+        store.create_benchmark_run(
+            conn, f"2026-08-2{i}T00:00:00", None, None, False, ["attention"]
+        )
+
+    runs = store.list_benchmark_runs(conn, limit=2)
+
+    assert len(runs) == 2
+    assert runs[0]["started_at"] == "2026-08-22T00:00:00"
+    assert runs[1]["started_at"] == "2026-08-21T00:00:00"

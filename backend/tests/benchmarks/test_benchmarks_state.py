@@ -54,7 +54,7 @@ def _wait_until_not_running(timeout: float = 2.0) -> None:
 
 
 def test_start_benchmark_run_sets_phase_running_immediately(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(pipeline, "run_benchmark_cycle", lambda directions: _fake_run(ok=True))
+    monkeypatch.setattr(pipeline, "run_benchmark_cycle", lambda directions, **kwargs: _fake_run(ok=True))
 
     status = state.start_benchmark_run()
 
@@ -66,7 +66,7 @@ def test_start_benchmark_run_sets_phase_running_immediately(monkeypatch: pytest.
 def test_start_benchmark_run_eventually_reaches_done_with_the_summary(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(pipeline, "run_benchmark_cycle", lambda directions: _fake_run(ok=True))
+    monkeypatch.setattr(pipeline, "run_benchmark_cycle", lambda directions, **kwargs: _fake_run(ok=True))
 
     state.start_benchmark_run()
     _wait_until_not_running()
@@ -85,7 +85,7 @@ def test_start_benchmark_run_passes_through_the_requested_directions(
     monkeypatch.setattr(
         pipeline,
         "run_benchmark_cycle",
-        lambda directions: (seen.append(directions), _fake_run(ok=True))[1],
+        lambda directions, **kwargs: (seen.append(directions), _fake_run(ok=True))[1],
     )
 
     state.start_benchmark_run(["attention"])
@@ -97,7 +97,7 @@ def test_start_benchmark_run_passes_through_the_requested_directions(
 def test_start_benchmark_run_reaches_error_phase_if_pipeline_raises(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    def boom(directions):
+    def boom(directions, **kwargs):
         raise RuntimeError("login failed")
 
     monkeypatch.setattr(pipeline, "run_benchmark_cycle", boom)
@@ -114,7 +114,7 @@ def test_start_benchmark_run_reaches_error_phase_if_pipeline_raises(
 def test_start_benchmark_run_raises_already_running_if_lock_held(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(pipeline, "run_benchmark_cycle", lambda directions: _fake_run(ok=True))
+    monkeypatch.setattr(pipeline, "run_benchmark_cycle", lambda directions, **kwargs: _fake_run(ok=True))
     state._lock.acquire()
     try:
         with pytest.raises(state.AlreadyRunningError):
@@ -130,7 +130,7 @@ def test_benchmark_run_status_defaults_to_idle():
 def test_benchmark_run_status_hydrates_from_the_store_after_a_simulated_restart(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(pipeline, "run_benchmark_cycle", lambda directions: _fake_run(ok=True))
+    monkeypatch.setattr(pipeline, "run_benchmark_cycle", lambda directions, **kwargs: _fake_run(ok=True))
     state.start_benchmark_run()
     _wait_until_not_running()
 

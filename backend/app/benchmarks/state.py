@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 # Lock propio, independiente del de extraction/state.py -- una corrida de benchmarks (de
 # horas) no debe bloquear el refresh regular de 5 minutos. Cada run crea su propia sesion C3
-# y los upserts son idempotentes por PK, asi que correr ambos en paralelo es seguro.
+# y su propia fila en benchmark_run, asi que correr ambos en paralelo es seguro.
 _lock = threading.Lock()
 _status = BenchmarkRunStatus()
 _KIND_BENCHMARK_RUN_STATUS = "benchmark_run_status"
@@ -38,11 +38,19 @@ def _persist_status(status: BenchmarkRunStatus) -> None:
         logger.warning("No se pudo persistir el estado de benchmarks en la DB -- %s", exc)
 
 
-def _run_worker(started_at: str, directions: list[str] | None) -> None:
+def _run_worker(
+    started_at: str,
+    directions: list[str] | None,
+    date_from: str | None,
+    date_to: str | None,
+    force_reanalyze: bool,
+) -> None:
     global _status
     logger.info("Benchmarks: corriendo en background (%s)", directions or "todas")
     try:
-        run = pipeline.run_benchmark_cycle(directions)
+        run = pipeline.run_benchmark_cycle(
+            directions, date_from=date_from, date_to=date_to, force_reanalyze=force_reanalyze
+        )
     except Exception as exc:
         logger.warning("Benchmarks: fallo antes de completar -- %s", exc)
         error_status = BenchmarkRunStatus(
@@ -68,7 +76,12 @@ def _run_worker(started_at: str, directions: list[str] | None) -> None:
     _lock.release()
 
 
-def start_benchmark_run(directions: list[str] | None = None) -> BenchmarkRunStatus:
+def start_benchmark_run(
+    directions: list[str] | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    force_reanalyze: bool = False,
+) -> BenchmarkRunStatus:
     global _status
     if not _lock.acquire(blocking=False):
         raise AlreadyRunningError("Ya hay una corrida de benchmarks en curso.")
@@ -78,7 +91,9 @@ def start_benchmark_run(directions: list[str] | None = None) -> BenchmarkRunStat
     _status = running_status
     _persist_status(running_status)
     threading.Thread(
-        target=_run_worker, args=(started_at, directions), daemon=True
+        target=_run_worker,
+        args=(started_at, directions, date_from, date_to, force_reanalyze),
+        daemon=True,
     ).start()
     return running_status
 

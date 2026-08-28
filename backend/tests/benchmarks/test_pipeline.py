@@ -159,6 +159,115 @@ def test_analyze_direction_does_not_re_spend_llm_on_already_judged_cases(
     assert len(provider.calls) == 1
 
 
+def test_analyze_direction_force_reanalyze_re_judges_already_benchmarked_cases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    conn = _conn()
+    store.upsert_report_rows(conn, "attention", [_closed_row("1")], "2026-08-18T00:00:00")
+    zip_path = tmp_path / "attention_masivo.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("attention_1.pdf", minimal_pdf_bytes("Hola. Chau"))
+    fake_result = _fake_zip_download_result(zip_path)
+    monkeypatch.setattr(
+        pipeline.massive, "run_direction", lambda client, direction, **kwargs: fake_result
+    )
+    provider = _FakeProvider()
+    kwargs = {"lookback_days": 3650, "sleep": lambda s: None}
+
+    pipeline.analyze_direction(object(), provider, conn, "attention", **kwargs)
+    assert len(provider.calls) == 1
+
+    pipeline.analyze_direction(
+        object(), provider, conn, "attention", force_reanalyze=True, **kwargs
+    )
+
+    assert len(provider.calls) == 2  # se volvio a juzgar aunque ya tenia veredicto
+    rows = conn.execute(
+        "SELECT COUNT(*) FROM benchmark_result WHERE id_atencion = '1'"
+    ).fetchone()[0]
+    assert rows == 2  # las dos corridas quedan, no se piso la primera
+
+
+def test_analyze_direction_force_reanalyze_does_not_overwrite_a_real_verdict_with_a_blank_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Un caso ya tiene un veredicto real de una corrida anterior. Esta corrida (force_reanalyze)
+    # no encuentra su PDF en el zip -- no debe agregar una fila en blanco que "gane" por ser la
+    # mas reciente y esconda el veredicto bueno (ver benchmark_result_rows -- MAX(id)).
+    conn = _conn()
+    store.upsert_report_rows(conn, "attention", [_closed_row("1")], "2026-08-18T00:00:00")
+    store.record_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "1",
+                "direction": "attention",
+                "has_greeting": True,
+                "has_farewell": True,
+                "row_json": {},
+            }
+        ],
+        "2026-08-18T00:00:00",
+        run_id=1,
+    )
+
+    empty_zip_path = tmp_path / "attention_masivo_empty.zip"
+    with zipfile.ZipFile(empty_zip_path, "w"):
+        pass  # zip sin PDFs -- el caso no aparece en zip_texts esta vez
+    fake_result = _fake_zip_download_result(empty_zip_path)
+    monkeypatch.setattr(
+        pipeline.massive, "run_direction", lambda client, direction, **kwargs: fake_result
+    )
+
+    pipeline.analyze_direction(
+        object(),
+        _FakeProvider(),
+        conn,
+        "attention",
+        force_reanalyze=True,
+        lookback_days=3650,
+        sleep=lambda s: None,
+    )
+
+    rows = store.benchmark_result_rows(conn)
+    assert len(rows) == 1
+    assert rows[0]["has_greeting"] is True  # el veredicto bueno sigue siendo el que se muestra
+
+
+def test_analyze_direction_uses_the_given_date_range_instead_of_the_default_lookback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    conn = _conn()
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [
+            {**_closed_row("old"), "Fecha final": "01/01/2026"},
+            {**_closed_row("in_range"), "Fecha final": "18/08/2026"},
+        ],
+        "2026-08-18T00:00:00",
+    )
+    empty_zip_path = tmp_path / "attention_masivo_empty.zip"
+    with zipfile.ZipFile(empty_zip_path, "w"):
+        pass
+    fake_result = _fake_zip_download_result(empty_zip_path)
+    monkeypatch.setattr(
+        pipeline.massive, "run_direction", lambda client, direction, **kwargs: fake_result
+    )
+
+    summary = pipeline.analyze_direction(
+        object(),
+        _FakeProvider(),
+        conn,
+        "attention",
+        date_from="2026-08-15",
+        date_to="2026-08-20",
+        sleep=lambda s: None,
+    )
+
+    assert summary.cases_closed == 1  # solo "in_range" cae en el rango pedido
+
+
 def test_analyze_direction_returns_failed_summary_when_massive_run_raises(
     monkeypatch: pytest.MonkeyPatch
 ):
@@ -311,3 +420,65 @@ def test_run_benchmark_cycle_raises_a_clear_error_when_llm_is_not_configured_yet
             creds=config.Credentials(base_url="https://fake.test", username="u", password="p"),
             conn=_conn(),
         )
+
+
+def test_run_benchmark_cycle_persists_a_benchmark_run_row_with_the_summary(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        pipeline.massive.session, "login", lambda creds, transport=None: _FakeC3Client()
+    )
+    monkeypatch.setattr(
+        pipeline, "analyze_direction", lambda *a, **k: _fake_summary("attention")
+    )
+    conn = _conn()
+
+    pipeline.run_benchmark_cycle(
+        ["attention"],
+        creds=config.Credentials(base_url="https://fake.test", username="u", password="p"),
+        conn=conn,
+        llm_provider=object(),
+        date_from="2026-08-20",
+        date_to="2026-08-20",
+        force_reanalyze=True,
+    )
+
+    runs = store.list_benchmark_runs(conn)
+    assert len(runs) == 1
+    assert runs[0]["ok"] is True
+    assert runs[0]["date_from"] == "2026-08-20"
+    assert runs[0]["date_to"] == "2026-08-20"
+    assert runs[0]["force_reanalyze"] is True
+    assert runs[0]["directions"] == ["attention"]
+    assert runs[0]["result_directions"] == [{
+        "direction": "attention",
+        "action": "analyzed",
+        "cases_closed": 0,
+        "cases_pending": 0,
+        "cases_with_pdf": 0,
+        "cases_analyzed": 0,
+        "error": None,
+    }]
+    assert runs[0]["finished_at"] is not None
+
+
+def test_run_benchmark_cycle_persists_a_failed_benchmark_run_row_when_llm_is_not_configured(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    settings_conn = _conn()
+    monkeypatch.setattr(pipeline.llm_settings, "get_connection", lambda: settings_conn)
+    monkeypatch.setattr(pipeline.llm_settings, "load_llm_config", lambda conn: None)
+    conn = _conn()
+
+    with pytest.raises(RuntimeError):
+        pipeline.run_benchmark_cycle(
+            ["attention"],
+            creds=config.Credentials(base_url="https://fake.test", username="u", password="p"),
+            conn=conn,
+        )
+
+    runs = store.list_benchmark_runs(conn)
+    assert len(runs) == 1
+    assert runs[0]["ok"] is False
+    assert "Configuracion" in runs[0]["error"]
+    assert runs[0]["finished_at"] is not None

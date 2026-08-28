@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 from collections.abc import Iterable
@@ -110,20 +111,44 @@ def analyze_direction(
     poll_interval_seconds: float = config.BENCHMARK_POLL_INTERVAL_SECONDS,
     timeout_seconds: float = config.BENCHMARK_MASSIVE_TIMEOUT_SECONDS,
     lookback_days: int = config.BENCHMARK_LOOKBACK_DAYS,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    force_reanalyze: bool = False,
+    run_id: int | None = None,
     llm_model: str | None = None,
     sleep=time.sleep,
 ) -> schemas.BenchmarkDirectionSummary:
     """Pipeline completo para una direccion: casos cerrados pendientes -> reporte masivo de
     C3 -> texto de los PDFs que hagan falta -> juicio del LLM (concurrente, acotado) ->
-    upsert. Envuelto en try/except propio para que una direccion fallando no bloquee el
-    intento de la otra (mismo espiritu que extraction.service._run_jobs)."""
+    graba. Envuelto en try/except propio para que una direccion fallando no bloquee el
+    intento de la otra (mismo espiritu que extraction.service._run_jobs).
+
+    `date_from`/`date_to` acotan que casos locales se consideran candidatos -- si no se dan,
+    cae al lookback fijo de siempre (`lookback_days` dias atras hasta hoy). OJO: el reporte
+    masivo de C3 (`massive.run_direction` mas abajo) sigue devolviendo SIEMPRE el zip de hoy
+    -- no se generalizo a un rango real (ver CLAUDE.md/el plan de esta feature) -- asi que un
+    rango que no incluya hoy no va a conseguir PDFs nuevos para esos casos, por mas que se
+    reintente. `force_reanalyze=True` no excluye los casos que ya tienen veredicto real (deja
+    que already_benchmarked_ids no se aplique), para poder re-juzgarlos; ver el filtro despues
+    de construir `rows_to_store` que evita que un caso sin PDF ESTA vez pise un veredicto
+    bueno ya guardado."""
     try:
-        date_from = (config.hoy() - timedelta(days=lookback_days)).isoformat()
+        effective_date_from = date_from or (
+            config.hoy() - timedelta(days=lookback_days)
+        ).isoformat()
+        effective_date_to = date_to or config.hoy().isoformat()
         closed = store.closed_case_rows(
-            conn, direction, estados=config.BENCHMARK_CLOSED_ESTADOS, date_from=date_from
+            conn,
+            direction,
+            estados=config.BENCHMARK_CLOSED_ESTADOS,
+            date_from=effective_date_from,
+            date_to=effective_date_to,
         )
-        already = store.already_benchmarked_ids(conn, direction, list(closed))
-        pending = {id_: row for id_, row in closed.items() if id_ not in already}
+        if force_reanalyze:
+            pending = closed
+        else:
+            already = store.already_benchmarked_ids(conn, direction, list(closed))
+            pending = {id_: row for id_, row in closed.items() if id_ not in already}
 
         result = massive.run_direction(
             c3_session,
@@ -163,8 +188,17 @@ def analyze_direction(
             _to_benchmark_row(case, judgements.get(case.id_atencion), llm_model)
             for case in cases
         ]
+        if force_reanalyze:
+            # No dejar que un caso sin PDF en ESTA corrida pise (con una fila nueva, en blanco)
+            # un veredicto real que ya estaba guardado de una corrida anterior -- ver docstring.
+            already_verdicts = store.already_benchmarked_ids(conn, direction, list(pending))
+            rows_to_store = [
+                row
+                for row in rows_to_store
+                if row["id_atencion"] not in already_verdicts or row["has_greeting"] is not None
+            ]
         if rows_to_store:
-            store.upsert_benchmark_results(conn, rows_to_store, observed_at)
+            store.record_benchmark_results(conn, rows_to_store, observed_at, run_id=run_id)
 
         return schemas.BenchmarkDirectionSummary(
             direction=direction,
@@ -189,49 +223,92 @@ def run_benchmark_cycle(
     conn: store.DBConnection | None = None,
     llm_provider: LLMProvider | None = None,
     llm_model: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    force_reanalyze: bool = False,
 ) -> schemas.BenchmarkRunSummary:
     """Un solo login C3 (envuelto en massive.C3Session, que se re-loguea sola si C3
     invalida la sesion -- ver su docstring), loop SECUENCIAL (no concurrente) sobre
     analyze_direction por cada direccion pedida. Si no se inyecta `llm_provider`
     (produccion), se construye desde la config guardada por un admin via
     PUT /benchmarks/settings (settings.load_llm_config()) -- el seam que los tests usan para
-    pasar un LLMProvider falso es justamente inyectarlo aca."""
-    resolved_directions = list(directions) if directions is not None else list(DIRECTIONS)
+    pasar un LLMProvider falso es justamente inyectarlo aca.
 
-    if llm_provider is None:
-        settings_conn = llm_settings.get_connection()
-        try:
-            llm_config = llm_settings.load_llm_config(settings_conn)
-        finally:
-            settings_conn.close()
-        if llm_config is None:
-            raise RuntimeError(
-                "El analisis de calidad (LLM) todavia no fue configurado -- un admin tiene que "
-                "completarlo en Configuracion > LLM antes de poder correr un benchmark."
-            )
-        llm_provider = llm_module.build_provider(llm_config)
-        llm_model = llm_config.model_label
+    Cada corrida queda registrada en benchmark_run (store.create_benchmark_run()/
+    finish_benchmark_run()) para poder consultar el historial despues (GET /benchmarks/runs) --
+    la fila se crea ANTES de resolver el LLM provider (que puede lanzar RuntimeError si nadie
+    lo configuro todavia) para que ese fallo tambien quede trazado, y se cierra DENTRO del
+    try, antes de que el finally cierre `conn` -- llamar finish_benchmark_run() despues de
+    cerrar la conexion propia fallaria en silencio o reventaria."""
+    resolved_directions = list(directions) if directions is not None else list(DIRECTIONS)
 
     owns_conn = conn is None
     if owns_conn:
         conn = store.get_connection()
 
-    creds = creds or config.load_credentials()
     started_at = datetime.now(config.TZ).isoformat()
-    c3_session = massive.C3Session(creds, transport=transport)
+    run_id = store.create_benchmark_run(
+        conn, started_at, date_from, date_to, force_reanalyze, resolved_directions
+    )
     try:
-        summaries = [
-            analyze_direction(c3_session, llm_provider, conn, direction, llm_model=llm_model)
-            for direction in resolved_directions
-        ]
+        if llm_provider is None:
+            settings_conn = llm_settings.get_connection()
+            try:
+                llm_config = llm_settings.load_llm_config(settings_conn)
+            finally:
+                settings_conn.close()
+            if llm_config is None:
+                raise RuntimeError(
+                    "El analisis de calidad (LLM) todavia no fue configurado -- un admin tiene "
+                    "que completarlo en Configuracion > LLM antes de poder correr un benchmark."
+                )
+            llm_provider = llm_module.build_provider(llm_config)
+            llm_model = llm_config.model_label
+
+        creds = creds or config.load_credentials()
+        c3_session = massive.C3Session(creds, transport=transport)
+        try:
+            summaries = [
+                analyze_direction(
+                    c3_session,
+                    llm_provider,
+                    conn,
+                    direction,
+                    llm_model=llm_model,
+                    date_from=date_from,
+                    date_to=date_to,
+                    force_reanalyze=force_reanalyze,
+                    run_id=run_id,
+                )
+                for direction in resolved_directions
+            ]
+        finally:
+            c3_session.close()
+
+        finished_at = datetime.now(config.TZ).isoformat()
+        ok = all(summary.action == "analyzed" for summary in summaries)
+        run = schemas.BenchmarkRunSummary(
+            started_at=started_at, finished_at=finished_at, ok=ok, directions=summaries
+        )
+        try:
+            store.finish_benchmark_run(
+                conn,
+                run_id,
+                finished_at,
+                ok,
+                json.dumps([summary.model_dump(mode="json") for summary in summaries]),
+            )
+        except Exception:
+            logger.warning("No se pudo persistir el resultado de benchmark_run %s", run_id)
+        return run
+    except Exception as exc:
+        try:
+            store.finish_benchmark_run(
+                conn, run_id, datetime.now(config.TZ).isoformat(), False, "[]", error=str(exc)
+            )
+        except Exception:
+            logger.warning("No se pudo persistir el error de benchmark_run %s", run_id)
+        raise
     finally:
-        c3_session.close()
         if owns_conn:
             conn.close()
-
-    return schemas.BenchmarkRunSummary(
-        started_at=started_at,
-        finished_at=datetime.now(config.TZ).isoformat(),
-        ok=all(summary.action == "analyzed" for summary in summaries),
-        directions=summaries,
-    )

@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app import config
+from app.auth import store as auth_store
 from app.auth.dependencies import CurrentUser, get_current_user
 from app.extraction import store
 
@@ -16,6 +17,17 @@ from app.extraction import store
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(config, "DOWNLOADS_DIR", tmp_path)
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(1, "test", True)
+    # main.py's lifespan hook toca auth_store.get_connection() (bootstrap admin) en cada
+    # arranque -- sin esto, "with TestClient(app)" pega contra la Turso real en cada test
+    # (lento, y viola "los tests nunca tocan la red real", ver CLAUDE.md).
+    auth_db_path = tmp_path / "auth-lifespan.db"
+
+    def _fake_auth_connection() -> sqlite3.Connection:
+        conn = sqlite3.connect(str(auth_db_path), check_same_thread=False)
+        auth_store._init_schema(conn)
+        return conn
+
+    monkeypatch.setattr(auth_store, "get_connection", _fake_auth_connection)
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()

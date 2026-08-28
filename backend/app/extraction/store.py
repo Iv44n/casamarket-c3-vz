@@ -205,6 +205,8 @@ CREATE TABLE IF NOT EXISTS sync_status (
 );
 
 CREATE TABLE IF NOT EXISTS benchmark_result (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id                  INTEGER,
     id_atencion             TEXT NOT NULL,
     direction               TEXT NOT NULL,
     agente                  TEXT,
@@ -223,11 +225,30 @@ CREATE TABLE IF NOT EXISTS benchmark_result (
     analyzed_at             TEXT,
     first_recorded_at       TEXT NOT NULL,
     last_updated_at         TEXT NOT NULL,
-    row_json                TEXT NOT NULL,
-    PRIMARY KEY (id_atencion, direction)
+    row_json                TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_benchmark_result_agente ON benchmark_result(agente);
 CREATE INDEX IF NOT EXISTS idx_benchmark_result_analyzed_at ON benchmark_result(analyzed_at);
+CREATE INDEX IF NOT EXISTS idx_benchmark_result_case ON benchmark_result(id_atencion, direction);
+-- idx_benchmark_result_run_id NO va aca a proposito -- mismo motivo que
+-- idx_benchmark_result_fecha_final_iso mas abajo: si benchmark_result ya existia sin esa
+-- columna (Turso vieja, pre-versionado), este CREATE INDEX en el mismo executescript()
+-- fallaria con "no such column: run_id" antes de que _migrate_benchmark_result_versioning
+-- tenga chance de agregarla. Se crea en _init_schema(), despues de esa migracion.
+
+CREATE TABLE IF NOT EXISTS benchmark_run (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at      TEXT NOT NULL,
+    finished_at     TEXT,
+    ok              INTEGER,
+    date_from       TEXT,
+    date_to         TEXT,
+    force_reanalyze INTEGER NOT NULL DEFAULT 0,
+    directions      TEXT NOT NULL,
+    summary_json    TEXT,
+    error           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_benchmark_run_started_at ON benchmark_run(started_at);
 {_DATE_RANGE_INDEXES}
 """
 
@@ -373,10 +394,86 @@ def _migrate_benchmark_result_columns(conn: DBConnection) -> None:
     conn.commit()
 
 
+def _migrate_benchmark_result_versioning(conn: DBConnection) -> None:
+    """benchmark_result tenia PRIMARY KEY (id_atencion, direction) -- upsert, una fila por caso,
+    pisada en cada corrida de benchmarks. Ahora cada corrida agrega su propia fila (run_id la
+    liga a benchmark_run), para poder ver como cambio el veredicto de un mismo caso entre
+    corridas en vez de perder el anterior. SQLite no soporta alterar una PRIMARY KEY in-place,
+    asi que esto reconstruye la tabla entera -- RENAME (no DROP) la vieja a una tabla de
+    respaldo en vez de borrarla, para que una falla a mitad de camino nunca deje un estado sin
+    ningun dato recuperable (confirmado en vivo con turso_serverless: ALTER TABLE RENAME
+    preserva la numeracion de sqlite_sequence de la tabla, asi que el AUTOINCREMENT nuevo no
+    colisiona con nada). Corre una sola vez por DB (gateada por si run_id ya existe -- una Turso
+    nueva ya crea benchmark_result con este shape via _SCHEMA y no-opea de una); la tabla de
+    respaldo (benchmark_result_pre_versioning) se puede borrar a mano mas adelante, una vez
+    confirmada la migracion en produccion."""
+    existing = _existing_columns(conn, "benchmark_result")
+    if "run_id" in existing:
+        return
+    conn.executescript(
+        """
+        BEGIN;
+        ALTER TABLE benchmark_result RENAME TO benchmark_result_pre_versioning;
+        CREATE TABLE benchmark_result (
+            id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id                  INTEGER,
+            id_atencion             TEXT NOT NULL,
+            direction               TEXT NOT NULL,
+            agente                  TEXT,
+            campana                 TEXT,
+            estado                  TEXT,
+            fecha_final             TEXT,
+            hora_final              TEXT,
+            cliente                 TEXT,
+            first_response_seconds  REAL,
+            has_greeting            INTEGER,
+            has_farewell            INTEGER,
+            quality_ok              INTEGER,
+            llm_model               TEXT,
+            llm_raw                 TEXT,
+            llm_notes               TEXT,
+            analyzed_at             TEXT,
+            first_recorded_at       TEXT NOT NULL,
+            last_updated_at         TEXT NOT NULL,
+            row_json                TEXT NOT NULL
+        );
+        INSERT INTO benchmark_result (
+            run_id, id_atencion, direction, agente, campana, estado, fecha_final, hora_final,
+            cliente, first_response_seconds, has_greeting, has_farewell, quality_ok, llm_model,
+            llm_raw, llm_notes, analyzed_at, first_recorded_at, last_updated_at, row_json
+        )
+        SELECT
+            NULL, id_atencion, direction, agente, campana, estado, fecha_final, hora_final,
+            cliente, first_response_seconds, has_greeting, has_farewell, quality_ok, llm_model,
+            llm_raw, llm_notes, analyzed_at, first_recorded_at, last_updated_at, row_json
+        FROM benchmark_result_pre_versioning;
+        CREATE INDEX IF NOT EXISTS idx_benchmark_result_agente ON benchmark_result(agente);
+        CREATE INDEX IF NOT EXISTS idx_benchmark_result_analyzed_at ON benchmark_result(analyzed_at);
+        CREATE INDEX IF NOT EXISTS idx_benchmark_result_case ON benchmark_result(id_atencion, direction);
+        CREATE INDEX IF NOT EXISTS idx_benchmark_result_run_id ON benchmark_result(run_id);
+        COMMIT;
+        """
+    )
+    # El indice sobre fecha_final vive aca, no en el executescript de arriba, mismo motivo que
+    # _migrate_benchmark_result_columns: es una expresion sobre la columna, mas prolijo crearlo
+    # despues de que la tabla nueva ya este confirmada.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_benchmark_result_fecha_final_iso "
+        f"ON benchmark_result ({_iso_date_expr('fecha_final')})"
+    )
+    conn.commit()
+
+
 def _init_schema(conn: DBConnection) -> None:
     conn.executescript(_SCHEMA)
     _migrate_time_columns(conn)
     _migrate_benchmark_result_columns(conn)
+    _migrate_benchmark_result_versioning(conn)
+    # run_id esta garantizado presente aca (recien creado por _SCHEMA, o agregado por la
+    # migracion de arriba) -- ver el comentario junto a benchmark_result en _SCHEMA sobre por
+    # que este indice no puede vivir ahi.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_benchmark_result_run_id ON benchmark_result(run_id)")
+    conn.commit()
 
 
 def _normalize_pk(value: object) -> str | None:
@@ -778,13 +875,18 @@ def closed_case_rows(
     *,
     estados: list[str],
     date_from: str | None = None,
+    date_to: str | None = None,
 ) -> dict[str, dict]:
     """Casos de `direction` ('attention'|'outboundattention') cuyo estado normalizado esta
     en `estados`, opcionalmente acotado a los cerrados desde `date_from` (fecha ISO,
     comparada contra `fecha_final` -- el punto de esta consulta es "casos cerrados
     recientemente", no una ventana de fecha de registro; el matching contra el zip del
     reporte masivo es por ID, no depende de que este filtro coincida con lo que C3 filtre
-    del otro lado). Devuelve {id_atencion: row_json ya parseado}."""
+    del otro lado). `date_to` es opcional aun con `date_from` presente -- sin el, el rango
+    queda abierto hacia adelante (`fecha_final >= date_from`), IGUAL que el comportamiento de
+    siempre; no uses el idiom `date_to or date_from` en el caller si lo que queres es ese
+    default abierto (eso lo convertiria en un solo dia). Devuelve {id_atencion: row_json ya
+    parseado}."""
     if not estados:
         return {}
     table = direction
@@ -794,8 +896,13 @@ def closed_case_rows(
     params: list = list(estados)
     if date_from:
         iso_expr = _iso_date_expr("fecha_final")
-        clauses.append(f"{iso_expr} >= ?")
-        params.append(date_from)
+        if date_to:
+            clauses.append(f"{iso_expr} BETWEEN ? AND ?")
+            params.append(date_from)
+            params.append(date_to)
+        else:
+            clauses.append(f"{iso_expr} >= ?")
+            params.append(date_from)
     where_sql = " AND ".join(clauses)
     cursor = conn.execute(
         f"SELECT id_atencion, row_json FROM {table} WHERE {where_sql}", tuple(params)
@@ -826,6 +933,7 @@ def already_benchmarked_ids(
 
 
 _BENCHMARK_ALL_COLUMNS = (
+    "run_id",
     "id_atencion",
     "direction",
     "agente",
@@ -846,35 +954,14 @@ _BENCHMARK_ALL_COLUMNS = (
     "last_updated_at",
     "row_json",
 )
-# id_atencion/direction son la PK (no se actualizan); first_recorded_at se preserva del
-# primer insert (mismo espiritu que first_seen_at en _upsert_by_pk) -- todo lo demas se
-# sobreescribe con el valor de esta corrida.
-_BENCHMARK_UPDATE_COLUMNS = (
-    "agente",
-    "campana",
-    "estado",
-    "fecha_final",
-    "hora_final",
-    "cliente",
-    "first_response_seconds",
-    "has_greeting",
-    "has_farewell",
-    "quality_ok",
-    "llm_model",
-    "llm_raw",
-    "llm_notes",
-    "analyzed_at",
-    "last_updated_at",
-    "row_json",
-)
 
 
 def _sql_bool(value: object) -> int | None:
     return None if value is None else int(bool(value))
 
 
-def upsert_benchmark_results(
-    conn: DBConnection, rows: list[dict], observed_at: str
+def record_benchmark_results(
+    conn: DBConnection, rows: list[dict], observed_at: str, *, run_id: int | None = None
 ) -> IngestResult:
     """Cada `row` en `rows` es un dict con keys: id_atencion, direction, agente, campana,
     estado, first_response_seconds, has_greeting (bool|None), has_farewell (bool|None),
@@ -885,10 +972,14 @@ def upsert_benchmark_results(
     first_recorded_at/analyzed_at, que son fechas de proceso, no de negocio).
     `analyzed_at` se pone a `observed_at` solo cuando el caso trae un veredicto real
     (has_greeting is not None); si no, queda NULL -- asi already_benchmarked_ids lo sigue
-    tratando como pendiente. El llamador NUNCA debe incluir aca un caso que
-    already_benchmarked_ids ya haya marcado como analizado (evitaria pisar un veredicto
-    real con uno vacio) -- ver pipeline.analyze_direction, que solo construye
-    CaseBenchmark para los IDs pendientes, nunca para los ya benchmarkeados."""
+    tratando como pendiente.
+
+    Siempre hace INSERT (nunca UPDATE) -- benchmark_result ya no tiene una PK sobre
+    (id_atencion, direction), asi que una corrida posterior del mismo caso agrega una fila
+    nueva en vez de pisar la anterior (trazabilidad entre corridas via `run_id`, ver
+    benchmark_run). `first_recorded_at`/`last_updated_at` quedan iguales entre si en cada fila
+    (ya no hay "actualizacion" cuyo primer valor preservar). `benchmark_result_rows()` es quien
+    decide cual fila mostrar quiere el ultimo veredicto por caso -- esta funcion no dedupea."""
     rows_skipped = 0
     valid_rows: list[tuple] = []
     for row in rows:
@@ -910,6 +1001,7 @@ def upsert_benchmark_results(
         cliente = row_json_dict.get("Nombre de cliente")
         valid_rows.append(
             (
+                run_id,
                 id_atencion,
                 row["direction"],
                 row.get("agente"),
@@ -933,13 +1025,11 @@ def upsert_benchmark_results(
         )
 
     if valid_rows:
-        set_clause = ", ".join(f"{col}=excluded.{col}" for col in _BENCHMARK_UPDATE_COLUMNS)
         row_placeholder = "(" + ", ".join("?" for _ in _BENCHMARK_ALL_COLUMNS) + ")"
         for batch in _chunked(valid_rows, _BATCH_SIZE):
             sql = (
                 f"INSERT INTO benchmark_result ({', '.join(_BENCHMARK_ALL_COLUMNS)}) "
-                f"VALUES {', '.join([row_placeholder] * len(batch))} "
-                f"ON CONFLICT(id_atencion, direction) DO UPDATE SET {set_clause}"
+                f"VALUES {', '.join([row_placeholder] * len(batch))}"
             )
             params = tuple(value for row_values in batch for value in row_values)
             conn.execute(sql, params)
@@ -983,8 +1073,17 @@ def benchmark_result_rows(
     directamente, no sobre el xlsx crudo. El filtro de fecha es sobre `fecha_final` (cuando
     el CASO se cerro de verdad, igual que "terminadas" en /atenciones) -- NO sobre
     first_recorded_at/analyzed_at (que son fechas de cuando corrio el analisis, no fechas
-    de negocio; un caso cerrado ayer analizado hoy no debe aparecer al filtrar "hoy")."""
-    clauses = ["1=1"]
+    de negocio; un caso cerrado ayer analizado hoy no debe aparecer al filtrar "hoy").
+
+    Desde que benchmark_result puede tener mas de una fila por (id_atencion, direction)
+    (una por corrida, ver record_benchmark_results), esto solo devuelve la ULTIMA version de
+    cada caso -- `id` (rowid real, INTEGER PRIMARY KEY) crece con el orden de insercion, asi
+    que MAX(id) por caso identifica la mas reciente sin depender de analyzed_at (que puede ser
+    NULL en un caso todavia sin veredicto). El calculo de "ultima version" va SIN los filtros
+    de fecha/direccion de esta funcion -- filtrarlo ahi tambien podria, si un caso se reabre y
+    cierra en otra fecha entre corridas, perder de vista su version mas reciente o mostrar una
+    vieja por error."""
+    clauses = ["id IN (SELECT MAX(id) FROM benchmark_result GROUP BY id_atencion, direction)"]
     params: list = []
     if direction:
         clauses.append("direction = ?")
@@ -1011,3 +1110,66 @@ def benchmark_result_rows(
             row[bool_column] = None if row[bool_column] is None else bool(row[bool_column])
         rows.append(row)
     return rows
+
+
+def create_benchmark_run(
+    conn: DBConnection,
+    started_at: str,
+    date_from: str | None,
+    date_to: str | None,
+    force_reanalyze: bool,
+    directions: list[str],
+) -> int:
+    """Registra el arranque de una corrida de benchmarks -- pipeline.run_benchmark_cycle() la
+    llama ANTES de resolver el proveedor LLM (que puede fallar si nadie lo configuro todavia),
+    para que ese fallo tambien quede trazado en el historial via finish_benchmark_run(). Usa
+    execute() (no executescript()) a proposito -- confirmado en turso_serverless que solo
+    execute() popula cursor.lastrowid para un INSERT, igual que sqlite3.Cursor.lastrowid."""
+    cursor = conn.execute(
+        "INSERT INTO benchmark_run (started_at, date_from, date_to, force_reanalyze, directions) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (started_at, date_from, date_to, int(force_reanalyze), json.dumps(directions)),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def finish_benchmark_run(
+    conn: DBConnection,
+    run_id: int,
+    finished_at: str,
+    ok: bool,
+    summary_json: str,
+    error: str | None = None,
+) -> None:
+    conn.execute(
+        "UPDATE benchmark_run SET finished_at = ?, ok = ?, summary_json = ?, error = ? "
+        "WHERE id = ?",
+        (finished_at, int(ok), summary_json, error, run_id),
+    )
+    conn.commit()
+
+
+def list_benchmark_runs(conn: DBConnection, limit: int = 50) -> list[dict]:
+    cursor = conn.execute(
+        "SELECT id, started_at, finished_at, ok, date_from, date_to, force_reanalyze, "
+        "directions, summary_json, error FROM benchmark_run ORDER BY id DESC LIMIT ?",
+        (limit,),
+    )
+    runs = []
+    for row in cursor.fetchall():
+        runs.append(
+            {
+                "id": row[0],
+                "started_at": row[1],
+                "finished_at": row[2],
+                "ok": None if row[3] is None else bool(row[3]),
+                "date_from": row[4],
+                "date_to": row[5],
+                "force_reanalyze": bool(row[6]),
+                "directions": json.loads(row[7]),
+                "result_directions": json.loads(row[8]) if row[8] else [],
+                "error": row[9],
+            }
+        )
+    return runs

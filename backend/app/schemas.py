@@ -92,3 +92,16 @@ class BenchmarkRunStatus(BaseModel):
     finished_at: str | None = None
     result: BenchmarkRunSummary | None = None
     error: str | None = None
+
+
+class BenchmarkRunRecord(BaseModel):
+    id: int
+    started_at: str
+    finished_at: str | None
+    ok: bool | None
+    date_from: str | None
+    date_to: str | None
+    force_reanalyze: bool
+    requested_directions: list[str]
+    directions: list[BenchmarkDirectionSummary] = []
+    error: str | None = None
