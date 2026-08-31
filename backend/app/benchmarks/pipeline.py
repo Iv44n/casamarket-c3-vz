@@ -193,7 +193,7 @@ def analyze_direction(
                         judge_conversation,
                         llm_provider,
                         case.conversation_text,
-                        case.had_transfer,
+                        case.transferred_from_agents,
                     ): case
                     for case in judgeable
                 }

@@ -219,8 +219,9 @@ def test_analyze_direction_asks_about_transfer_only_for_cases_with_a_transfer_ro
                 "notes": "ok",
             }
             # El prompt solo incluye la clave "informed_transfer" en su forma JSON pedida
-            # cuando judge_conversation recibio had_transfer=True -- confirma que se llamo con
-            # el valor correcto por caso sin depender de mockear judge_conversation.
+            # cuando judge_conversation recibio una lista no vacia de transferred_from_agents --
+            # confirma que se llamo con el valor correcto por caso sin depender de mockear
+            # judge_conversation.
             if "informed_transfer" in prompt:
                 data["informed_transfer"] = True
             return json.dumps(data)

@@ -55,10 +55,15 @@ escritura evidentes? NO cuentes como error la falta de tildes/acentos (muy comun
 informal, ej. "como"/"aqui" sin tilde) -- solo palabras mal escritas o errores de digitacion \
 reales.
 {transfer_question}
+Escribi ademas una nota de auditoria ("notes") de 2 a 4 oraciones -- NO un simple resumen de \
+la conversacion, tiene que JUSTIFICAR cada respuesta de arriba con algo concreto que haya \
+pasado (que dijo o no dijo el agente al saludar/despedirse, por que la consulta tiene esa \
+complejidad y como se manejo, si hubo algun error de escritura puntual y cual){transfer_notes_hint}.
+
 Responde SOLO con un objeto JSON, sin texto adicional, con esta forma exacta:
 {{"greeting_level": "ninguno"|"casual"|"formal", "has_farewell": true|false, \
 "complexity": "baja"|"media"|"alta", "handled_well_for_complexity": true|false, \
-"spelling_ok": true|false{transfer_json_key}, "notes": "una frase breve"}}
+"spelling_ok": true|false{transfer_json_key}, "notes": "nota de auditoria de 2 a 4 oraciones"}}
 
 Transcripcion:
 ---
@@ -66,11 +71,15 @@ Transcripcion:
 ---
 """
 
-_TRANSFER_QUESTION = (
-    "6. Esta conversacion incluyo una transferencia del caso a otro agente o area. "
-    "¿El agente le avisó al cliente, ANTES de transferirlo, que iba a ser transferido?\n"
+_TRANSFER_QUESTION_TEMPLATE = (
+    "6. Este caso llego transferido desde: {agentes}. ¿El agente le avisó al cliente, ANTES \
+de transferirlo, que iba a ser transferido?\n"
 )
 _TRANSFER_JSON_KEY = ', "informed_transfer": true|false'
+_TRANSFER_NOTES_HINT = (
+    " y mencionar explicitamente que el caso llego transferido desde {agentes}, y si el "
+    "agente avisó o no al cliente antes de transferirlo"
+)
 
 
 @dataclass(frozen=True)
@@ -87,16 +96,23 @@ class QualityJudgement:
     raw: str
 
 
-def _build_prompt(conversation_text: str, had_transfer: bool) -> str:
+def _build_prompt(conversation_text: str, transferred_from_agents: list[str]) -> str:
+    had_transfer = bool(transferred_from_agents)
+    agentes = ", ".join(transferred_from_agents)
     return _PROMPT_TEMPLATE.format(
         conversation_text=conversation_text,
-        transfer_question=_TRANSFER_QUESTION if had_transfer else "",
+        transfer_question=(
+            _TRANSFER_QUESTION_TEMPLATE.format(agentes=agentes) if had_transfer else ""
+        ),
         transfer_json_key=_TRANSFER_JSON_KEY if had_transfer else "",
+        transfer_notes_hint=(
+            _TRANSFER_NOTES_HINT.format(agentes=agentes) if had_transfer else ""
+        ),
     )
 
 
 def judge_conversation(
-    provider: LLMProvider, conversation_text: str, had_transfer: bool = False
+    provider: LLMProvider, conversation_text: str, transferred_from_agents: list[str] = []
 ) -> QualityJudgement:
     """Construye el prompt, llama `provider.complete(prompt)` y parsea el JSON de vuelta de
     forma tolerante -- descarta un posible bloque <think> de razonamiento y recorta al
@@ -107,10 +123,15 @@ def judge_conversation(
     solo el parseo ignora ese bloque, no lo que se persiste. Esta funcion no importa ningun
     SDK concreto.
 
-    `had_transfer` decide si el prompt le pregunta al LLM por el aviso de transferencia --
-    si es False, ni se le pregunta (evita confundirlo pidiendo algo que no aplica) y
-    `informed_transfer` en el resultado queda en None sin importar que responda el modelo."""
-    raw = provider.complete(_build_prompt(conversation_text, had_transfer))
+    `transferred_from_agents` (vacio por default -- el caso comun, sin transferencia) es la
+    cadena de agentes_origen del caso (ver store.transfer_origin_agents_for_cases) -- un hecho
+    que el LLM no puede inferir solo de la transcripcion, asi que se le pasa como contexto. Si
+    esta vacio, el prompt ni pregunta por el aviso de transferencia (evita confundir al modelo
+    pidiendo algo que no aplica) y `informed_transfer` en el resultado queda en None sin
+    importar que responda el modelo; si no esta vacio, tambien le pide a la nota de auditoria
+    que mencione explicitamente desde donde vino el caso (pedido del usuario: la nota no debe
+    ser un simple resumen, tiene que dejar trazabilidad de la transferencia)."""
+    raw = provider.complete(_build_prompt(conversation_text, transferred_from_agents))
     candidate = _extract_json_object(_strip_think_block(raw))
     try:
         data = json.loads(candidate)
@@ -144,7 +165,7 @@ def judge_conversation(
         spelling_ok=spelling_ok if isinstance(spelling_ok, bool) else None,
         informed_transfer=(
             informed_transfer
-            if had_transfer and isinstance(informed_transfer, bool)
+            if transferred_from_agents and isinstance(informed_transfer, bool)
             else None
         ),
         notes=notes if isinstance(notes, str) else None,
