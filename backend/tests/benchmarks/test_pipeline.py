@@ -253,6 +253,39 @@ def test_analyze_direction_asks_about_transfer_only_for_cases_with_a_transfer_ro
     assert rows["no_transfer"]["quality_ok"] is True
 
 
+def test_analyze_direction_passes_the_case_campana_to_judge_conversation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    conn = _conn()
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [{**_closed_row("1"), "Campaña": "Activaciones"}, _closed_row("2")],
+        "2026-08-18T00:00:00",
+    )
+    zip_path = tmp_path / "attention_masivo.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("attention_1.pdf", minimal_pdf_bytes("Hola, te contacto de Casa Market"))
+        zf.writestr("attention_2.pdf", minimal_pdf_bytes("Hola, buen dia"))
+    fake_result = _fake_zip_download_result(zip_path)
+    monkeypatch.setattr(
+        pipeline.massive, "run_direction", lambda client, direction, **kwargs: fake_result
+    )
+    provider = _FakeProvider()
+
+    pipeline.analyze_direction(
+        object(), provider, conn, "attention", concurrency=2, lookback_days=3650,
+        sleep=lambda s: None,
+    )
+
+    activaciones_prompts = [p for p in provider.calls if "Hola, te contacto" in p]
+    soporte_prompts = [p for p in provider.calls if "Hola, buen dia" in p]
+    assert len(activaciones_prompts) == 1
+    assert len(soporte_prompts) == 1
+    assert "Activaciones" in activaciones_prompts[0]
+    assert "Activaciones" not in soporte_prompts[0]
+
+
 def test_analyze_direction_does_not_re_spend_llm_on_already_judged_cases(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

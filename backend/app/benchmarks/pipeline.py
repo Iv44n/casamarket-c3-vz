@@ -194,6 +194,7 @@ def analyze_direction(
                         llm_provider,
                         case.conversation_text,
                         case.transferred_from_agents,
+                        case.campana,
                     ): case
                     for case in judgeable
                 }

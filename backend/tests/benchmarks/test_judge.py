@@ -237,4 +237,51 @@ def test_judge_conversation_prompt_always_includes_greeting_and_spelling_questio
 
     prompt = provider.prompts[0]
     assert "casual" in prompt and "formal" in prompt
-    assert "ortografia" in prompt
+
+
+def test_judge_conversation_transfer_question_clarifies_it_is_the_transferring_agent():
+    # Pedido del usuario: quien debe avisar es el agente QUE TRANSFIERE, no el que recibe o
+    # continua el caso despues -- la conversacion puede incluir mensajes de ambos.
+    provider = _FakeProvider(
+        '{"greeting_level": "casual", "has_farewell": true, "informed_transfer": true}'
+    )
+
+    judge_conversation(provider, "conversacion", transferred_from_agents=["Ana"])
+
+    prompt = provider.prompts[0]
+    assert "agente que transfiere" in prompt.lower()
+    assert "nunca el agente que recibe" in prompt.lower()
+
+
+def test_judge_conversation_transfer_question_notes_it_may_go_to_a_campaign_not_an_agent():
+    # Pedido del usuario: hay dos tipos de transferencia, directa a un agente o a una
+    # campaña/area -- no siempre hay un agente puntual de destino.
+    provider = _FakeProvider(
+        '{"greeting_level": "casual", "has_farewell": true, "informed_transfer": true}'
+    )
+
+    judge_conversation(provider, "conversacion", transferred_from_agents=["Ana"])
+
+    assert "campaña" in provider.prompts[0].lower()
+
+
+def test_judge_conversation_prompt_includes_the_activaciones_farewell_exception():
+    provider = _FakeProvider('{"greeting_level": "casual", "has_farewell": true}')
+
+    judge_conversation(provider, "conversacion", campana="Activaciones")
+
+    prompt = provider.prompts[0]
+    assert "Activaciones" in prompt
+    assert "WhatsApp Business" in prompt
+    assert "has_farewell=true" in prompt
+
+
+def test_judge_conversation_prompt_omits_the_farewell_exception_for_other_campaigns():
+    provider_other = _FakeProvider('{"greeting_level": "casual", "has_farewell": true}')
+    provider_none = _FakeProvider('{"greeting_level": "casual", "has_farewell": true}')
+
+    judge_conversation(provider_other, "conversacion", campana="Soporte")
+    judge_conversation(provider_none, "conversacion")
+
+    assert "Activaciones" not in provider_other.prompts[0]
+    assert "Activaciones" not in provider_none.prompts[0]

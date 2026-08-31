@@ -45,7 +45,7 @@ subirlo".
    - "formal": un saludo mas completo, con presentacion propia y/o de la empresa y/o un \
 ofrecimiento explicito de ayuda (ej. "Buenas tardes, gracias por contactar a Casa Market, mi \
 nombre es Ana, ¿en que puedo ayudarle?").
-2. ¿El agente cerro la conversacion con una despedida?
+2. ¿El agente cerro la conversacion con una despedida?{farewell_exception}
 3. ¿Que tan compleja fue la consulta o problema del cliente? Elegi UNA opcion: "baja", "media" \
 o "alta".
 4. Considerando esa complejidad, ¿el agente manejo el caso de forma adecuada (con una \
@@ -71,14 +71,25 @@ Transcripcion:
 ---
 """
 
+_ACTIVACIONES_FAREWELL_EXCEPTION = (
+    ' IMPORTANTE: esta conversacion es de la campaña "Activaciones", donde el AGENTE contacta '
+    "primero al cliente -- por las reglas de WhatsApp Business, no se puede enviar mas "
+    "mensajes hasta que el cliente responda. Si el cliente NUNCA respondio y el caso se cerro "
+    "sin despedida por esa restriccion de la plataforma (no porque el agente lo haya "
+    "abandonado), eso NO es una falla -- respondé has_farewell=true en ese caso."
+)
+
 _TRANSFER_QUESTION_TEMPLATE = (
-    "6. Este caso llego transferido desde: {agentes}. ¿El agente le avisó al cliente, ANTES \
-de transferirlo, que iba a ser transferido?\n"
+    "6. Este caso llego transferido desde: {agentes}. Una transferencia puede ser hacia OTRO "
+    "AGENTE especifico o hacia una CAMPAÑA/area en general (no siempre hay un nombre de "
+    "persona de destino) -- lo que importa es si, ANTES de la transferencia, el AGENTE QUE "
+    "TRANSFIERE (el que figura arriba -- NUNCA el agente que recibe o continua el caso "
+    "despues) le avisó al cliente que su caso iba a pasar a alguien mas. ¿Avisó?\n"
 )
 _TRANSFER_JSON_KEY = ', "informed_transfer": true|false'
 _TRANSFER_NOTES_HINT = (
-    " y mencionar explicitamente que el caso llego transferido desde {agentes}, y si el "
-    "agente avisó o no al cliente antes de transferirlo"
+    " y mencionar explicitamente que el caso llego transferido desde {agentes}, y si quien "
+    "transfirio avisó o no al cliente antes de hacerlo"
 )
 
 
@@ -96,11 +107,16 @@ class QualityJudgement:
     raw: str
 
 
-def _build_prompt(conversation_text: str, transferred_from_agents: list[str]) -> str:
+def _build_prompt(
+    conversation_text: str, transferred_from_agents: list[str], campana: str | None
+) -> str:
     had_transfer = bool(transferred_from_agents)
     agentes = ", ".join(transferred_from_agents)
     return _PROMPT_TEMPLATE.format(
         conversation_text=conversation_text,
+        farewell_exception=(
+            _ACTIVACIONES_FAREWELL_EXCEPTION if campana == "Activaciones" else ""
+        ),
         transfer_question=(
             _TRANSFER_QUESTION_TEMPLATE.format(agentes=agentes) if had_transfer else ""
         ),
@@ -112,7 +128,10 @@ def _build_prompt(conversation_text: str, transferred_from_agents: list[str]) ->
 
 
 def judge_conversation(
-    provider: LLMProvider, conversation_text: str, transferred_from_agents: list[str] = []
+    provider: LLMProvider,
+    conversation_text: str,
+    transferred_from_agents: list[str] = [],
+    campana: str | None = None,
 ) -> QualityJudgement:
     """Construye el prompt, llama `provider.complete(prompt)` y parsea el JSON de vuelta de
     forma tolerante -- descarta un posible bloque <think> de razonamiento y recorta al
@@ -129,9 +148,18 @@ def judge_conversation(
     esta vacio, el prompt ni pregunta por el aviso de transferencia (evita confundir al modelo
     pidiendo algo que no aplica) y `informed_transfer` en el resultado queda en None sin
     importar que responda el modelo; si no esta vacio, tambien le pide a la nota de auditoria
-    que mencione explicitamente desde donde vino el caso (pedido del usuario: la nota no debe
-    ser un simple resumen, tiene que dejar trazabilidad de la transferencia)."""
-    raw = provider.complete(_build_prompt(conversation_text, transferred_from_agents))
+    que mencione explicitamente desde donde vino el caso, y aclara que es el AGENTE QUE
+    TRANSFIERE (no el que recibe el caso despues) quien debe avisarle al cliente -- una
+    transferencia puede ser hacia otro agente puntual o hacia una campaña/area en general (C3
+    distingue esto via "Tipo destino": "Agente"|"Campaña" en el reporte de transferencias, ver
+    store._upsert_transfer_rows), asi que no siempre hay un nombre de persona de destino.
+
+    `campana` (la campaña del caso, ej. "Activaciones") es contexto para la pregunta de
+    despedida -- en "Activaciones" el agente contacta primero al cliente, y las reglas de
+    WhatsApp Business le impiden mandar mas mensajes si el cliente nunca responde, asi que un
+    caso cerrado sin despedida ahi no es necesariamente una falla del agente (ver
+    _ACTIVACIONES_FAREWELL_EXCEPTION)."""
+    raw = provider.complete(_build_prompt(conversation_text, transferred_from_agents, campana))
     candidate = _extract_json_object(_strip_think_block(raw))
     try:
         data = json.loads(candidate)
