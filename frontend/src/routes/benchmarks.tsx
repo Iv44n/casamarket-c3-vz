@@ -3,6 +3,8 @@ import { useServerFn } from '@tanstack/react-start'
 import {
   CheckIcon,
   ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   PlayIcon,
   SettingsIcon,
   XIcon
@@ -58,6 +60,7 @@ import {
   TableHeader,
   TableRow
 } from '#/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 import {
   Tooltip,
   TooltipContent,
@@ -93,6 +96,7 @@ import {
   type BenchmarkDirection,
   type BenchmarkDirectionFilter,
   type BenchmarksSearch,
+  type BenchmarksView,
   benchmarksSearchSchema,
   todayIsoDate
 } from '#/server/schemas'
@@ -246,6 +250,26 @@ function BenchmarksPage() {
           ),
     [results, search.agentes]
   )
+  const [resultsPage, setResultsPage] = useState(1)
+  const [resultsPageSize, setResultsPageSize] = useState<50 | 100>(50)
+  const resultsTotalPages = Math.max(
+    1,
+    Math.ceil(filteredResults.length / resultsPageSize)
+  )
+  const resultsPageSafe = Math.min(resultsPage, resultsTotalPages)
+  const pagedResults = useMemo(
+    () =>
+      filteredResults.slice(
+        (resultsPageSafe - 1) * resultsPageSize,
+        resultsPageSafe * resultsPageSize
+      ),
+    [filteredResults, resultsPageSafe, resultsPageSize]
+  )
+  function handleResultsPageSizeChange(value: string | null) {
+    if (value === null) return
+    setResultsPageSize(Number(value) as 50 | 100)
+    setResultsPage(1)
+  }
   function isAgenteChecked(agenteName: string) {
     return search.agentes === 'all' || search.agentes.includes(agenteName)
   }
@@ -254,12 +278,15 @@ function BenchmarksPage() {
     const next = current.includes(agenteName)
       ? current.filter(a => a !== agenteName)
       : [...current, agenteName]
+    setResultsPage(1)
     navigate({ search: prev => ({ ...prev, agentes: next }) })
   }
   function selectAllAgentes() {
+    setResultsPage(1)
     navigate({ search: prev => ({ ...prev, agentes: 'all' }) })
   }
   function selectNoAgentes() {
+    setResultsPage(1)
     navigate({ search: prev => ({ ...prev, agentes: [] }) })
   }
   const agentesFilterLabel =
@@ -288,266 +315,334 @@ function BenchmarksPage() {
         masivo de C3.
       </p>
 
-      <div
-        className={cn(
-          'mt-6 grid grid-cols-2 gap-4 transition-opacity lg:grid-cols-4',
-          resultsLoading && 'opacity-50'
-        )}
+      <Tabs
+        value={search.view}
+        onValueChange={value =>
+          navigate({
+            search: prev => ({ ...prev, view: value as BenchmarksView }),
+            replace: true
+          })
+        }
+        className="mt-6"
       >
-        <Card size="sm">
-          <CardHeader className="gap-1">
-            <CardTitle className="text-base font-medium text-muted-foreground">
-              Casos totales
-            </CardTitle>
-            <CardDescription className="flex items-baseline gap-1.5 text-sm">
-              <span
-                className="font-bold text-foreground tabular-nums"
-                style={{ fontSize: CHART_BIG_NUMBER_FONT_SIZE }}
-              >
-                {totals.total}
-              </span>
-              en el rango elegido
-            </CardDescription>
-          </CardHeader>
-        </Card>
-        <Card size="sm">
-          <CardHeader className="gap-1">
-            <CardTitle className="text-base font-medium text-muted-foreground">
-              Con veredicto
-            </CardTitle>
-            <CardDescription className="flex items-baseline gap-1.5 text-sm">
-              <span
-                className="font-bold text-foreground tabular-nums"
-                style={{ fontSize: CHART_BIG_NUMBER_FONT_SIZE }}
-              >
-                {totals.analyzed}
-              </span>
-              {totals.total > 0
-                ? `${Math.round((totals.analyzed / totals.total) * 100)}% del total`
-                : 'del total'}
-            </CardDescription>
-          </CardHeader>
-        </Card>
-        <Card size="sm">
-          <CardHeader className="gap-1">
-            <CardTitle className="text-base font-medium text-muted-foreground">
-              1ra respuesta promedio
-            </CardTitle>
-            <CardDescription className="flex items-baseline gap-1.5 text-sm">
-              <span
-                className="font-bold text-foreground tabular-nums"
-                style={{ fontSize: CHART_BIG_NUMBER_FONT_SIZE }}
-              >
-                {totals.avgFirstResponseSeconds !== null
-                  ? formatSecondsAsDuration(totals.avgFirstResponseSeconds)
-                  : '—'}
-              </span>
-              promedio general
-            </CardDescription>
-          </CardHeader>
-        </Card>
-        <Card size="sm">
-          <CardHeader className="gap-1">
-            <CardTitle className="text-base font-medium text-muted-foreground">
-              Calidad promedio
-            </CardTitle>
-            <CardDescription className="flex items-baseline gap-1.5 text-sm">
-              <span
-                className="font-bold text-foreground tabular-nums"
-                style={{ fontSize: CHART_BIG_NUMBER_FONT_SIZE }}
-              >
-                {totals.qualityOkPct !== null
-                  ? `${Math.round(totals.qualityOkPct)}%`
-                  : '—'}
-              </span>
-              presentación + despedida
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </div>
+        <TabsList className="w-fit">
+          <TabsTrigger value="resultados">Resultados</TabsTrigger>
+          <TabsTrigger value="administracion">Administración</TabsTrigger>
+        </TabsList>
 
-      <div className="mt-4 grid gap-4 md:grid-cols-2">
-        <BenchmarkRunCard
-          initialStatus={runStatus}
-          dateFrom={search.date}
-          dateTo={search.dateEnd ?? search.date}
-          directions={
-            search.direction === 'all' ? undefined : [search.direction]
-          }
-        />
-        <BenchmarkScheduleCard />
-      </div>
-
-      {llmSettings && <LlmSettingsCard initialSettings={llmSettings} />}
-
-      <BenchmarkRunHistoryCard runs={runs} />
-
-      <Card className="mt-4">
-        <CardHeader className="flex-row items-center justify-between">
-          <div>
-            <CardTitle>Promedio por agente</CardTitle>
-            <CardDescription>
-              Tiempo de primera respuesta y % de casos con presentación y
-              despedida.
-            </CardDescription>
-          </div>
-          <div className="flex flex-col items-end gap-2">
-            {topQualityAgent && (
-              <Badge variant="secondary" className="max-w-64">
-                <span className="min-w-0 truncate">
-                  Mejor calidad: {topQualityAgent.agente} (
-                  {Math.round(topQualityAgent.qualityOkPct ?? 0)}%)
-                </span>
-              </Badge>
+        <TabsContent value="resultados" className="mt-4">
+          <div
+            className={cn(
+              'grid grid-cols-2 gap-4 transition-opacity lg:grid-cols-4',
+              resultsLoading && 'opacity-50'
             )}
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-muted-foreground">
-                Top agentes
-              </span>
-              <Select
-                value={String(search.agentLimit)}
-                onValueChange={value =>
-                  navigate({
-                    search: prev => ({
-                      ...prev,
-                      agentLimit: (value === 'all'
-                        ? 'all'
-                        : Number(value)) as AgentLimit
-                    })
-                  })
-                }
-              >
-                <SelectTrigger className="w-36">
-                  <SelectValue>
-                    {() =>
-                      search.agentLimit === 'all'
-                        ? 'Todos'
-                        : `Top ${search.agentLimit}`
-                    }
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {AGENT_LIMIT_OPTIONS.map(option => (
-                    <SelectItem key={option} value={String(option)}>
-                      {option === 'all' ? 'Todos' : `Top ${option}`}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+          >
+            <Card size="sm">
+              <CardHeader className="gap-1">
+                <CardTitle className="text-base font-medium text-muted-foreground">
+                  Casos totales
+                </CardTitle>
+                <CardDescription className="flex items-baseline gap-1.5 text-sm">
+                  <span
+                    className="font-bold text-foreground tabular-nums"
+                    style={{ fontSize: CHART_BIG_NUMBER_FONT_SIZE }}
+                  >
+                    {totals.total}
+                  </span>
+                  en el rango elegido
+                </CardDescription>
+              </CardHeader>
+            </Card>
+            <Card size="sm">
+              <CardHeader className="gap-1">
+                <CardTitle className="text-base font-medium text-muted-foreground">
+                  Con veredicto
+                </CardTitle>
+                <CardDescription className="flex items-baseline gap-1.5 text-sm">
+                  <span
+                    className="font-bold text-foreground tabular-nums"
+                    style={{ fontSize: CHART_BIG_NUMBER_FONT_SIZE }}
+                  >
+                    {totals.analyzed}
+                  </span>
+                  {totals.total > 0
+                    ? `${Math.round((totals.analyzed / totals.total) * 100)}% del total`
+                    : 'del total'}
+                </CardDescription>
+              </CardHeader>
+            </Card>
+            <Card size="sm">
+              <CardHeader className="gap-1">
+                <CardTitle className="text-base font-medium text-muted-foreground">
+                  1ra respuesta promedio
+                </CardTitle>
+                <CardDescription className="flex items-baseline gap-1.5 text-sm">
+                  <span
+                    className="font-bold text-foreground tabular-nums"
+                    style={{ fontSize: CHART_BIG_NUMBER_FONT_SIZE }}
+                  >
+                    {totals.avgFirstResponseSeconds !== null
+                      ? formatSecondsAsDuration(totals.avgFirstResponseSeconds)
+                      : '—'}
+                  </span>
+                  promedio general
+                </CardDescription>
+              </CardHeader>
+            </Card>
+            <Card size="sm">
+              <CardHeader className="gap-1">
+                <CardTitle className="text-base font-medium text-muted-foreground">
+                  Calidad promedio
+                </CardTitle>
+                <CardDescription className="flex items-baseline gap-1.5 text-sm">
+                  <span
+                    className="font-bold text-foreground tabular-nums"
+                    style={{ fontSize: CHART_BIG_NUMBER_FONT_SIZE }}
+                  >
+                    {totals.qualityOkPct !== null
+                      ? `${Math.round(totals.qualityOkPct)}%`
+                      : '—'}
+                  </span>
+                  presentación + despedida
+                </CardDescription>
+              </CardHeader>
+            </Card>
           </div>
-        </CardHeader>
-        <CardContent
-          className={cn('transition-opacity', resultsLoading && 'opacity-50')}
-        >
-          {agentRanking.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Todavía no hay resultados para el rango elegido.
-            </p>
-          ) : (
-            <BenchmarkAgentChart agents={agentRanking} />
-          )}
-        </CardContent>
-      </Card>
 
-      <Card className="mt-4">
-        <CardHeader className="flex-row items-center justify-between">
-          <div>
-            <CardTitle>Detalle por caso</CardTitle>
-            <CardDescription>
-              {filteredResults.length} caso
-              {filteredResults.length === 1 ? '' : 's'} en el rango elegido.
-            </CardDescription>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-muted-foreground">
-              Dirección
-            </span>
-            <Select
-              value={search.direction}
-              onValueChange={value =>
-                navigate({
-                  search: prev => ({
-                    ...prev,
-                    direction: value as BenchmarkDirectionFilter
-                  })
-                })
-              }
-            >
-              <SelectTrigger className="w-32">
-                <SelectValue>
-                  {() =>
-                    search.direction === 'all'
-                      ? 'Todas'
-                      : BENCHMARK_DIRECTION_LABEL[search.direction]
-                  }
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todas</SelectItem>
-                <SelectItem value="attention">Entrantes</SelectItem>
-                <SelectItem value="outboundattention">Salientes</SelectItem>
-              </SelectContent>
-            </Select>
-            {availableAgentes.length > 0 && (
-              <>
-                <span className="text-sm font-medium text-muted-foreground">
-                  Agentes
-                </span>
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        variant="outline"
-                        className="w-40 justify-between font-normal"
-                      />
+          <Card className="mt-4">
+            <CardHeader className="flex-row items-center justify-between">
+              <div>
+                <CardTitle>Promedio por agente</CardTitle>
+                <CardDescription>
+                  Tiempo de primera respuesta y % de casos con presentación y
+                  despedida.
+                </CardDescription>
+              </div>
+              <div className="flex flex-col items-end gap-2">
+                {topQualityAgent && (
+                  <Badge variant="secondary" className="max-w-64">
+                    <span className="min-w-0 truncate">
+                      Mejor calidad: {topQualityAgent.agente} (
+                      {Math.round(topQualityAgent.qualityOkPct ?? 0)}%)
+                    </span>
+                  </Badge>
+                )}
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-muted-foreground">
+                    Top agentes
+                  </span>
+                  <Select
+                    value={String(search.agentLimit)}
+                    onValueChange={value =>
+                      navigate({
+                        search: prev => ({
+                          ...prev,
+                          agentLimit: (value === 'all'
+                            ? 'all'
+                            : Number(value)) as AgentLimit
+                        })
+                      })
                     }
                   >
-                    <span className="min-w-0 truncate">
-                      {agentesFilterLabel}
+                    <SelectTrigger className="w-36">
+                      <SelectValue>
+                        {() =>
+                          search.agentLimit === 'all'
+                            ? 'Todos'
+                            : `Top ${search.agentLimit}`
+                        }
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {AGENT_LIMIT_OPTIONS.map(option => (
+                        <SelectItem key={option} value={String(option)}>
+                          {option === 'all' ? 'Todos' : `Top ${option}`}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent
+              className={cn(
+                'transition-opacity',
+                resultsLoading && 'opacity-50'
+              )}
+            >
+              {agentRanking.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Todavía no hay resultados para el rango elegido.
+                </p>
+              ) : (
+                <BenchmarkAgentChart agents={agentRanking} />
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="mt-4">
+            <CardHeader className="flex-row items-center justify-between">
+              <div>
+                <CardTitle>Detalle por caso</CardTitle>
+                <CardDescription>
+                  {filteredResults.length} caso
+                  {filteredResults.length === 1 ? '' : 's'} en el rango elegido.
+                </CardDescription>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-muted-foreground">
+                  Dirección
+                </span>
+                <Select
+                  value={search.direction}
+                  onValueChange={value => {
+                    setResultsPage(1)
+                    navigate({
+                      search: prev => ({
+                        ...prev,
+                        direction: value as BenchmarkDirectionFilter
+                      })
+                    })
+                  }}
+                >
+                  <SelectTrigger className="w-32">
+                    <SelectValue>
+                      {() =>
+                        search.direction === 'all'
+                          ? 'Todas'
+                          : BENCHMARK_DIRECTION_LABEL[search.direction]
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todas</SelectItem>
+                    <SelectItem value="attention">Entrantes</SelectItem>
+                    <SelectItem value="outboundattention">Salientes</SelectItem>
+                  </SelectContent>
+                </Select>
+                {availableAgentes.length > 0 && (
+                  <>
+                    <span className="text-sm font-medium text-muted-foreground">
+                      Agentes
                     </span>
-                    <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="min-w-64">
-                    <MultiSelectQuickActions
-                      onSelectAll={selectAllAgentes}
-                      onSelectNone={selectNoAgentes}
-                    />
-                    {availableAgentes.map(agenteName => (
-                      <Label
-                        key={agenteName}
-                        className="cursor-default items-start rounded-xl px-3 py-2 font-normal hover:bg-accent"
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <Button
+                            variant="outline"
+                            className="w-40 justify-between font-normal"
+                          />
+                        }
                       >
-                        <Checkbox
-                          checked={isAgenteChecked(agenteName)}
-                          onCheckedChange={() => toggleAgente(agenteName)}
-                          className="mt-0.5"
+                        <span className="min-w-0 truncate">
+                          {agentesFilterLabel}
+                        </span>
+                        <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="min-w-64">
+                        <MultiSelectQuickActions
+                          onSelectAll={selectAllAgentes}
+                          onSelectNone={selectNoAgentes}
                         />
-                        {agenteName}
-                      </Label>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </>
+                        {availableAgentes.map(agenteName => (
+                          <Label
+                            key={agenteName}
+                            className="cursor-default items-start rounded-xl px-3 py-2 font-normal hover:bg-accent"
+                          >
+                            <Checkbox
+                              checked={isAgenteChecked(agenteName)}
+                              onCheckedChange={() => toggleAgente(agenteName)}
+                              className="mt-0.5"
+                            />
+                            {agenteName}
+                          </Label>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </>
+                )}
+                <span className="text-sm font-medium text-muted-foreground">
+                  Fecha
+                </span>
+                <DateRangeFilter
+                  date={search.date}
+                  dateEnd={search.dateEnd}
+                  onChange={(date, dateEnd) => {
+                    setResultsPage(1)
+                    navigate({ search: prev => ({ ...prev, date, dateEnd }) })
+                  }}
+                />
+              </div>
+            </CardHeader>
+            <CardContent
+              className={cn(
+                'transition-opacity',
+                resultsLoading && 'opacity-50'
+              )}
+            >
+              <BenchmarkResultsTable results={pagedResults} />
+            </CardContent>
+            {filteredResults.length > 0 && (
+              <CardFooter className="flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">Mostrar</span>
+                  <Select
+                    value={String(resultsPageSize)}
+                    onValueChange={handleResultsPageSizeChange}
+                  >
+                    <SelectTrigger className="w-20">
+                      <SelectValue>{() => String(resultsPageSize)}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="50">50</SelectItem>
+                      <SelectItem value="100">100</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <span className="text-sm text-muted-foreground">
+                    por página
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    onClick={() => setResultsPage(p => Math.max(1, p - 1))}
+                    disabled={resultsPageSafe <= 1}
+                    aria-label="Pagina anterior"
+                  >
+                    <ChevronLeftIcon />
+                  </Button>
+                  <span className="text-sm text-muted-foreground">
+                    Página {resultsPageSafe} de {resultsTotalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    onClick={() =>
+                      setResultsPage(p => Math.min(resultsTotalPages, p + 1))
+                    }
+                    disabled={resultsPageSafe >= resultsTotalPages}
+                    aria-label="Pagina siguiente"
+                  >
+                    <ChevronRightIcon />
+                  </Button>
+                </div>
+              </CardFooter>
             )}
-            <span className="text-sm font-medium text-muted-foreground">
-              Fecha
-            </span>
-            <DateRangeFilter
-              date={search.date}
-              dateEnd={search.dateEnd}
-              onChange={(date, dateEnd) =>
-                navigate({ search: prev => ({ ...prev, date, dateEnd }) })
-              }
-            />
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="administracion" className="mt-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <BenchmarkRunCard initialStatus={runStatus} />
+            <BenchmarkScheduleCard />
           </div>
-        </CardHeader>
-        <CardContent
-          className={cn('transition-opacity', resultsLoading && 'opacity-50')}
-        >
-          <BenchmarkResultsTable results={filteredResults} />
-        </CardContent>
-      </Card>
+
+          {llmSettings && <LlmSettingsCard initialSettings={llmSettings} />}
+
+          <BenchmarkRunHistoryCard runs={runs} />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
@@ -756,15 +851,9 @@ function runStatusBadge(phase: BenchmarkRunStatus['phase']): {
 }
 
 function BenchmarkRunCard({
-  initialStatus,
-  dateFrom,
-  dateTo,
-  directions
+  initialStatus
 }: {
   initialStatus: BenchmarkRunStatus
-  dateFrom: string
-  dateTo: string
-  directions?: BenchmarkDirection[]
 }) {
   const router = useRouter()
   const startRun = useServerFn(triggerBenchmarkRun)
@@ -773,6 +862,24 @@ function BenchmarkRunCard({
   const [confirming, setConfirming] = useState(false)
   const [forceReanalyze, setForceReanalyze] = useState(false)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Alcance de ESTA corrida, propio de la tarjeta -- deliberadamente independiente
+  // del filtro de fecha/direccion de la pestana Resultados. Antes reusaba
+  // search.date/search.direction (pedido explicito de backend para mantener la
+  // corrida "scopeada a lo que se esta viendo"), pero con el split en pestanas esa
+  // dependencia quedaba invisible: el usuario en Administracion no podia ver que
+  // filtro de Resultados iba a terminar afectando su corrida. Controles propios
+  // abajo resuelven la confusion sin tocar el contrato del backend (que ya acepta
+  // dateFrom/dateTo/directions opcionales).
+  const [runDate, setRunDate] = useState(todayIsoDate())
+  const [runDateEnd, setRunDateEnd] = useState<string | undefined>(undefined)
+  const [runDirection, setRunDirection] =
+    useState<BenchmarkDirectionFilter>('all')
+  const dateFrom = runDate
+  const dateTo = runDateEnd ?? runDate
+  const directions =
+    runDirection === 'all'
+      ? undefined
+      : ([runDirection] as BenchmarkDirection[])
   const includesToday = dateFrom <= todayIsoDate() && todayIsoDate() <= dateTo
 
   useEffect(() => {
@@ -822,7 +929,7 @@ function BenchmarkRunCard({
           <CardDescription>
             Dispara el reporte masivo de C3 (entrantes y salientes) y el
             análisis de calidad para los casos ya cerrados que todavía no tengan
-            veredicto, dentro del rango y dirección elegidos arriba.
+            veredicto, en el rango y dirección elegidos abajo.
           </CardDescription>
         </div>
         <Button
@@ -841,6 +948,46 @@ function BenchmarkRunCard({
         </Button>
       </CardHeader>
       <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2 rounded-xl bg-muted/50 px-3 py-2">
+          <span className="text-xs font-medium text-muted-foreground">
+            Rango de esta corrida
+          </span>
+          <DateRangeFilter
+            date={runDate}
+            dateEnd={runDateEnd}
+            onChange={(date, dateEndValue) => {
+              setRunDate(date)
+              setRunDateEnd(dateEndValue)
+            }}
+          />
+          <span className="text-xs font-medium text-muted-foreground">
+            Dirección
+          </span>
+          <Select
+            value={runDirection}
+            onValueChange={value =>
+              setRunDirection(value as BenchmarkDirectionFilter)
+            }
+          >
+            <SelectTrigger className="h-8 w-32 text-xs">
+              <SelectValue>
+                {() =>
+                  runDirection === 'all'
+                    ? 'Todas'
+                    : BENCHMARK_DIRECTION_LABEL[runDirection]
+                }
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas</SelectItem>
+              <SelectItem value="attention">Entrantes</SelectItem>
+              <SelectItem value="outboundattention">Salientes</SelectItem>
+            </SelectContent>
+          </Select>
+          <span className="ml-auto text-xs text-muted-foreground">
+            Independiente del filtro de Resultados
+          </span>
+        </div>
         <p className="text-sm text-muted-foreground">
           {status.phase === 'idle' && 'Sin corridas todavía.'}
           {status.phase === 'running' && `En curso desde ${status.started_at}.`}

@@ -426,7 +426,10 @@ export const benchmarkResultsRequestSchema = z.object({
   dateFrom: z.string().regex(ISO_DATE_REGEX).optional(),
   dateTo: z.string().regex(ISO_DATE_REGEX).optional()
 })
+export const BENCHMARKS_VIEWS = ['resultados', 'administracion'] as const
+export type BenchmarksView = (typeof BENCHMARKS_VIEWS)[number]
 export const benchmarksSearchSchema = z.object({
+  view: z.enum(BENCHMARKS_VIEWS).default('resultados'),
   direction: z.enum(BENCHMARK_DIRECTION_FILTERS).default('all'),
   date: dateFilterValue.default(todayIsoDate),
   dateEnd: dateEndValue,
