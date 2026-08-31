@@ -69,7 +69,8 @@ import {
 import {
   benchmarkTotals,
   bestQualityAgent,
-  buildAgentBenchmarkRanking
+  buildAgentBenchmarkRanking,
+  buildTransferNotificationRanking
 } from '#/lib/benchmark-analytics'
 import { CHART_BIG_NUMBER_FONT_SIZE } from '#/lib/chart-typography'
 import { formatSecondsAsDuration } from '#/lib/duration'
@@ -228,6 +229,10 @@ function BenchmarksPage() {
 
   const totals = benchmarkTotals(results)
   const agentRanking = buildAgentBenchmarkRanking(results, search.agentLimit)
+  const transferNotifications = buildTransferNotificationRanking(
+    results,
+    search.agentLimit
+  )
   const topQualityAgent = bestQualityAgent(
     buildAgentBenchmarkRanking(results, 'all')
   )
@@ -414,8 +419,9 @@ function BenchmarksPage() {
               <div>
                 <CardTitle>Promedio por agente</CardTitle>
                 <CardDescription>
-                  Tiempo de primera respuesta y % de casos con presentación y
-                  despedida.
+                  Tiempo de primera respuesta, calidad propia del agente
+                  (saludo, despedida, manejo y ortografía) y aviso al
+                  transferir.
                 </CardDescription>
               </div>
               <div className="flex flex-col items-end gap-2">
@@ -423,7 +429,7 @@ function BenchmarksPage() {
                   <Badge variant="secondary" className="max-w-64">
                     <span className="min-w-0 truncate">
                       Mejor calidad: {topQualityAgent.agente} (
-                      {Math.round(topQualityAgent.qualityOkPct ?? 0)}%)
+                      {Math.round(topQualityAgent.ownConductOkPct ?? 0)}%)
                     </span>
                   </Badge>
                 )}
@@ -475,7 +481,10 @@ function BenchmarksPage() {
                   Todavía no hay resultados para el rango elegido.
                 </p>
               ) : (
-                <BenchmarkAgentChart agents={agentRanking} />
+                <BenchmarkAgentChart
+                  agents={agentRanking}
+                  transferNotifications={transferNotifications}
+                />
               )}
             </CardContent>
           </Card>
