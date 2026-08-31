@@ -738,6 +738,27 @@ function TransferCell({
   )
 }
 
+function AgenteCell({
+  agente,
+  hadTransfer,
+  transferredFromAgents
+}: {
+  agente: string | null
+  hadTransfer: boolean
+  transferredFromAgents: string[]
+}) {
+  return (
+    <div>
+      <div>{agente ?? 'Sin agente'}</div>
+      {hadTransfer && transferredFromAgents.length > 0 && (
+        <div className="mt-0.5 text-xs text-muted-foreground">
+          Desde: {transferredFromAgents.join(' → ')}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function BenchmarkResultsTable({
   results
 }: {
@@ -788,7 +809,13 @@ function BenchmarkResultsTable({
                   : '—'}
               </TableCell>
               <TableCell>{row.cliente ?? 'Sin cliente'}</TableCell>
-              <TableCell>{row.agente ?? 'Sin agente'}</TableCell>
+              <TableCell>
+                <AgenteCell
+                  agente={row.agente}
+                  hadTransfer={row.had_transfer}
+                  transferredFromAgents={row.transferred_from_agents}
+                />
+              </TableCell>
               <TableCell>{row.campana ?? 'Sin campaña'}</TableCell>
               <TableCell>
                 {row.first_response_seconds !== null ? (

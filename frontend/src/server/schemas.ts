@@ -366,6 +366,7 @@ export type BenchmarkCaseResult = {
   handled_well_for_complexity: boolean | null
   had_transfer: boolean
   informed_transfer: boolean | null
+  transferred_from_agents: string[]
 }
 export type BenchmarkDirectionSummary = {
   direction: BenchmarkDirection
