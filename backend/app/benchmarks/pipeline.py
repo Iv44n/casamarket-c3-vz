@@ -52,8 +52,10 @@ class CaseBenchmark:
     estado: str | None
     first_response_seconds: float | None
     conversation_text: str | None
-    # Hecho (de la tabla transfer), no un juicio del LLM -- ver store.transfer_ids_for_cases.
+    # Hechos (de la tabla transfer), no un juicio del LLM -- ver
+    # store.transfer_origin_agents_for_cases.
     had_transfer: bool
+    transferred_from_agents: list[str]
     row_json: dict
 
 
@@ -61,14 +63,16 @@ def build_case_benchmarks(
     rows: dict[str, dict],
     zip_texts: dict[str, str],
     direction: str,
-    transfer_ids: set[str] = frozenset(),
+    transfer_origins: dict[str, list[str]] = {},
 ) -> list[CaseBenchmark]:
     """Itera `rows` (los casos PENDIENTES de veredicto -- nunca los ya benchmarkeados, ver
     store.already_benchmarked_ids) y hace `zip_texts.get(id)`; un caso cerrado sin PDF en el
     zip de hoy sigue generando un CaseBenchmark (con `conversation_text=None`), para que su
     tiempo de primera respuesta quede registrado igual aunque todavia no tenga veredicto de
-    calidad. `transfer_ids` (default vacio, ver store.transfer_ids_for_cases) marca que casos
-    tuvieron una transferencia real -- decide si judge_conversation les pregunta por el aviso."""
+    calidad. `transfer_origins` (default vacio, ver store.transfer_origin_agents_for_cases)
+    mapea que casos tuvieron una transferencia real a la lista de agentes_origen de todos sus
+    saltos -- decide si judge_conversation les pregunta por el aviso, y ademas se persiste tal
+    cual (el `agente` de la fila es siempre el agente FINAL que cerro el caso, no el origen)."""
     cases = []
     for id_atencion, row in rows.items():
         cases.append(
@@ -82,7 +86,8 @@ def build_case_benchmarks(
                     row.get("Tiempo de primera respuesta")
                 ),
                 conversation_text=zip_texts.get(id_atencion) or None,
-                had_transfer=id_atencion in transfer_ids,
+                had_transfer=id_atencion in transfer_origins,
+                transferred_from_agents=transfer_origins.get(id_atencion, []),
                 row_json=row,
             )
         )
@@ -106,9 +111,10 @@ def _to_benchmark_row(
             judgement.handled_well_for_complexity if judgement else None
         ),
         "spelling_ok": judgement.spelling_ok if judgement else None,
-        # had_transfer es un hecho de `case` (tabla transfer), no del juicio del LLM --
-        # se guarda aunque el caso todavia no tenga PDF/veredicto.
+        # had_transfer/transferred_from_agents son hechos de `case` (tabla transfer), no del
+        # juicio del LLM -- se guardan aunque el caso todavia no tenga PDF/veredicto.
         "had_transfer": case.had_transfer,
+        "transferred_from_agents": case.transferred_from_agents,
         "informed_transfer": judgement.informed_transfer if judgement else None,
         "llm_model": llm_model if judgement else None,
         "llm_raw": judgement.raw if judgement else None,
@@ -174,9 +180,9 @@ def analyze_direction(
             sleep=sleep,
         )
         zip_texts = massive_zip.extract_texts_for_ids(result.path, pending.keys())
-        transfer_ids = store.transfer_ids_for_cases(conn, list(pending))
+        transfer_origins = store.transfer_origin_agents_for_cases(conn, list(pending))
 
-        cases = build_case_benchmarks(pending, zip_texts, direction, transfer_ids)
+        cases = build_case_benchmarks(pending, zip_texts, direction, transfer_origins)
 
         judgements: dict[str, QualityJudgement] = {}
         judgeable = [case for case in cases if case.conversation_text]

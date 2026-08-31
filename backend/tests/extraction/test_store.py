@@ -758,21 +758,40 @@ def _transfer_row(id_atencion: str, fecha: str = "2026-08-18", hora: str = "10:0
     }
 
 
-def test_transfer_ids_for_cases_returns_only_ids_with_a_transfer_row():
+def test_transfer_origin_agents_for_cases_returns_only_ids_with_a_transfer_row():
     conn = _conn()
     store.upsert_report_rows(
         conn, "transfer", [_transfer_row("has_transfer")], "2026-08-18T00:00:00"
     )
 
-    ids = store.transfer_ids_for_cases(conn, ["has_transfer", "no_transfer"])
+    origins = store.transfer_origin_agents_for_cases(conn, ["has_transfer", "no_transfer"])
 
-    assert ids == {"has_transfer"}
+    assert origins == {"has_transfer": ["Ana"]}
 
 
-def test_transfer_ids_for_cases_returns_empty_set_for_no_ids():
+def test_transfer_origin_agents_for_cases_returns_empty_dict_for_no_ids():
     conn = _conn()
 
-    assert store.transfer_ids_for_cases(conn, []) == set()
+    assert store.transfer_origin_agents_for_cases(conn, []) == {}
+
+
+def test_transfer_origin_agents_for_cases_returns_the_full_chain_in_chronological_order():
+    conn = _conn()
+    store.upsert_report_rows(
+        conn,
+        "transfer",
+        [
+            _transfer_row("multi_hop", fecha="2026-08-18", hora="09:00:00")
+            | {"Agente Origen": "Ana", "Destino": "Luis"},
+            _transfer_row("multi_hop", fecha="2026-08-18", hora="10:00:00")
+            | {"Agente Origen": "Luis", "Destino": "Carla"},
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    origins = store.transfer_origin_agents_for_cases(conn, ["multi_hop"])
+
+    assert origins == {"multi_hop": ["Ana", "Luis"]}
 
 
 class _FlakyConn:
@@ -811,14 +830,16 @@ def test_execute_retrying_raises_after_a_second_consecutive_failure():
     assert flaky.calls == 2
 
 
-def test_transfer_ids_for_cases_recovers_from_a_transient_stream_error():
+def test_transfer_origin_agents_for_cases_recovers_from_a_transient_stream_error():
     conn = _conn()
     store.upsert_report_rows(
         conn, "transfer", [_transfer_row("has_transfer")], "2026-08-18T00:00:00"
     )
     flaky = _FlakyConn(conn, fail_times=1)
 
-    assert store.transfer_ids_for_cases(flaky, ["has_transfer"]) == {"has_transfer"}
+    assert store.transfer_origin_agents_for_cases(flaky, ["has_transfer"]) == {
+        "has_transfer": ["Ana"]
+    }
 
 
 def test_record_benchmark_results_inserts_row_without_quality_when_no_pdf():
@@ -847,6 +868,30 @@ def test_record_benchmark_results_inserts_row_without_quality_when_no_pdf():
     assert rows[0]["greeting_level"] is None
     assert rows[0]["analyzed_at"] is None
     assert rows[0]["first_response_seconds"] == 90.0
+    # Nunca None -- un caso sin transferencia guarda lista vacia, no NULL (mismo motivo que
+    # had_transfer nunca queda en None: es un hecho, no un juicio pendiente).
+    assert rows[0]["transferred_from_agents"] == []
+
+
+def test_record_benchmark_results_persists_transferred_from_agents_as_a_list():
+    conn = _conn()
+
+    store.record_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "1",
+                "direction": "attention",
+                "had_transfer": True,
+                "transferred_from_agents": ["Ana", "Luis"],
+                "row_json": {},
+            }
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    rows = store.benchmark_result_rows(conn)
+    assert rows[0]["transferred_from_agents"] == ["Ana", "Luis"]
 
 
 def test_record_benchmark_results_extracts_fecha_hora_final_and_cliente_from_row_json():
@@ -1356,6 +1401,70 @@ def test_migrate_benchmark_result_quality_columns_backfills_had_transfer_true_fr
         "SELECT had_transfer FROM benchmark_result WHERE id_atencion = 'transferred'"
     ).fetchone()[0]
     assert had_transfer == 1
+
+
+def test_migrate_benchmark_result_quality_columns_backfills_transferred_from_agents():
+    # Mismo escenario que los dos tests de arriba, pero para transferred_from_agents -- prueba
+    # el UPDATE por lote con CASE (no un UPDATE por id) con DOS casos a la vez, uno con
+    # transferencia y otro sin, para confirmar que el batch no cruza valores entre ids.
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        """
+        CREATE TABLE benchmark_result (
+            id_atencion TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            agente TEXT,
+            campana TEXT,
+            estado TEXT,
+            first_response_seconds REAL,
+            has_greeting INTEGER,
+            has_farewell INTEGER,
+            quality_ok INTEGER,
+            llm_model TEXT,
+            llm_raw TEXT,
+            llm_notes TEXT,
+            analyzed_at TEXT,
+            first_recorded_at TEXT NOT NULL,
+            last_updated_at TEXT NOT NULL,
+            row_json TEXT NOT NULL,
+            PRIMARY KEY (id_atencion, direction)
+        )
+        """
+    )
+    for id_atencion in ("transferred", "not_transferred"):
+        conn.execute(
+            "INSERT INTO benchmark_result "
+            "(id_atencion, direction, first_recorded_at, last_updated_at, row_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (id_atencion, "attention", "2026-08-01T00:00:00", "2026-08-01T00:00:00", "{}"),
+        )
+    conn.commit()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS transfer (
+            id_atencion     TEXT NOT NULL,
+            fecha           TEXT NOT NULL,
+            hora            TEXT NOT NULL,
+            agente_origen   TEXT NOT NULL DEFAULT '',
+            destino         TEXT NOT NULL DEFAULT '',
+            first_seen_at   TEXT NOT NULL,
+            last_seen_at    TEXT NOT NULL,
+            row_json        TEXT NOT NULL,
+            PRIMARY KEY (id_atencion, fecha, hora, agente_origen, destino)
+        )
+        """
+    )
+    store._upsert_transfer_rows(conn, [_transfer_row("transferred")], "2026-08-01T00:00:00")
+    store._init_schema(conn)
+
+    transferred = conn.execute(
+        "SELECT transferred_from_agents FROM benchmark_result WHERE id_atencion = 'transferred'"
+    ).fetchone()[0]
+    not_transferred = conn.execute(
+        "SELECT transferred_from_agents FROM benchmark_result WHERE id_atencion = 'not_transferred'"
+    ).fetchone()[0]
+    assert json.loads(transferred) == ["Ana"]
+    assert json.loads(not_transferred) == []
 
 
 def test_migrate_benchmark_result_versioning_allows_duplicate_case_rows_now():

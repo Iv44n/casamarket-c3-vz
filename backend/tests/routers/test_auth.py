@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app import config
 from app.auth import rate_limit, security, store
 from app.config import AuthConfig
+from app.extraction import state
 from app.main import app
 
 _AUTH_CONFIG = AuthConfig(jwt_secret="test-secret-that-is-long-enough-1234", bootstrap_username=None, bootstrap_password=None)
@@ -154,7 +155,16 @@ def test_protected_endpoint_without_authorization_header_returns_401(client: Tes
     assert response.status_code == 401
 
 
-def test_protected_endpoint_with_a_valid_bearer_token_succeeds(client: TestClient):
+def test_protected_endpoint_with_a_valid_bearer_token_succeeds(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    # state.last_run() real pega contra extraction.store.get_connection() (Turso real) la
+    # primera vez que se llama en el proceso, via _hydrate_once() -- nada de esto es sobre auth
+    # (lo unico que este test quiere probar es que un token valido pasa el Depends), asi que se
+    # mockea igual que ya hacen tests/routers/test_runs.py -- confirmado en vivo el 2026-08-31
+    # que sin esto el test peor caso se cuelga (o tarda decenas de segundos) contra la Turso
+    # real en vez de nunca tocar la red.
+    monkeypatch.setattr(state, "last_run", lambda: None)
     headers = _bearer(1, "ana", False)
 
     response = client.get("/extraction/status", headers=headers)

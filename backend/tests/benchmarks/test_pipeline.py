@@ -99,25 +99,30 @@ def test_build_case_benchmarks_maps_fields_and_handles_missing_pdf():
     assert by_id["2"].first_response_seconds is None
 
 
-def test_build_case_benchmarks_marks_had_transfer_from_transfer_ids():
+def test_build_case_benchmarks_marks_had_transfer_from_transfer_origins():
     rows = {
         "1": {"Agente": "Ana", "Campaña": "Soporte", "Estado": "Cerrada"},
         "2": {"Agente": "Luis", "Campaña": "Ventas", "Estado": "Cerrada"},
     }
 
-    cases = pipeline.build_case_benchmarks(rows, {}, "attention", transfer_ids={"1"})
+    cases = pipeline.build_case_benchmarks(
+        rows, {}, "attention", transfer_origins={"1": ["Carla"]}
+    )
     by_id = {c.id_atencion: c for c in cases}
 
     assert by_id["1"].had_transfer is True
+    assert by_id["1"].transferred_from_agents == ["Carla"]
     assert by_id["2"].had_transfer is False
+    assert by_id["2"].transferred_from_agents == []
 
 
-def test_build_case_benchmarks_defaults_had_transfer_to_false_without_transfer_ids():
+def test_build_case_benchmarks_defaults_had_transfer_to_false_without_transfer_origins():
     rows = {"1": {"Agente": "Ana", "Campaña": "Soporte", "Estado": "Cerrada"}}
 
     cases = pipeline.build_case_benchmarks(rows, {}, "attention")
 
     assert cases[0].had_transfer is False
+    assert cases[0].transferred_from_agents == []
 
 
 def test_analyze_direction_records_response_time_for_all_pending_and_judges_only_those_with_pdf(
@@ -238,9 +243,11 @@ def test_analyze_direction_asks_about_transfer_only_for_cases_with_a_transfer_ro
 
     rows = {r["id_atencion"]: r for r in store.benchmark_result_rows(conn)}
     assert rows["has_transfer"]["had_transfer"] is True
+    assert rows["has_transfer"]["transferred_from_agents"] == ["Ana"]
     assert rows["has_transfer"]["informed_transfer"] is True
     assert rows["has_transfer"]["quality_ok"] is True
     assert rows["no_transfer"]["had_transfer"] is False
+    assert rows["no_transfer"]["transferred_from_agents"] == []
     assert rows["no_transfer"]["informed_transfer"] is None
     assert rows["no_transfer"]["quality_ok"] is True
 

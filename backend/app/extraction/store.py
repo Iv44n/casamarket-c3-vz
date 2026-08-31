@@ -222,6 +222,7 @@ CREATE TABLE IF NOT EXISTS benchmark_result (
     handled_well_for_complexity INTEGER,
     spelling_ok             INTEGER,
     had_transfer            INTEGER,
+    transferred_from_agents TEXT,
     informed_transfer       INTEGER,
     quality_ok              INTEGER,
     llm_model               TEXT,
@@ -470,13 +471,14 @@ def _migrate_benchmark_result_versioning(conn: DBConnection) -> None:
 
 
 # complexity/handled_well_for_complexity/had_transfer/informed_transfer/greeting_level/
-# spelling_ok no existian en benchmark_result antes de que se agregaran sus respectivas
-# evaluaciones -- mismo patron aditivo que _migrate_benchmark_result_columns (ALTER TABLE ADD
-# COLUMN, no un rebuild -- a diferencia de _migrate_benchmark_result_versioning, esto no toca
-# la PK). greeting_level reemplaza a la vieja columna has_greeting (booleana) -- has_greeting
-# sigue existiendo fisicamente en una Turso ya migrada (no se dropea, evita otro rebuild de PK)
-# pero deja de leerse/escribirse desde aca en adelante; ver already_benchmarked_ids sobre por
-# que su marcador de "ya juzgado" no depende de esta columna puntual.
+# spelling_ok/transferred_from_agents no existian en benchmark_result antes de que se
+# agregaran sus respectivas evaluaciones -- mismo patron aditivo que
+# _migrate_benchmark_result_columns (ALTER TABLE ADD COLUMN, no un rebuild -- a diferencia de
+# _migrate_benchmark_result_versioning, esto no toca la PK). greeting_level reemplaza a la
+# vieja columna has_greeting (booleana) -- has_greeting sigue existiendo fisicamente en una
+# Turso ya migrada (no se dropea, evita otro rebuild de PK) pero deja de leerse/escribirse
+# desde aca en adelante; ver already_benchmarked_ids sobre por que su marcador de "ya juzgado"
+# no depende de esta columna puntual.
 _NEW_BENCHMARK_QUALITY_COLUMNS: dict[str, str] = {
     "complexity": "TEXT",
     "handled_well_for_complexity": "INTEGER",
@@ -484,6 +486,7 @@ _NEW_BENCHMARK_QUALITY_COLUMNS: dict[str, str] = {
     "informed_transfer": "INTEGER",
     "greeting_level": "TEXT",
     "spelling_ok": "INTEGER",
+    "transferred_from_agents": "TEXT",
 }
 
 
@@ -510,6 +513,39 @@ def _migrate_benchmark_result_quality_columns(conn: DBConnection) -> None:
     )
     conn.execute("UPDATE benchmark_result SET had_transfer = 0 WHERE had_transfer IS NULL")
     conn.commit()
+    # transferred_from_agents -- mismo espiritu que el backfill de had_transfer arriba: es un
+    # hecho reconstruible ahora mismo contra `transfer`, no un juicio del LLM, asi que se
+    # backfillea de una en vez de dejarlo en NULL para siempre en filas viejas. No se puede
+    # hacer con un UPDATE ... WHERE IN (...) generico como had_transfer (cada caso necesita su
+    # propia lista, no un valor fijo) -- pero SI hace falta un UPDATE por LOTE, no uno por id:
+    # turso_serverless hace un round-trip HTTP por cada conn.execute(), asi que un UPDATE
+    # individual por id_atencion (con potencialmente cientos de casos pendientes en la Turso
+    # real) volvia esta migracion -- que corre en CUALQUIER get_connection(), incluida
+    # extraction/state.py's _hydrate_once() detras de GET /extraction/status -- en un colgado
+    # de varios minutos (confirmado en vivo el 2026-08-31 con faulthandler.dump_traceback_later,
+    # bloqueado en turso_serverless.session._post/ssl.do_handshake). Un solo UPDATE con CASE
+    # por lote logra lo mismo (valor distinto por fila) en un unico round-trip.
+    pending_ids = [
+        row[0]
+        for row in conn.execute(
+            "SELECT DISTINCT id_atencion FROM benchmark_result "
+            "WHERE transferred_from_agents IS NULL"
+        ).fetchall()
+    ]
+    for batch in _chunked(pending_ids, _BATCH_SIZE):
+        origins = transfer_origin_agents_for_cases(conn, batch)
+        case_sql = " ".join("WHEN ? THEN ?" for _ in batch)
+        case_params = [
+            value for id_atencion in batch for value in (id_atencion, json.dumps(origins.get(id_atencion, [])))
+        ]
+        placeholders = ", ".join("?" for _ in batch)
+        conn.execute(
+            f"UPDATE benchmark_result SET transferred_from_agents = CASE id_atencion {case_sql} END "
+            f"WHERE id_atencion IN ({placeholders}) AND transferred_from_agents IS NULL",
+            tuple(case_params) + tuple(batch),
+        )
+    if pending_ids:
+        conn.commit()
 
 
 def _init_schema(conn: DBConnection) -> None:
@@ -1016,22 +1052,33 @@ def already_benchmarked_ids(
     return {str(row[0]) for row in cursor.fetchall()}
 
 
-def transfer_ids_for_cases(conn: DBConnection, ids: list[str]) -> set[str]:
-    """IDs de `ids` que tienen al menos una fila en `transfer` -- se consulta ANTES de armar
-    el prompt del LLM (pipeline.analyze_direction) para saber a que casos corresponde
-    preguntarles por el aviso de transferencia. No filtra por direction -- transfer no
-    distingue attention/outboundattention, se correlaciona solo por id_atencion (ver
-    _upsert_transfer_rows). Justo despues del polling largo de massive.run_direction() -- ver
-    _execute_retrying."""
+def transfer_origin_agents_for_cases(
+    conn: DBConnection, ids: list[str]
+) -> dict[str, list[str]]:
+    """Para cada id de `ids` que tuvo al menos una transferencia, la lista de agentes_origen de
+    TODOS sus saltos (un caso puede pasar por mas de un agente antes de llegar al que figura
+    como `agente` en la fila -- ese es siempre el agente FINAL, el que cerro el caso), en orden
+    cronologico y sin deduplicar (si un caso volvio dos veces al mismo agente, eso es
+    informacion real). IDs sin ninguna transferencia simplemente no aparecen como key -- el
+    llamador usa `.get(id, [])`, y esa ausencia/presencia de key es tambien como se determina
+    `had_transfer` (ver pipeline.build_case_benchmarks), sin necesitar una consulta aparte solo
+    para eso. Se consulta ANTES de armar el prompt del LLM (pipeline.analyze_direction) --
+    justo despues del polling largo de massive.run_direction() -- ver _execute_retrying. No
+    filtra por direction -- transfer no distingue attention/outboundattention, se correlaciona
+    solo por id_atencion (ver _upsert_transfer_rows)."""
     if not ids:
-        return set()
+        return {}
     placeholders = ", ".join("?" for _ in ids)
     cursor = _execute_retrying(
         conn,
-        f"SELECT DISTINCT id_atencion FROM transfer WHERE id_atencion IN ({placeholders})",
+        "SELECT id_atencion, agente_origen FROM transfer "
+        f"WHERE id_atencion IN ({placeholders}) ORDER BY id_atencion, fecha, hora",
         tuple(ids),
     )
-    return {str(row[0]) for row in cursor.fetchall()}
+    origins: dict[str, list[str]] = {}
+    for id_atencion, agente_origen in cursor.fetchall():
+        origins.setdefault(str(id_atencion), []).append(agente_origen)
+    return origins
 
 
 _BENCHMARK_ALL_COLUMNS = (
@@ -1051,6 +1098,7 @@ _BENCHMARK_ALL_COLUMNS = (
     "handled_well_for_complexity",
     "spelling_ok",
     "had_transfer",
+    "transferred_from_agents",
     "informed_transfer",
     "quality_ok",
     "llm_model",
@@ -1074,9 +1122,12 @@ def record_benchmark_results(
     estado, first_response_seconds, greeting_level (str|None, "ninguno"/"casual"/"formal"),
     has_farewell (bool|None), complexity (str|None, "baja"/"media"/"alta"),
     handled_well_for_complexity (bool|None), spelling_ok (bool|None), had_transfer (bool --
-    hecho, nunca None, ver transfer_ids_for_cases), informed_transfer (bool|None -- None
-    cuando had_transfer es False, no aplica), llm_model, llm_raw, llm_notes, row_json (dict --
-    la fila completa de attention/outboundattention, de donde se extraen
+    hecho, nunca None, ver transfer_origin_agents_for_cases), transferred_from_agents
+    (list[str] -- hecho, nunca None (lista vacia si no hubo transferencia), los agentes_origen
+    de TODOS los saltos que tuvo el caso antes de llegar al `agente` final que ya muestra la
+    fila -- se guarda como JSON), informed_transfer (bool|None -- None cuando had_transfer es
+    False, no aplica), llm_model, llm_raw, llm_notes, row_json (dict -- la fila completa de
+    attention/outboundattention, de donde se extraen
     `fecha_final`/`hora_final`/`cliente` para poder filtrar/mostrar sin tener que parsear
     row_json en el llamador -- `fecha_final` es la fecha REAL de cierre del caso, no cuando se
     corrio el analisis -- ver first_recorded_at/analyzed_at, que son fechas de proceso, no de
@@ -1140,6 +1191,7 @@ def record_benchmark_results(
                 _sql_bool(handled_well_for_complexity),
                 _sql_bool(spelling_ok),
                 _sql_bool(had_transfer),
+                json.dumps(row.get("transferred_from_agents") or []),
                 _sql_bool(informed_transfer),
                 _sql_bool(quality_ok),
                 row.get("llm_model"),
@@ -1163,8 +1215,8 @@ def record_benchmark_results(
             # _execute_retrying, no conn.execute() liso -- esta funcion corre justo despues
             # del loop de juicios del LLM en analyze_direction (que puede tardar bastante con
             # muchos casos concurrentes), mismo riesgo de stream expirado que
-            # transfer_ids_for_cases. Reintentar SOLO este batch (no la funcion entera) evita
-            # duplicar un batch anterior que ya se haya insertado bien.
+            # transfer_origin_agents_for_cases. Reintentar SOLO este batch (no la funcion
+            # entera) evita duplicar un batch anterior que ya se haya insertado bien.
             _execute_retrying(conn, sql, params)
         conn.commit()
 
@@ -1192,6 +1244,7 @@ _BENCHMARK_RESULT_COLUMNS = (
     "handled_well_for_complexity",
     "spelling_ok",
     "had_transfer",
+    "transferred_from_agents",
     "informed_transfer",
     "quality_ok",
     "llm_notes",
@@ -1253,6 +1306,8 @@ def benchmark_result_rows(
             "quality_ok",
         ):
             row[bool_column] = None if row[bool_column] is None else bool(row[bool_column])
+        raw_agents = row["transferred_from_agents"]
+        row["transferred_from_agents"] = json.loads(raw_agents) if raw_agents else []
         rows.append(row)
     return rows
 

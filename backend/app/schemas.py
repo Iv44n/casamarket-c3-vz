@@ -68,6 +68,7 @@ class BenchmarkCaseResult(BaseModel):
     handled_well_for_complexity: bool | None
     spelling_ok: bool | None
     had_transfer: bool
+    transferred_from_agents: list[str]
     informed_transfer: bool | None
     quality_ok: bool | None
     llm_notes: str | None
