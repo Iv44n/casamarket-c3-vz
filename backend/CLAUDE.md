@@ -255,12 +255,14 @@ symmetric**:
   today. Simplest of the three: no direction, no button-variant dropdown.
 
 All three have a separate, unrelated **async** path too (a `-massive`/`calls/massive` endpoint -> a
-job queued for later pickup, can take hours) -- **not implemented** for any of the three families
-right now: this backend used to implement it for atenciones (`c3/massive.py`, a dedicated
-"generar reporte masivo" cycle), but that feature was removed (2026-08-18) since it wasn't needed for
-the moment -- see the git history if it needs to come back. `recon/rutas_reportes.md` maps 25+ other
-C3 report routes that aren't implemented at all yet -- new ones belong in `c3/`, following this same
-reverse-engineering approach (read the page's JS, don't guess).
+job queued for later pickup, can take hours) -- **not implemented** for llamadas/contactos. For
+atenciones it WAS removed (2026-08-18) for a while, but came back (`c3/massive.py`) as the
+foundation of the `benchmarks` domain below (LLM quality analysis needs the full PDF conversation,
+which only the massive export includes) -- this module is not documented in depth here yet, that's
+a real gap; see `app/benchmarks/` and its own module docstrings/tests in the meantime.
+`recon/rutas_reportes.md` maps 25+ other C3 report routes that aren't implemented at all yet -- new
+ones belong in `c3/`, following this same reverse-engineering approach (read the page's JS, don't
+guess).
 
 Of each export's button variants, only **`FORM`** ("Incluir formulario") is in scope -- a deliberate,
 user-confirmed narrowing, not a technical constraint. `selected_download_type` /
