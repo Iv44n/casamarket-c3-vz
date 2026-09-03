@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.auth import store as auth_store
+from app.benchmarks import state as benchmark_state
 from app.main import app
 
 
@@ -19,6 +20,10 @@ def test_health_is_public_and_returns_ok(tmp_path: Path, monkeypatch: pytest.Mon
         return conn
 
     monkeypatch.setattr(auth_store, "get_connection", _fake_auth_connection)
+    # lifespan tambien llama benchmark_state.reconcile_startup_state(), que pega contra
+    # extraction.store.get_connection() (Turso real) -- no-opeada aca, no es lo que este
+    # archivo prueba.
+    monkeypatch.setattr(benchmark_state, "reconcile_startup_state", lambda: None)
 
     with TestClient(app) as client:
         response = client.get("/health")

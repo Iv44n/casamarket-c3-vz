@@ -1350,6 +1350,23 @@ def finish_benchmark_run(
     conn.commit()
 
 
+def reconcile_orphaned_benchmark_runs(
+    conn: DBConnection, now: str, error_message: str
+) -> list[int]:
+    """IDs de benchmark_run con `finished_at IS NULL` -- arrancaron pero nunca llegaron a
+    finish_benchmark_run() porque el proceso murio a mitad de camino (ej. Render free tier
+    reiniciando el dyno durante una corrida de horas). Sin esto quedan "corriendo" para
+    siempre en el historial -- se marcan como fallidas con `error_message` en vez de eso. Se
+    llama una sola vez al arrancar el proceso, ver benchmarks.state.reconcile_startup_state."""
+    ids = [
+        row[0]
+        for row in conn.execute("SELECT id FROM benchmark_run WHERE finished_at IS NULL").fetchall()
+    ]
+    for run_id in ids:
+        finish_benchmark_run(conn, run_id, now, False, "[]", error=error_message)
+    return ids
+
+
 def list_benchmark_runs(conn: DBConnection, limit: int = 50) -> list[dict]:
     cursor = conn.execute(
         "SELECT id, started_at, finished_at, ok, date_from, date_to, force_reanalyze, "

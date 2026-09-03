@@ -42,6 +42,11 @@ def client(tmp_path, monkeypatch: pytest.MonkeyPatch):
         return conn
 
     monkeypatch.setattr(auth_store, "get_connection", _fake_auth_connection)
+    # lifespan tambien llama state.reconcile_startup_state(), que pega contra
+    # extraction.store.get_connection() (Turso real) -- no-opeada aca, los tests de este
+    # archivo que necesitan una benchmark_result/benchmark_run real remonkeypatchean
+    # store.get_connection por su cuenta mas abajo.
+    monkeypatch.setattr(state, "reconcile_startup_state", lambda: None)
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()

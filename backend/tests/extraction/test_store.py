@@ -1565,6 +1565,43 @@ def test_finish_benchmark_run_records_the_error_on_failure():
     assert runs[0]["error"] == "LLM no configurado"
 
 
+def test_reconcile_orphaned_benchmark_runs_marks_unfinished_runs_as_failed():
+    conn = _conn()
+    orphaned_id = store.create_benchmark_run(
+        conn, "2026-08-27T00:00:00", None, None, False, ["attention"]
+    )
+    finished_id = store.create_benchmark_run(
+        conn, "2026-08-26T00:00:00", None, None, False, ["attention"]
+    )
+    store.finish_benchmark_run(conn, finished_id, "2026-08-26T00:05:00", True, "[]")
+
+    reconciled = store.reconcile_orphaned_benchmark_runs(
+        conn, "2026-08-28T00:00:00", "Interrumpido: el servidor se reinicio."
+    )
+
+    assert reconciled == [orphaned_id]
+    runs = {r["id"]: r for r in store.list_benchmark_runs(conn)}
+    assert runs[orphaned_id]["finished_at"] == "2026-08-28T00:00:00"
+    assert runs[orphaned_id]["ok"] is False
+    assert runs[orphaned_id]["error"] == "Interrumpido: el servidor se reinicio."
+    # La corrida que si habia terminado bien no se toca.
+    assert runs[finished_id]["finished_at"] == "2026-08-26T00:05:00"
+    assert runs[finished_id]["ok"] is True
+    assert runs[finished_id]["error"] is None
+
+
+def test_reconcile_orphaned_benchmark_runs_returns_empty_list_when_nothing_is_orphaned():
+    conn = _conn()
+    run_id = store.create_benchmark_run(
+        conn, "2026-08-27T00:00:00", None, None, False, ["attention"]
+    )
+    store.finish_benchmark_run(conn, run_id, "2026-08-27T00:05:00", True, "[]")
+
+    reconciled = store.reconcile_orphaned_benchmark_runs(conn, "2026-08-28T00:00:00", "x")
+
+    assert reconciled == []
+
+
 def test_list_benchmark_runs_orders_most_recent_first_and_respects_limit():
     conn = _conn()
     for i in range(3):

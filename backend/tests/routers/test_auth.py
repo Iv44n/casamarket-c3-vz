@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app import config
 from app.auth import rate_limit, security, store
+from app.benchmarks import state as benchmark_state
 from app.config import AuthConfig
 from app.extraction import state
 from app.main import app
@@ -39,6 +40,10 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(store, "get_connection", _get_connection)
     monkeypatch.setattr(config, "load_auth_config", lambda: _AUTH_CONFIG)
+    # lifespan tambien llama benchmark_state.reconcile_startup_state(), que pega contra
+    # extraction.store.get_connection() (Turso real) -- no-opeada aca, no es lo que este
+    # archivo prueba.
+    monkeypatch.setattr(benchmark_state, "reconcile_startup_state", lambda: None)
     with TestClient(app) as c:
         yield c
 

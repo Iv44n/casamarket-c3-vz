@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import config
 from .auth import store as auth_store
+from .benchmarks import state as benchmark_state
 from .routers import auth, benchmarks, data, runs
 
 logging.basicConfig(
@@ -65,6 +66,11 @@ async def lifespan(app: FastAPI):
             logger.info("Bootstrap: cuenta admin '%s' creada", seeded.username)
     except RuntimeError as exc:
         logger.warning("Auth bootstrap salteado: %s", exc)
+    # Reconciliar corridas de benchmarks que hayan quedado "running" para siempre por un
+    # reinicio del proceso a mitad de camino (ver benchmark_state.reconcile_startup_state) --
+    # antes de aceptar requests, mismo motivo que el bootstrap de arriba: no debe correr
+    # a destiempo con el primer POST /benchmarks/run real.
+    benchmark_state.reconcile_startup_state()
     yield
 
 

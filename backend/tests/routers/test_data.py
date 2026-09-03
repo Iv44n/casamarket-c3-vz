@@ -10,6 +10,7 @@ from app.main import app
 from app import config
 from app.auth import store as auth_store
 from app.auth.dependencies import CurrentUser, get_current_user
+from app.benchmarks import state as benchmark_state
 from app.extraction import store
 
 
@@ -28,6 +29,10 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         return conn
 
     monkeypatch.setattr(auth_store, "get_connection", _fake_auth_connection)
+    # lifespan tambien llama benchmark_state.reconcile_startup_state(), que pega contra
+    # extraction.store.get_connection() (Turso real) -- no-opeada aca, no es lo que este
+    # archivo prueba.
+    monkeypatch.setattr(benchmark_state, "reconcile_startup_state", lambda: None)
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()

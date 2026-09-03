@@ -98,6 +98,59 @@ def start_benchmark_run(
     return running_status
 
 
+def reconcile_startup_state() -> None:
+    """Se llama una sola vez al arrancar el proceso (main.py's lifespan), ANTES de aceptar
+    requests -- si el proceso anterior murio a mitad de una corrida de benchmarks (Render free
+    tier reiniciando el dyno durante una corrida que puede tardar horas, por ejemplo),
+    _run_worker() nunca llego a su except/finally: ni la fila de benchmark_run
+    (finished_at NULL) ni el sync_status persistido (phase="running") se actualizan solos, y
+    quedan mintiendo para siempre -- el proceso nuevo tiene su propio _lock libre, asi que
+    ademas GET /benchmarks/run/status terminaria re-hidratando ese "running" viejo la primera
+    vez que alguien lo consulte (ver benchmark_run_status() mas abajo), aunque no haya nada
+    corriendo de verdad. Esto marca ambos como fallidos con un error claro en vez de dejarlos
+    "corriendo" indefinidamente -- no reintenta la corrida sola, un admin la vuelve a disparar
+    a mano si hace falta."""
+    global _status, _hydrated
+    now = datetime.now(config.TZ).isoformat()
+    error_message = "Interrumpido: el servidor se reinicio antes de que la corrida terminara."
+
+    try:
+        conn = store.get_connection()
+        try:
+            reconciled_ids = store.reconcile_orphaned_benchmark_runs(conn, now, error_message)
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("No se pudieron reconciliar corridas de benchmarks huerfanas -- %s", exc)
+        reconciled_ids = []
+    if reconciled_ids:
+        logger.warning(
+            "Benchmarks: %d corrida(s) quedaron interrumpidas por un reinicio anterior (ids %s)",
+            len(reconciled_ids),
+            reconciled_ids,
+        )
+
+    try:
+        conn = store.get_connection()
+        try:
+            data = store.load_sync_status(conn, _KIND_BENCHMARK_RUN_STATUS)
+        finally:
+            conn.close()
+        persisted = BenchmarkRunStatus.model_validate(data) if data is not None else None
+        if persisted is not None and persisted.phase == "running":
+            error_status = BenchmarkRunStatus(
+                phase="error",
+                started_at=persisted.started_at,
+                finished_at=now,
+                error=error_message,
+            )
+            _persist_status(error_status)
+            _status = error_status
+    except Exception as exc:
+        logger.warning("No se pudo reconciliar el estado de benchmarks persistido -- %s", exc)
+    _hydrated = True
+
+
 def benchmark_run_status() -> BenchmarkRunStatus:
     global _status, _hydrated
     if _status.phase == "idle" and not _hydrated:
