@@ -145,12 +145,10 @@ def analyze_direction(
     graba. Envuelto en try/except propio para que una direccion fallando no bloquee el
     intento de la otra (mismo espiritu que extraction.service._run_jobs).
 
-    `date_from`/`date_to` acotan que casos locales se consideran candidatos -- si no se dan,
-    cae al lookback fijo de siempre (`lookback_days` dias atras hasta hoy). OJO: el reporte
-    masivo de C3 (`massive.run_direction` mas abajo) sigue devolviendo SIEMPRE el zip de hoy
-    -- no se generalizo a un rango real (ver CLAUDE.md/el plan de esta feature) -- asi que un
-    rango que no incluya hoy no va a conseguir PDFs nuevos para esos casos, por mas que se
-    reintente. `force_reanalyze=True` no excluye los casos que ya tienen veredicto real (deja
+    `date_from`/`date_to` acotan que casos locales se consideran candidatos, Y ademas scopean
+    el reporte masivo de C3 en si (`massive.run_direction` mas abajo le pasa el mismo rango) --
+    si no se dan, cae al lookback fijo de siempre (`lookback_days` dias atras hasta hoy).
+    `force_reanalyze=True` no excluye los casos que ya tienen veredicto real (deja
     que already_benchmarked_ids no se aplique), para poder re-juzgarlos; ver el filtro despues
     de construir `rows_to_store` que evita que un caso sin PDF ESTA vez pise un veredicto
     bueno ya guardado."""
@@ -175,6 +173,8 @@ def analyze_direction(
         result = massive.run_direction(
             c3_session,
             direction,
+            date_from=effective_date_from,
+            date_to=effective_date_to,
             poll_interval_seconds=poll_interval_seconds,
             timeout_seconds=timeout_seconds,
             sleep=sleep,

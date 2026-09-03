@@ -47,6 +47,23 @@ def test_attention_job_uses_today_00_00_to_23_59_and_inbound_type():
     assert job.params["with_form"] == 1
 
 
+def test_attention_range_params_uses_the_given_range_not_today():
+    params = downloads.attention_range_params("INBOUND", "2026-08-17", "2026-08-18")
+
+    assert params["date_init"] == "2026-08-17 00:00"
+    assert params["date_end"] == "2026-08-18 23:59"
+    assert params["type"] == "INBOUND"
+
+
+def test_attention_range_params_matches_attention_base_params_shape_for_a_single_day():
+    # Mismos campos/valores default (agent, campaign, etc.) que attention_base_params -- solo
+    # cambia como se calculan date_init/date_end.
+    single_day = downloads.attention_base_params("INBOUND", datetime.date(2026, 8, 18))
+    range_params = downloads.attention_range_params("INBOUND", "2026-08-18", "2026-08-18")
+
+    assert range_params == single_day
+
+
 def test_outbound_attention_job_differs_only_in_type():
     inbound = _job("attention")
     outbound = _job("outboundattention")

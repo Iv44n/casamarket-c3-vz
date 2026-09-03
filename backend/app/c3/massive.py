@@ -65,9 +65,9 @@ def _list_jobs(sess: C3Session) -> list[dict]:
         ) from exc
 
 
-def _trigger(sess: C3Session, name: str) -> None:
+def _trigger(sess: C3Session, name: str, date_from: str, date_to: str) -> None:
     mechanism = reports.EXPORT_MECHANISMS[name]
-    params = downloads.attention_base_params(mechanism.type_param_value)
+    params = downloads.attention_range_params(mechanism.type_param_value, date_from, date_to)
     params["with_form"] = 0
 
     response = _get_with_relogin(
@@ -84,12 +84,19 @@ def _trigger(sess: C3Session, name: str) -> None:
         raise MassiveError(f"El servidor rechazo el job masivo de '{name}': {body}")
 
 
-def trigger_and_track(sess: C3Session, name: str) -> int:
-    """Dispara el reporte masivo de `name` y devuelve el id del job nuevo que aparece en
-    get_massives. Sin persistencia a archivo -- el llamador (wait_for_completion) guarda
-    el id en una variable local, no algo que deba sobrevivir entre llamadas HTTP."""
+def trigger_and_track(sess: C3Session, name: str, date_from: str, date_to: str) -> int:
+    """Dispara el reporte masivo de `name` (scopeado a [date_from, date_to], ISO
+    'YYYY-MM-DD') y devuelve el id del job nuevo que aparece en get_massives. Antes _trigger()
+    nunca le pasaba una fecha a attention_base_params(), asi que siempre devolvia el zip de
+    hoy sin importar que rango pidiera el llamador (confirmado en vivo el 2026-09-03, PDFs
+    fechados hoy en una corrida pedida para ayer) -- ver attention_range_params(). Confirmado
+    tambien en vivo que el fix funciona: pedir [2026-09-02, 2026-09-02] trajo un zip de 186
+    PDFs, 178 de ellos (96%) con fecha_final real 02/09/2026 -- el endpoint masivo SI respeta
+    el rango, igual que el export sincronico regular. Sin persistencia a archivo -- el
+    llamador (wait_for_completion) guarda el id en una variable local, no algo que deba
+    sobrevivir entre llamadas HTTP."""
     before_ids = {job["id"] for job in _list_jobs(sess)}
-    _trigger(sess, name)
+    _trigger(sess, name, date_from, date_to)
 
     new_ids = {job["id"] for job in _list_jobs(sess)} - before_ids
     if not new_ids:
@@ -116,6 +123,8 @@ def wait_for_completion(
     name: str,
     job_id: int,
     *,
+    date_from: str,
+    date_to: str,
     poll_interval_seconds: float,
     timeout_seconds: float,
     sleep=time.sleep,
@@ -146,7 +155,7 @@ def wait_for_completion(
                     f"seguidas -- {note}."
                 )
             retried = True
-            current_id = trigger_and_track(sess, name)
+            current_id = trigger_and_track(sess, name, date_from, date_to)
             continue
 
         if time.monotonic() >= deadline:
@@ -161,17 +170,25 @@ def run_direction(
     sess: C3Session,
     name: str,
     *,
+    date_from: str,
+    date_to: str,
     poll_interval_seconds: float,
     timeout_seconds: float,
     sleep=time.sleep,
 ) -> downloads.DownloadResult:
     """trigger_and_track -> wait_for_completion -> download, bloqueante. La unica funcion
-    publica que el pipeline de benchmarks necesita llamar por direccion."""
-    job_id = trigger_and_track(sess, name)
+    publica que el pipeline de benchmarks necesita llamar por direccion. `date_from`/`date_to`
+    (ISO 'YYYY-MM-DD') son requeridos, sin default a "hoy" -- el llamador (pipeline.
+    analyze_direction) ya calcula siempre un rango efectivo, asi que forzar el parametro
+    explicito evita que un caller nuevo se olvide de pasarlo y vuelva a caer en el bug viejo
+    (el reporte masivo ignorando en silencio el rango pedido)."""
+    job_id = trigger_and_track(sess, name, date_from, date_to)
     job = wait_for_completion(
         sess,
         name,
         job_id,
+        date_from=date_from,
+        date_to=date_to,
         poll_interval_seconds=poll_interval_seconds,
         timeout_seconds=timeout_seconds,
         sleep=sleep,

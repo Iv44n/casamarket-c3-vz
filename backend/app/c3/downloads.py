@@ -41,11 +41,10 @@ class DownloadResult:
     elapsed_seconds: float
 
 
-def attention_base_params(type_param_value: str, target_date: date | None = None) -> dict:
-    day = (target_date or config.hoy()).isoformat()
+def _attention_params(type_param_value: str, date_init: str, date_end: str) -> dict:
     return {
-        "date_init": f"{day} 00:00",
-        "date_end": f"{day} 23:59",
+        "date_init": date_init,
+        "date_end": date_end,
         "agent": "",
         "campaign": "",
         "attention_id": "",
@@ -58,6 +57,21 @@ def attention_base_params(type_param_value: str, target_date: date | None = None
         "vip_only": "false",
         "labels": "",
     }
+
+
+def attention_base_params(type_param_value: str, target_date: date | None = None) -> dict:
+    day = (target_date or config.hoy()).isoformat()
+    return _attention_params(type_param_value, f"{day} 00:00", f"{day} 23:59")
+
+
+def attention_range_params(type_param_value: str, date_from: str, date_to: str) -> dict:
+    """Como attention_base_params, pero para un RANGO real (date_init distinto de date_end,
+    ambos ISO 'YYYY-MM-DD') -- usado por c3/massive.py para pedir el reporte masivo scopeado
+    al rango real de una corrida de benchmarks, en vez de siempre "hoy" (ver ese modulo, y el
+    porque: confirmado en vivo el 2026-09-03 que el reporte masivo ignoraba el rango pedido y
+    siempre devolvia el zip de hoy, porque _trigger() nunca le pasaba una fecha a
+    attention_base_params -- quedaba en su default de config.hoy())."""
+    return _attention_params(type_param_value, f"{date_from} 00:00", f"{date_to} 23:59")
 
 
 def _attention_job(name: str, target_date: date | None = None) -> DownloadJob:

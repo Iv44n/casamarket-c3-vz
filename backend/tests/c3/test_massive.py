@@ -57,7 +57,7 @@ def test_trigger_and_track_returns_the_new_job_id():
         )
     )
 
-    job_id = massive.trigger_and_track(sess, "attention")
+    job_id = massive.trigger_and_track(sess, "attention", "2026-08-18", "2026-08-18")
 
     assert job_id == 1
 
@@ -74,7 +74,27 @@ def test_trigger_and_track_raises_when_no_new_job_appears():
     )
 
     with pytest.raises(massive.MassiveError, match="no aparecio"):
-        massive.trigger_and_track(sess, "attention")
+        massive.trigger_and_track(sess, "attention", "2026-08-18", "2026-08-18")
+
+
+def test_trigger_sends_the_requested_date_range_not_always_today():
+    # Regresion del bug confirmado en vivo el 2026-09-03: _trigger() nunca le pasaba una
+    # fecha a attention_base_params(), asi que el reporte masivo siempre pedia "hoy" sin
+    # importar que rango pidiera el llamador.
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == ATTENTION_MASSIVE:
+            captured["date_init"] = request.url.params["date_init"]
+            captured["date_end"] = request.url.params["date_end"]
+        return _json_response({"success": True, "message": "ok"})
+
+    sess = _session(httpx.Client(base_url="https://fake.test", transport=httpx.MockTransport(handler)))
+
+    massive._trigger(sess, "attention", "2026-08-17", "2026-08-18")
+
+    assert captured["date_init"] == "2026-08-17 00:00"
+    assert captured["date_end"] == "2026-08-18 23:59"
 
 
 def test_trigger_raises_when_server_reports_failure():
@@ -85,7 +105,7 @@ def test_trigger_raises_when_server_reports_failure():
     )
 
     with pytest.raises(massive.MassiveError):
-        massive._trigger(sess, "attention")
+        massive._trigger(sess, "attention", "2026-08-18", "2026-08-18")
 
 
 def test_list_jobs_raises_on_non_json_response():
@@ -101,7 +121,14 @@ def test_wait_for_completion_returns_job_when_completed_immediately():
     )
 
     job = massive.wait_for_completion(
-        sess, "attention", 5, poll_interval_seconds=0, timeout_seconds=10, sleep=lambda s: None
+        sess,
+        "attention",
+        5,
+        date_from="2026-08-18",
+        date_to="2026-08-18",
+        poll_interval_seconds=0,
+        timeout_seconds=10,
+        sleep=lambda s: None,
     )
 
     assert job["status"] == "COMPLETED"
@@ -123,6 +150,8 @@ def test_wait_for_completion_polls_while_pending():
         sess,
         "attention",
         5,
+        date_from="2026-08-18",
+        date_to="2026-08-18",
         poll_interval_seconds=1.5,
         timeout_seconds=10,
         sleep=sleeps.append,
@@ -151,7 +180,14 @@ def test_wait_for_completion_retries_once_on_failure_then_succeeds():
     )
 
     job = massive.wait_for_completion(
-        sess, "attention", 5, poll_interval_seconds=0, timeout_seconds=10, sleep=lambda s: None
+        sess,
+        "attention",
+        5,
+        date_from="2026-08-18",
+        date_to="2026-08-18",
+        poll_interval_seconds=0,
+        timeout_seconds=10,
+        sleep=lambda s: None,
     )
 
     assert job["id"] == 7
@@ -181,6 +217,8 @@ def test_wait_for_completion_raises_after_second_failure():
             sess,
             "attention",
             5,
+            date_from="2026-08-18",
+            date_to="2026-08-18",
             poll_interval_seconds=0,
             timeout_seconds=10,
             sleep=lambda s: None,
@@ -195,6 +233,8 @@ def test_wait_for_completion_raises_on_timeout():
             sess,
             "attention",
             5,
+            date_from="2026-08-18",
+            date_to="2026-08-18",
             poll_interval_seconds=0,
             timeout_seconds=0,
             sleep=lambda s: None,
@@ -234,7 +274,13 @@ def test_run_direction_triggers_waits_and_downloads():
     )
 
     result = massive.run_direction(
-        sess, "attention", poll_interval_seconds=0, timeout_seconds=10, sleep=lambda s: None
+        sess,
+        "attention",
+        date_from="2026-08-18",
+        date_to="2026-08-18",
+        poll_interval_seconds=0,
+        timeout_seconds=10,
+        sleep=lambda s: None,
     )
 
     assert result.path.read_bytes() == body
@@ -293,7 +339,7 @@ def test_trigger_relogins_once_on_401_and_retries():
     initial_client = httpx.Client(base_url="https://fake.test", transport=transport)
     sess = massive.C3Session(FAKE_CREDS, transport=transport, client=initial_client)
 
-    massive._trigger(sess, "attention")  # no lanza
+    massive._trigger(sess, "attention", "2026-08-18", "2026-08-18")  # no lanza
 
     assert sess.client is not initial_client
 
