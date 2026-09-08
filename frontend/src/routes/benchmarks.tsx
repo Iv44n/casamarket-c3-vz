@@ -91,8 +91,6 @@ import type {
   LlmSettings
 } from '#/server/schemas'
 import {
-  AGENT_LIMIT_OPTIONS,
-  type AgentLimit,
   BENCHMARK_DIRECTION_LABEL,
   type BenchmarkDirection,
   type BenchmarkDirectionFilter,
@@ -106,9 +104,9 @@ export const Route = createFileRoute('/benchmarks')({
   ssr: 'data-only',
   validateSearch: benchmarksSearchSchema,
   // Sin loaderDeps a proposito: si el loader reaccionara al search, TanStack Router
-  // muestra su spinner de pagina completa en cada cambio de filtro (incluidos
-  // agentLimit/agentes, que ni siquiera pegan al servidor -- se resuelven client-side
-  // mas abajo). El resultado de la tabla se refetchea a mano en el componente, igual
+  // muestra su spinner de pagina completa en cada cambio de filtro (incluido
+  // agentes, que ni siquiera pega al servidor -- se resuelve client-side mas
+  // abajo). El resultado de la tabla se refetchea a mano en el componente, igual
   // que ya hacen /atenciones y /tendencias-historicas.
   loader: async ({ location }) => {
     const search = location.search as BenchmarksSearch
@@ -227,16 +225,6 @@ function BenchmarksPage() {
     refetchResults(search.direction, search.date, search.dateEnd)
   }, [search.direction, search.date, search.dateEnd, refetchResults])
 
-  const totals = benchmarkTotals(results)
-  const agentRanking = buildAgentBenchmarkRanking(results, search.agentLimit)
-  const transferNotifications = buildTransferNotificationRanking(
-    results,
-    search.agentLimit
-  )
-  const topQualityAgent = bestQualityAgent(
-    buildAgentBenchmarkRanking(results, 'all')
-  )
-
   const availableAgentes = useMemo(
     () =>
       [...new Set(results.map(row => benchmarkAgentLabel(row.agente)))].sort(
@@ -244,6 +232,9 @@ function BenchmarksPage() {
       ),
     [results]
   )
+  // Filtrado por agentes aplicado ANTES de derivar KPIs/ranking -- asi el filtro
+  // es realmente global a la seccion Resultados (KPIs, grafico y tabla quedan en
+  // sync) en vez de pegarle solo a la tabla de abajo.
   const filteredResults = useMemo(
     () =>
       search.agentes === 'all'
@@ -255,6 +246,15 @@ function BenchmarksPage() {
           ),
     [results, search.agentes]
   )
+
+  const totals = benchmarkTotals(filteredResults)
+  const agentRanking = buildAgentBenchmarkRanking(filteredResults, 'all')
+  const transferNotifications = buildTransferNotificationRanking(
+    filteredResults,
+    'all'
+  )
+  const topQualityAgent = bestQualityAgent(agentRanking)
+
   const [resultsPage, setResultsPage] = useState(1)
   const [resultsPageSize, setResultsPageSize] = useState<50 | 100>(50)
   const resultsTotalPages = Math.max(
@@ -336,9 +336,94 @@ function BenchmarksPage() {
         </TabsList>
 
         <TabsContent value="resultados" className="mt-4">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <span className="text-sm font-medium text-muted-foreground">
+              Dirección
+            </span>
+            <Select
+              value={search.direction}
+              onValueChange={value => {
+                setResultsPage(1)
+                navigate({
+                  search: prev => ({
+                    ...prev,
+                    direction: value as BenchmarkDirectionFilter
+                  })
+                })
+              }}
+            >
+              <SelectTrigger className="w-32">
+                <SelectValue>
+                  {() =>
+                    search.direction === 'all'
+                      ? 'Todas'
+                      : BENCHMARK_DIRECTION_LABEL[search.direction]
+                  }
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas</SelectItem>
+                <SelectItem value="attention">Entrantes</SelectItem>
+                <SelectItem value="outboundattention">Salientes</SelectItem>
+              </SelectContent>
+            </Select>
+            {availableAgentes.length > 0 && (
+              <>
+                <span className="text-sm font-medium text-muted-foreground">
+                  Agentes
+                </span>
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <Button
+                        variant="outline"
+                        className="w-40 justify-between font-normal"
+                      />
+                    }
+                  >
+                    <span className="min-w-0 truncate">
+                      {agentesFilterLabel}
+                    </span>
+                    <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-64">
+                    <MultiSelectQuickActions
+                      onSelectAll={selectAllAgentes}
+                      onSelectNone={selectNoAgentes}
+                    />
+                    {availableAgentes.map(agenteName => (
+                      <Label
+                        key={agenteName}
+                        className="cursor-default items-start rounded-xl px-3 py-2 font-normal hover:bg-accent"
+                      >
+                        <Checkbox
+                          checked={isAgenteChecked(agenteName)}
+                          onCheckedChange={() => toggleAgente(agenteName)}
+                          className="mt-0.5"
+                        />
+                        {agenteName}
+                      </Label>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
+            )}
+            <span className="text-sm font-medium text-muted-foreground">
+              Fecha
+            </span>
+            <DateRangeFilter
+              date={search.date}
+              dateEnd={search.dateEnd}
+              onChange={(date, dateEnd) => {
+                setResultsPage(1)
+                navigate({ search: prev => ({ ...prev, date, dateEnd }) })
+              }}
+            />
+          </div>
+
           <div
             className={cn(
-              'grid grid-cols-2 gap-4 transition-opacity lg:grid-cols-4',
+              'mt-4 grid grid-cols-2 gap-4 transition-opacity lg:grid-cols-4',
               resultsLoading && 'opacity-50'
             )}
           >
@@ -424,51 +509,14 @@ function BenchmarksPage() {
                   transferir.
                 </CardDescription>
               </div>
-              <div className="flex flex-col items-end gap-2">
-                {topQualityAgent && (
-                  <Badge variant="secondary" className="max-w-64">
-                    <span className="min-w-0 truncate">
-                      Mejor calidad: {topQualityAgent.agente} (
-                      {Math.round(topQualityAgent.ownConductOkPct ?? 0)}%)
-                    </span>
-                  </Badge>
-                )}
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-muted-foreground">
-                    Top agentes
+              {topQualityAgent && (
+                <Badge variant="secondary" className="max-w-64">
+                  <span className="min-w-0 truncate">
+                    Mejor calidad: {topQualityAgent.agente} (
+                    {Math.round(topQualityAgent.ownConductOkPct ?? 0)}%)
                   </span>
-                  <Select
-                    value={String(search.agentLimit)}
-                    onValueChange={value =>
-                      navigate({
-                        search: prev => ({
-                          ...prev,
-                          agentLimit: (value === 'all'
-                            ? 'all'
-                            : Number(value)) as AgentLimit
-                        })
-                      })
-                    }
-                  >
-                    <SelectTrigger className="w-36">
-                      <SelectValue>
-                        {() =>
-                          search.agentLimit === 'all'
-                            ? 'Todos'
-                            : `Top ${search.agentLimit}`
-                        }
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {AGENT_LIMIT_OPTIONS.map(option => (
-                        <SelectItem key={option} value={String(option)}>
-                          {option === 'all' ? 'Todos' : `Top ${option}`}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
+                </Badge>
+              )}
             </CardHeader>
             <CardContent
               className={cn(
@@ -490,98 +538,12 @@ function BenchmarksPage() {
           </Card>
 
           <Card className="mt-4">
-            <CardHeader className="flex-row items-center justify-between">
-              <div>
-                <CardTitle>Detalle por caso</CardTitle>
-                <CardDescription>
-                  {filteredResults.length} caso
-                  {filteredResults.length === 1 ? '' : 's'} en el rango elegido.
-                </CardDescription>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-muted-foreground">
-                  Dirección
-                </span>
-                <Select
-                  value={search.direction}
-                  onValueChange={value => {
-                    setResultsPage(1)
-                    navigate({
-                      search: prev => ({
-                        ...prev,
-                        direction: value as BenchmarkDirectionFilter
-                      })
-                    })
-                  }}
-                >
-                  <SelectTrigger className="w-32">
-                    <SelectValue>
-                      {() =>
-                        search.direction === 'all'
-                          ? 'Todas'
-                          : BENCHMARK_DIRECTION_LABEL[search.direction]
-                      }
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Todas</SelectItem>
-                    <SelectItem value="attention">Entrantes</SelectItem>
-                    <SelectItem value="outboundattention">Salientes</SelectItem>
-                  </SelectContent>
-                </Select>
-                {availableAgentes.length > 0 && (
-                  <>
-                    <span className="text-sm font-medium text-muted-foreground">
-                      Agentes
-                    </span>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        render={
-                          <Button
-                            variant="outline"
-                            className="w-40 justify-between font-normal"
-                          />
-                        }
-                      >
-                        <span className="min-w-0 truncate">
-                          {agentesFilterLabel}
-                        </span>
-                        <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="min-w-64">
-                        <MultiSelectQuickActions
-                          onSelectAll={selectAllAgentes}
-                          onSelectNone={selectNoAgentes}
-                        />
-                        {availableAgentes.map(agenteName => (
-                          <Label
-                            key={agenteName}
-                            className="cursor-default items-start rounded-xl px-3 py-2 font-normal hover:bg-accent"
-                          >
-                            <Checkbox
-                              checked={isAgenteChecked(agenteName)}
-                              onCheckedChange={() => toggleAgente(agenteName)}
-                              className="mt-0.5"
-                            />
-                            {agenteName}
-                          </Label>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </>
-                )}
-                <span className="text-sm font-medium text-muted-foreground">
-                  Fecha
-                </span>
-                <DateRangeFilter
-                  date={search.date}
-                  dateEnd={search.dateEnd}
-                  onChange={(date, dateEnd) => {
-                    setResultsPage(1)
-                    navigate({ search: prev => ({ ...prev, date, dateEnd }) })
-                  }}
-                />
-              </div>
+            <CardHeader>
+              <CardTitle>Detalle por caso</CardTitle>
+              <CardDescription>
+                {filteredResults.length} caso
+                {filteredResults.length === 1 ? '' : 's'} en el rango elegido.
+              </CardDescription>
             </CardHeader>
             <CardContent
               className={cn(

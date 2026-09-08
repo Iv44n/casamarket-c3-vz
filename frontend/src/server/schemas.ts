@@ -434,16 +434,6 @@ export const benchmarksSearchSchema = z.object({
   direction: z.enum(BENCHMARK_DIRECTION_FILTERS).default('all'),
   date: dateFilterValue.default(todayIsoDate),
   dateEnd: dateEndValue,
-  agentes: z.union([z.literal('all'), z.array(z.string())]).default('all'),
-  agentLimit: z
-    .union([
-      z.literal(5),
-      z.literal(10),
-      z.literal(15),
-      z.literal(20),
-      z.literal(25),
-      z.literal('all')
-    ])
-    .default(10)
+  agentes: z.union([z.literal('all'), z.array(z.string())]).default('all')
 })
 export type BenchmarksSearch = z.infer<typeof benchmarksSearchSchema>
