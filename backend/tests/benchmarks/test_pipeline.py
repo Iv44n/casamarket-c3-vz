@@ -168,6 +168,56 @@ def test_analyze_direction_records_response_time_for_all_pending_and_judges_only
     assert rows["2"]["first_response_seconds"] == 90.0
 
 
+class _QuotaExhaustedProvider:
+    """Simula openai.RateLimitError (429) para TODAS las llamadas -- ver openai_provider.py,
+    que ya no reintenta, y pipeline.py, que corta el resto del batch al primer 429 en vez de
+    seguir gastando requests contra una cuenta sin credito."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def complete(self, prompt: str) -> str:
+        self.calls += 1
+        exc = Exception("Token Plan usage limit reached")
+        exc.status_code = 429
+        raise exc
+
+
+def test_analyze_direction_returns_failed_summary_when_llm_quota_is_exhausted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    conn = _conn()
+    store.upsert_report_rows(conn, "attention", [_closed_row("1")], "2026-08-18T00:00:00")
+
+    zip_path = tmp_path / "attention_masivo.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("attention_1.pdf", minimal_pdf_bytes("Hola, buen dia"))
+
+    fake_result = _fake_zip_download_result(zip_path)
+    monkeypatch.setattr(
+        pipeline.massive, "run_direction", lambda client, direction, **kwargs: fake_result
+    )
+    provider = _QuotaExhaustedProvider()
+
+    summary = pipeline.analyze_direction(
+        object(), provider, conn, "attention", lookback_days=3650, sleep=lambda s: None
+    )
+
+    # No "analyzed" -- de lo contrario run_benchmark_cycle's `ok = all(...)` cuenta esta
+    # direccion como exitosa (fase "done"/"Completado" en el frontend) aunque el LLM no haya
+    # evaluado ni un solo caso.
+    assert summary.action == "failed"
+    assert summary.cases_analyzed == 0
+    assert "429" in summary.error
+    assert "Cuota" in summary.error
+
+    # El tiempo de primera respuesta si queda grabado -- no depende del LLM.
+    rows = {r["id_atencion"]: r for r in store.benchmark_result_rows(conn)}
+    assert rows["1"]["first_response_seconds"] == 90.0
+    assert rows["1"]["greeting_level"] is None
+    assert rows["1"]["analyzed_at"] is None
+
+
 def test_analyze_direction_asks_about_transfer_only_for_cases_with_a_transfer_row(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

@@ -829,15 +829,24 @@ function BenchmarkResultsTable({
 
 const BENCHMARK_RUN_POLL_MS = 3000
 
-function runStatusBadge(phase: BenchmarkRunStatus['phase']): {
+function runStatusBadge(status: BenchmarkRunStatus): {
   label: string
   className: string
 } {
-  switch (phase) {
+  switch (status.phase) {
     case 'running':
       return { label: 'En curso', className: 'bg-primary/10 text-primary' }
     case 'done':
-      return { label: 'Completado', className: 'bg-chart-2/15 text-chart-2' }
+      // phase="done" solo dice que run_benchmark_cycle no reventó -- eso pasa
+      // igual cuando el LLM se quedó sin cuota a mitad de corrida (cada
+      // dirección queda action="failed" pero el ciclo completo no lanza, ver
+      // pipeline.analyze_direction). result.ok es lo que de verdad distingue
+      // "se evaluaron los casos" de "corrió pero no evaluó nada" -- mismo
+      // criterio que runOkBadge ya usa para el historial, para no mostrar
+      // "Completado" en verde sobre una corrida que en realidad falló.
+      return status.result?.ok === false
+        ? { label: 'Error', className: 'bg-destructive/10 text-destructive' }
+        : { label: 'Completado', className: 'bg-chart-2/15 text-chart-2' }
     case 'error':
       return {
         label: 'Error',
@@ -907,7 +916,7 @@ function BenchmarkRunCard({
   }
 
   const isRunning = status.phase === 'running'
-  const badge = runStatusBadge(status.phase)
+  const badge = runStatusBadge(status)
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between">

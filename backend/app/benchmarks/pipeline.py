@@ -186,6 +186,9 @@ def analyze_direction(
 
         judgements: dict[str, QualityJudgement] = {}
         judgeable = [case for case in cases if case.conversation_text]
+        # Vive afuera del `if judgeable:` (no solo del with) para que el chequeo de mas abajo,
+        # despues de guardar rows_to_store, pueda verlo aunque judgeable este vacio.
+        quota_exhausted = False
         if judgeable:
             with ThreadPoolExecutor(max_workers=concurrency) as executor:
                 futures = {
@@ -198,7 +201,6 @@ def analyze_direction(
                     ): case
                     for case in judgeable
                 }
-                quota_exhausted = False
                 for future in as_completed(futures):
                     case = futures[future]
                     try:
@@ -253,6 +255,30 @@ def analyze_direction(
             ]
         if rows_to_store:
             store.record_benchmark_results(conn, rows_to_store, observed_at, run_id=run_id)
+
+        if quota_exhausted:
+            # `action="failed"` (no "analyzed") a proposito -- de lo contrario esta excepcion se
+            # queda atrapada adentro del loop de futures de mas arriba y nunca llega al
+            # try/except de analyze_direction, asi que run_benchmark_cycle's `ok = all(...)`
+            # la contaba como corrida exitosa (fase "done"/"Completado" en el frontend) aunque
+            # cases_analyzed quedara en 0 -- confirmado en vivo el 2026-09-10 con un run que
+            # mostraba "Completado" pese a que el LLM nunca pudo evaluar nada por falta de
+            # credito. Las filas si quedan guardadas (ver record_benchmark_results arriba, con
+            # first_response_seconds aunque sin veredicto de calidad), y los casos sin intentar
+            # siguen pendientes para la proxima corrida (ver already_benchmarked_ids).
+            return schemas.BenchmarkDirectionSummary(
+                direction=direction,
+                action="failed",
+                cases_closed=len(closed),
+                cases_pending=len(pending),
+                cases_with_pdf=len(zip_texts),
+                cases_analyzed=len(judgements),
+                error=(
+                    f"Cuota del LLM agotada (429) -- solo se evaluaron {len(judgements)} de "
+                    f"{len(judgeable)} casos con PDF; el resto queda pendiente para la proxima "
+                    "corrida."
+                ),
+            )
 
         return schemas.BenchmarkDirectionSummary(
             direction=direction,
