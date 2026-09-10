@@ -2,7 +2,7 @@ import json
 import logging
 import time
 from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -198,10 +198,13 @@ def analyze_direction(
                     ): case
                     for case in judgeable
                 }
+                quota_exhausted = False
                 for future in as_completed(futures):
                     case = futures[future]
                     try:
                         judgements[case.id_atencion] = future.result()
+                    except CancelledError:
+                        continue
                     except Exception as exc:
                         logger.warning(
                             "El LLM fallo para la atencion %s (%s) -- %s",
@@ -209,6 +212,30 @@ def analyze_direction(
                             direction,
                             exc,
                         )
+                        # 429 con status_code (openai.RateLimitError, ver openai_provider.py --
+                        # duck-typed en vez de `isinstance` para no importar el SDK de openai
+                        # aca, judge_conversation/LLMProvider son agnosticos de vendor) casi
+                        # siempre es cuota/plan agotado, no un pico transitorio -- MiniMax lo
+                        # confirma en el mensaje ("Upgrade your Token Plan or purchase
+                        # Credits"), y como ya sacamos los reintentos del cliente
+                        # (openai_provider.py), cada caso restante de este batch va a fallar
+                        # con el mismo 429 igual. Cancela los que todavia no arrancaron -- los
+                        # que ya estan en vuelo (acotados por `concurrency`) se dejan terminar
+                        # solos. Ninguno de los dos grupos queda marcado "ya evaluado" (ver
+                        # store.already_benchmarked_ids), asi que la proxima corrida los
+                        # reintenta sin necesidad de force_reanalyze.
+                        if not quota_exhausted and getattr(exc, "status_code", None) == 429:
+                            quota_exhausted = True
+                            cancelled = sum(
+                                1 for f in futures if f is not future and f.cancel()
+                            )
+                            logger.warning(
+                                "Cuota del LLM agotada (429) -- se corta el resto de '%s' "
+                                "(%d casos sin intentar, quedan pendientes para la proxima "
+                                "corrida).",
+                                direction,
+                                cancelled,
+                            )
 
         observed_at = datetime.now(config.TZ).isoformat()
         rows_to_store = [
