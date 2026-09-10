@@ -1423,10 +1423,19 @@ function BenchmarkRunHistoryCard({ runs }: { runs: BenchmarkRunRecord[] }) {
                             </TooltipTrigger>
                             <TooltipContent>{run.error}</TooltipContent>
                           </Tooltip>
+                        ) : resultSummary ? (
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <span className="block truncate text-muted-foreground" />
+                              }
+                            >
+                              {resultSummary}
+                            </TooltipTrigger>
+                            <TooltipContent>{resultSummary}</TooltipContent>
+                          </Tooltip>
                         ) : (
-                          <span className="block truncate text-muted-foreground">
-                            {resultSummary || '—'}
-                          </span>
+                          <span className="text-muted-foreground">—</span>
                         )}
                       </TableCell>
                     </TableRow>
