@@ -276,34 +276,39 @@ export function BenchmarkAgentChart({
     label: string
     color: string
     valueFormatter: (value: number | null) => string
+    barLabel: (item: { value: number | null }) => string
   }> = [
     {
       metric: 'greeting',
       dataKey: 'greetingOkPct',
       label: 'Saludo (casual o formal)',
       color: GREETING_CHART_COLOR,
-      valueFormatter: pct
+      valueFormatter: pct,
+      barLabel: item => pct(item.value)
     },
     {
       metric: 'farewell',
       dataKey: 'farewellOkPct',
       label: 'Despedida',
       color: FAREWELL_CHART_COLOR,
-      valueFormatter: pct
+      valueFormatter: pct,
+      barLabel: item => pct(item.value)
     },
     {
       metric: 'spelling',
       dataKey: 'spellingOkPct',
       label: 'Ortografía correcta',
       color: 'var(--color-chart-3)',
-      valueFormatter: pct
+      valueFormatter: pct,
+      barLabel: item => pct(item.value)
     },
     {
       metric: 'handledWell',
       dataKey: 'handledWellPct',
       label: 'Manejo adecuado a la complejidad',
       color: 'var(--color-chart-5)',
-      valueFormatter: pct
+      valueFormatter: pct,
+      barLabel: item => pct(item.value)
     },
     {
       metric: 'complexity',
@@ -311,7 +316,8 @@ export function BenchmarkAgentChart({
       stack: 'complexity',
       label: 'Complejidad baja',
       color: 'var(--color-muted-foreground)',
-      valueFormatter: pct
+      valueFormatter: pct,
+      barLabel: item => pct(item.value)
     },
     {
       metric: 'complexity',
@@ -319,7 +325,8 @@ export function BenchmarkAgentChart({
       stack: 'complexity',
       label: 'Complejidad media',
       color: 'var(--color-chart-4)',
-      valueFormatter: pct
+      valueFormatter: pct,
+      barLabel: item => pct(item.value)
     },
     {
       metric: 'complexity',
@@ -327,7 +334,8 @@ export function BenchmarkAgentChart({
       stack: 'complexity',
       label: 'Complejidad alta',
       color: 'var(--color-destructive)',
-      valueFormatter: pct
+      valueFormatter: pct,
+      barLabel: item => pct(item.value)
     }
   ]
   const qualitySeries = qualitySeriesDefs.filter(series =>
@@ -356,7 +364,8 @@ export function BenchmarkAgentChart({
                   dataKey: 'avgFirstResponseSeconds',
                   label: 'Primera respuesta',
                   color: 'var(--color-chart-2)',
-                  valueFormatter: value => formatSecondsAsDuration(value ?? 0)
+                  valueFormatter: value => formatSecondsAsDuration(value ?? 0),
+                  barLabel: item => formatSecondsAsDuration(item.value ?? 0)
                 }
               ]}
               borderRadius={4}
@@ -441,6 +450,13 @@ export function BenchmarkAgentChart({
                     position: { vertical: 'bottom', horizontal: 'center' }
                   }
                 }}
+                sx={{
+                  '& .MuiBarChart-label': {
+                    fill: '#0a0a0a !important',
+                    fontWeight: 700,
+                    fontSize: CHART_VALUE_LABEL_FONT_SIZE
+                  }
+                }}
               />
             </ChartThemeProvider>
           </div>
@@ -468,7 +484,8 @@ export function BenchmarkAgentChart({
                     dataKey: 'informedPct',
                     label: 'Avisó antes de transferir',
                     color: TRANSFER_CHART_COLOR,
-                    valueFormatter: pct
+                    valueFormatter: pct,
+                    barLabel: item => pct(item.value)
                   }
                 ]}
                 borderRadius={4}
