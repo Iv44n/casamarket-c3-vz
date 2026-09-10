@@ -44,7 +44,10 @@ import {
   triggerHistoricalBackfillRun,
   triggerRefresh
 } from '#/server/reports.functions'
-import type { HistoricalBackfillStatus } from '#/server/schemas'
+import type {
+  ContactsSyncStatus,
+  HistoricalBackfillStatus
+} from '#/server/schemas'
 export const Route = createFileRoute('/status')({
   ssr: 'data-only',
   loader: async () => ({
@@ -115,7 +118,7 @@ function StatusPage() {
 
       <BackfillCard backfillStatus={backfillStatus} />
 
-      <ContactsSyncCard contactsSyncStatus={contactsSyncStatus} />
+      <ContactsSyncCard initialStatus={contactsSyncStatus} />
 
       <HistoricalBackfillCard initialStatus={historicalBackfillStatus} />
     </div>
@@ -210,54 +213,71 @@ function BackfillCard({
     </Card>
   )
 }
+const CONTACTS_SYNC_POLL_MS = 3000
 function ContactsSyncCard({
-  contactsSyncStatus
+  initialStatus
 }: {
-  contactsSyncStatus: Awaited<ReturnType<typeof getContactsSyncStatus>>
+  initialStatus: ContactsSyncStatus
 }) {
   const router = useRouter()
-  const sync = useServerFn(triggerContactsSyncRun)
-  const [pending, setPending] = useState(false)
-  const hasRun = 'started_at' in contactsSyncStatus
+  const startSync = useServerFn(triggerContactsSyncRun)
+  const getStatus = useServerFn(getContactsSyncStatus)
+  const [status, setStatus] = useState(initialStatus)
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (status.phase !== 'running') return
+    timeoutRef.current = setTimeout(async () => {
+      const next = await getStatus()
+      setStatus(next)
+      if (next.phase !== 'running') {
+        await router.invalidate()
+      }
+    }, CONTACTS_SYNC_POLL_MS)
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current)
+    }
+  }, [status, getStatus, router])
   async function handleSync() {
-    setPending(true)
     try {
-      await sync()
-      await router.invalidate()
-      toast.success('Sincronizacion de contactos completada.')
+      const next = await startSync()
+      setStatus(next)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
-    } finally {
-      setPending(false)
     }
   }
+  const isRunning = status.phase === 'running'
   return (
     <Card className="mt-4">
       <CardHeader className="flex-row items-center justify-between">
         <div>
           <CardTitle>Sincronizar contactos</CardTitle>
           <CardDescription>
-            El refresh de arriba ya no descarga 'contacts' (es un roster
-            completo de ~7.5k filas, no vale la pena en cada corrida de 5
-            minutos) -- este boton lo trae bajo demanda.
+            El refresh de arriba ya no descarga 'contacts' (es un roster que
+            puede tener decenas de miles de filas, no vale la pena en cada
+            corrida de 5 minutos) -- este boton lo trae bajo demanda, pidiendo
+            el roster completo en tandas por fecha de creacion (una cuenta
+            grande puede tardar varios minutos) para no pegarle con un pedido
+            unico que C3 rechaza.
           </CardDescription>
         </div>
-        <Button onClick={handleSync} disabled={pending} variant="secondary">
+        <Button onClick={handleSync} disabled={isRunning} variant="secondary">
           <RefreshCwIcon
             data-icon="inline-start"
-            className={cn(pending && 'animate-spin')}
+            className={cn(isRunning && 'animate-spin')}
           />
-          {pending ? 'Sincronizando...' : 'Sincronizar ahora'}
+          {isRunning ? 'Sincronizando...' : 'Sincronizar ahora'}
         </Button>
       </CardHeader>
       <CardContent>
         <p className="text-sm text-muted-foreground">
-          {hasRun
-            ? `Ultima sincronizacion: ${contactsSyncStatus.finished_at}`
-            : 'Sin corridas todavia'}
+          {status.phase === 'idle' && 'Sin corridas todavia.'}
+          {status.phase === 'running' && `En curso desde ${status.started_at}.`}
+          {status.phase === 'done' &&
+            `Ultima sincronizacion: ${status.finished_at} (ok: ${status.result?.ok}).`}
+          {status.phase === 'error' && `Ultimo error: ${status.error}`}
         </p>
         <pre className="mt-2 overflow-x-auto rounded-md bg-muted p-4 text-xs">
-          {JSON.stringify(contactsSyncStatus, null, 2)}
+          {JSON.stringify(status, null, 2)}
         </pre>
       </CardContent>
     </Card>

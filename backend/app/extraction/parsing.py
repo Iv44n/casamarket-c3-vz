@@ -1,4 +1,5 @@
 import csv
+from io import BytesIO
 from pathlib import Path
 
 import openpyxl
@@ -24,8 +25,8 @@ def parse_path(path: Path) -> list[dict]:
     return parse_csv(path) if path.suffix.lower() == ".csv" else parse_xlsx(path)
 
 
-def parse_xlsx(path: Path) -> list[dict]:
-    workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+def _parse_workbook(source: Path | BytesIO) -> list[dict]:
+    workbook = openpyxl.load_workbook(source, read_only=True, data_only=True)
     try:
         records = []
         for sheet in workbook.worksheets:
@@ -41,6 +42,17 @@ def parse_xlsx(path: Path) -> list[dict]:
         return records
     finally:
         workbook.close()
+
+
+def parse_xlsx(path: Path) -> list[dict]:
+    return _parse_workbook(path)
+
+
+def parse_xlsx_bytes(data: bytes) -> list[dict]:
+    """Como parse_xlsx(), pero para un .xlsx que todavia no toco disco -- usado por el sync de
+    contactos troceado por fecha (c3/downloads.py's fetch_window_bytes), que fetchea cada ventana
+    en memoria y solo escribe UN archivo mergeado al final (ver downloads.write_merged_xlsx)."""
+    return _parse_workbook(BytesIO(data))
 
 
 def parse_report(name: str) -> list[dict] | None:

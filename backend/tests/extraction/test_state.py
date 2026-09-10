@@ -8,7 +8,7 @@ import pytest
 from app import config
 from app.c3 import downloads
 from app.extraction import service, state, store
-from app.schemas import HistoricalBackfillStatus
+from app.schemas import ContactsSyncStatus, HistoricalBackfillStatus
 
 
 @pytest.fixture(autouse=True)
@@ -254,42 +254,71 @@ def test_run_backfill_releases_the_lock_even_if_it_raises(monkeypatch: pytest.Mo
 
 
 @pytest.fixture(autouse=True)
-def reset_last_contacts_sync_run():
-    state._last_contacts_sync_run = None
+def reset_contacts_sync_status():
+    state._contacts_sync_status = ContactsSyncStatus()
     yield
-    state._last_contacts_sync_run = None
+    state._contacts_sync_status = ContactsSyncStatus()
+    # Mismo motivo que reset_historical_backfill_status: si un test fallo a mitad de
+    # camino con el lock adquirido, los tests siguientes quedarian bloqueados.
+    if state._contacts_sync_lock.locked():
+        state._contacts_sync_lock.release()
 
 
-def test_run_contacts_sync_returns_a_summary_and_records_it(monkeypatch: pytest.MonkeyPatch):
+def _wait_until_contacts_sync_not_running(timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while state._contacts_sync_status.phase == "running":
+        assert time.monotonic() < deadline, "el sync de contactos en background nunca termino"
+        time.sleep(0.01)
+
+
+def test_start_contacts_sync_sets_phase_running_immediately(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(service, "run_contacts_sync", lambda: _fake_run(ok=True))
 
-    summary = state.run_contacts_sync()
+    status = state.start_contacts_sync()
 
-    assert summary.ok is True
-    assert state.last_contacts_sync_run() == summary
-    assert state.last_run() is None
-    assert state.last_backfill_run() is None
+    assert status.phase == "running"
+    assert status.started_at is not None
+    _wait_until_contacts_sync_not_running()
 
 
-def test_run_contacts_sync_reports_a_failed_job_and_ok_false(monkeypatch: pytest.MonkeyPatch):
+def test_start_contacts_sync_eventually_reaches_done_with_the_summary(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(service, "run_contacts_sync", lambda: _fake_run(ok=True))
+
+    state.start_contacts_sync()
+    _wait_until_contacts_sync_not_running()
+
+    status = state.contacts_sync_status()
+    assert status.phase == "done"
+    assert status.result is not None
+    assert status.result.ok is True
+    assert not state._contacts_sync_lock.locked()
+
+
+def test_start_contacts_sync_reports_a_failed_job_and_ok_false(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(service, "run_contacts_sync", lambda: _fake_run(ok=False))
 
-    summary = state.run_contacts_sync()
+    state.start_contacts_sync()
+    _wait_until_contacts_sync_not_running()
 
-    assert summary.ok is False
-    assert summary.jobs[0].error == "boom"
+    status = state.contacts_sync_status()
+    assert status.result.ok is False
+    assert status.result.jobs[0].error == "boom"
 
 
-def test_run_contacts_sync_logs_start_per_job_result_and_end(
+def test_start_contacts_sync_logs_start_per_job_result_and_end(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ):
     monkeypatch.setattr(service, "run_contacts_sync", lambda: _fake_run(ok=True))
 
     with caplog.at_level("INFO", logger="app.extraction.state"):
-        state.run_contacts_sync()
+        state.start_contacts_sync()
+        _wait_until_contacts_sync_not_running()
 
     messages = [r.getMessage() for r in caplog.records]
-    assert any("Sync de contactos: iniciando" in m for m in messages)
+    assert any("Sync de contactos: iniciando en background" in m for m in messages)
+    assert any("Sync de contactos: corriendo" in m for m in messages)
     assert any("attention" in m and "ok" in m for m in messages)
     assert any("Sync de contactos: terminado (ok=True)" in m for m in messages)
 
@@ -301,7 +330,7 @@ def _fake_outcome_with_ingest(
     result = downloads.DownloadResult(
         job=job,
         status_code=200,
-        path=Path("contacts_2026-08-13_export.xlsx"),
+        path=None,
         content_type="application/vnd.ms-excel",
         size_bytes=1234,
         elapsed_seconds=0.42,
@@ -315,7 +344,7 @@ def _fake_outcome_with_ingest(
     )
 
 
-def test_run_contacts_sync_logs_the_db_upsert_row_counts(
+def test_start_contacts_sync_logs_the_db_upsert_row_counts(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ):
     ingest_result = store.IngestResult(
@@ -327,7 +356,8 @@ def test_run_contacts_sync_logs_the_db_upsert_row_counts(
     )
 
     with caplog.at_level("INFO", logger="app.extraction.state"):
-        state.run_contacts_sync()
+        state.start_contacts_sync()
+        _wait_until_contacts_sync_not_running()
 
     messages = [r.getMessage() for r in caplog.records]
     assert any(
@@ -336,7 +366,7 @@ def test_run_contacts_sync_logs_the_db_upsert_row_counts(
     )
 
 
-def test_run_contacts_sync_logs_a_warning_when_the_db_upsert_fails(
+def test_start_contacts_sync_logs_a_warning_when_the_db_upsert_fails(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ):
     outcome = _fake_outcome_with_ingest(ingest_error="conexion a Turso rechazada")
@@ -345,7 +375,8 @@ def test_run_contacts_sync_logs_a_warning_when_the_db_upsert_fails(
     )
 
     with caplog.at_level("INFO", logger="app.extraction.state"):
-        state.run_contacts_sync()
+        state.start_contacts_sync()
+        _wait_until_contacts_sync_not_running()
 
     warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
     assert any(
@@ -354,19 +385,19 @@ def test_run_contacts_sync_logs_a_warning_when_the_db_upsert_fails(
     )
 
 
-def test_run_contacts_sync_raises_already_running_if_lock_held(
+def test_start_contacts_sync_raises_already_running_if_lock_held(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(service, "run_contacts_sync", lambda: _fake_run(ok=True))
-    state._lock.acquire()
+    state._contacts_sync_lock.acquire()
     try:
         with pytest.raises(state.AlreadyRunningError):
-            state.run_contacts_sync()
+            state.start_contacts_sync()
     finally:
-        state._lock.release()
+        state._contacts_sync_lock.release()
 
 
-def test_run_contacts_sync_releases_the_lock_even_if_it_raises(
+def test_start_contacts_sync_reaches_error_phase_if_service_raises(
     monkeypatch: pytest.MonkeyPatch,
 ):
     def boom():
@@ -374,12 +405,34 @@ def test_run_contacts_sync_releases_the_lock_even_if_it_raises(
 
     monkeypatch.setattr(service, "run_contacts_sync", boom)
 
-    with pytest.raises(RuntimeError):
-        state.run_contacts_sync()
+    state.start_contacts_sync()
+    _wait_until_contacts_sync_not_running()
 
-    assert not state._lock.locked()
-    assert state.last_contacts_sync_run() is None
-    assert state.last_backfill_run() is None
+    status = state.contacts_sync_status()
+    assert status.phase == "error"
+    assert status.error == "login failed"
+    assert not state._contacts_sync_lock.locked()
+
+
+def test_contacts_sync_status_defaults_to_idle():
+    assert state.contacts_sync_status().phase == "idle"
+
+
+def test_contacts_sync_status_hydrates_from_the_store_after_a_simulated_restart(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(service, "run_contacts_sync", lambda: _fake_run(ok=True))
+    state.start_contacts_sync()
+    _wait_until_contacts_sync_not_running()
+
+    state._contacts_sync_status = ContactsSyncStatus()
+    state._hydrated_kinds.clear()
+
+    hydrated = state.contacts_sync_status()
+
+    assert hydrated.phase == "done"
+    assert hydrated.result is not None
+    assert hydrated.result.ok is True
 
 
 @pytest.fixture(autouse=True)

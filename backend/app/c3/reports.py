@@ -106,6 +106,23 @@ CONTACTS_EXPORT_DEFAULT_PARAMS = {
     "contact": "",
 }
 
+
+def contacts_export_window_params(date_start: str, date_end: str) -> dict:
+    """Como CONTACTS_EXPORT_DEFAULT_PARAMS, pero acotado a un rango de fecha de creacion --
+    date_field/date_start/date_end no estan en el dict de arriba porque el formulario nunca los
+    manda salvo que el checkbox de filtro avanzado (#chekcfiltros) este marcado; confirmado en
+    vivo el 2026-09-10 leyendo contacts/app.js's getParams(), cuya segunda rama (la que corre con
+    ese checkbox activo) agrega justo estos tres campos. Existe porque el export SIN fecha 500ea
+    en cuentas con roster grande (ver config.CONTACTS_SYNC_LOOKBACK_DAYS/WINDOW_DAYS) -- pedirlo
+    en ventanas por date_field="created_at" evita eso, ya que cada contacto tiene exactamente un
+    created_at (particion completa, sin huecos ni superposicion)."""
+    return {
+        **CONTACTS_EXPORT_DEFAULT_PARAMS,
+        "date_field": "created_at",
+        "date_start": date_start,
+        "date_end": date_end,
+    }
+
 TRANSFER_EXPORT_ENDPOINT = "/user/report_message/transfer/export"
 
 TRANSFER_EXPORT_DEFAULT_PARAMS = {

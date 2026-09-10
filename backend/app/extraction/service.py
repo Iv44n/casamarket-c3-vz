@@ -132,35 +132,56 @@ def run_historical_jobs(
 def run_contacts_sync_jobs(
     client: httpx.Client, conn: store.DBConnection | None = None
 ) -> ExtractionRun:
+    """A diferencia de run_all()/run_backfill_jobs(), esto no descarga UN archivo -- el roster
+    completo de una cuenta grande 500ea pedido de una sola vez (confirmado en vivo 2026-09-10
+    contra salescasamarket.c3.pe), asi que build_contacts_sync_jobs() devuelve una ventana por
+    ciertos dias (c3/downloads.py's _contacts_sync_jobs) que se fetchean EN MEMORIA (sin escribir
+    a disco por ventana, ver fetch_window_bytes) y se van acumulando. Recien con todas las
+    ventanas ya intentadas se escribe un unico archivo mergeado (write_merged_xlsx) y se inserta
+    el snapshot completo en Turso -- si eso falla, la excepcion sube tal cual (el caller de mas
+    arriba, extraction/state.py's worker en background, ya tiene su propio try/except para marcar
+    el run como error, mismo patron que _run_historical_backfill_worker)."""
     owns_conn = conn is None
     if owns_conn:
         conn = store.get_connection()
     try:
         outcomes = []
+        all_rows: list[dict] = []
         for job in downloads.build_contacts_sync_jobs():
             try:
-                result = downloads.run_job(client, job)
+                data, status_code, elapsed = downloads.fetch_window_bytes(client, job)
             except (downloads.DownloadError, httpx.HTTPError) as exc:
                 outcomes.append(JobOutcome(job=job, result=None, error=str(exc)))
                 continue
 
-            ingest_result = None
-            ingest_error = None
-            try:
-                rows = parsing.parse_path(result.path)
-                captured_at = datetime.now(config.TZ).isoformat()
-                ingest_result = store.insert_contacts_snapshot(conn, rows, captured_at)
-            except Exception as exc:
-                ingest_error = str(exc)
-            outcomes.append(
-                JobOutcome(
-                    job=job,
-                    result=result,
-                    error=None,
-                    ingest_result=ingest_result,
-                    ingest_error=ingest_error,
-                )
+            result = downloads.DownloadResult(
+                job=job,
+                status_code=status_code,
+                path=None,
+                content_type=None,
+                size_bytes=len(data),
+                elapsed_seconds=elapsed,
             )
+            try:
+                # Una ventana con un .xlsx corrupto/inesperado es un fallo de PROCESAMIENTO,
+                # no de descarga -- mismo error/ingest_error que _ingest_if_dated_report ya
+                # distingue para los otros 4 reportes (error solo refleja el fetch; un
+                # problema de parseo/DB no tira run.ok a False, solo se loguea). No aborta las
+                # demas ventanas.
+                window_rows = parsing.parse_xlsx_bytes(data)
+            except Exception as exc:
+                outcomes.append(
+                    JobOutcome(job=job, result=result, error=None, ingest_error=str(exc))
+                )
+                continue
+
+            all_rows.extend(window_rows)
+            outcomes.append(JobOutcome(job=job, result=result, error=None))
+
+        if all_rows:
+            downloads.write_merged_xlsx(all_rows, config.hoy())
+            captured_at = datetime.now(config.TZ).isoformat()
+            store.insert_contacts_snapshot(conn, all_rows, captured_at)
 
         return ExtractionRun(jobs=outcomes)
     finally:

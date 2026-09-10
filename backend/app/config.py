@@ -27,6 +27,18 @@ DOWNLOADS_DIR = PROJECT_ROOT / "downloads"
 HISTORICAL_BACKFILL_WINDOW_DAYS = 90
 HISTORICAL_CLIENT_TIMEOUT_SECONDS = 300.0
 
+# Contactos: el export sin filtro de fecha 500ea en cuentas con roster grande (confirmado en vivo
+# 2026-09-10 contra salescasamarket.c3.pe, ~26k contactos) -- se pide en tandas por fecha de
+# creacion en vez de todo de una. LOOKBACK fijo (no una pre-consulta en vivo al endpoint de
+# listado/DataTables, que no es parte de los mecanismos de export ya modelados en reports.py):
+# 3 anios cubre de sobra el contacto mas antiguo conocido de salescasamarket (2025-10-20); un
+# tenant mas viejo solo agrega ventanas tempranas con 0 filas, barato, no incorrecto. WINDOW_DAYS
+# es ajustable si una ventana puntual sigue devolviendo 500 -- una ventana fallida no aborta el
+# resto (ver extraction/service.py's run_contacts_sync_jobs), asi que errar el numero no es
+# catastrofico.
+CONTACTS_SYNC_LOOKBACK_DAYS = 1095
+CONTACTS_SYNC_WINDOW_DAYS = 30
+
 _TURSO_KEYS = ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN")
 
 _AUTH_KEYS = ("AUTH_JWT_SECRET", "AUTH_BOOTSTRAP_USERNAME", "AUTH_BOOTSTRAP_PASSWORD")

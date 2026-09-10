@@ -25,7 +25,48 @@ def test_build_jobs_returns_the_five_expected_names_not_contacts():
 def test_build_contacts_sync_jobs_returns_only_contacts():
     jobs = downloads.build_contacts_sync_jobs()
 
-    assert [job.name for job in jobs] == ["contacts"]
+    assert jobs
+    assert {job.name for job in jobs} == {"contacts"}
+
+
+def test_build_contacts_sync_jobs_windows_are_contiguous_with_no_gaps_or_overlap(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(config, "CONTACTS_SYNC_LOOKBACK_DAYS", 9)
+    monkeypatch.setattr(config, "CONTACTS_SYNC_WINDOW_DAYS", 5)
+    today = datetime.date(2026, 8, 18)
+
+    jobs = downloads.build_contacts_sync_jobs(today)
+
+    starts_and_ends = [
+        (job.params["date_start"], job.params["date_end"]) for job in jobs
+    ]
+    assert starts_and_ends == [
+        ("2026-08-09", "2026-08-13"),
+        ("2026-08-14", "2026-08-18"),
+    ]
+
+
+def test_build_contacts_sync_jobs_last_window_always_ends_today(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(config, "CONTACTS_SYNC_LOOKBACK_DAYS", 10)
+    monkeypatch.setattr(config, "CONTACTS_SYNC_WINDOW_DAYS", 3)
+    today = datetime.date(2026, 8, 18)
+
+    jobs = downloads.build_contacts_sync_jobs(today)
+
+    assert jobs[0].params["date_start"] == (today - datetime.timedelta(days=10)).isoformat()
+    assert jobs[-1].params["date_end"] == today.isoformat()
+    # file_date es siempre "hoy" para todas las ventanas -- son todas parte del mismo sync,
+    # a diferencia de build_backfill_jobs/build_historical_jobs que estampan una fecha pasada.
+    assert all(job.file_date == today for job in jobs)
+
+
+def test_build_contacts_sync_jobs_uses_created_at_as_the_date_field():
+    for job in downloads.build_contacts_sync_jobs():
+        assert job.params["date_field"] == "created_at"
+        assert job.params["company_id"] == "ALL"
 
 
 def _job(name: str) -> downloads.DownloadJob:
@@ -92,11 +133,16 @@ def test_call_outgoing_job_has_dialer_fields_not_vip_only():
     assert "vip_only" not in job.params
 
 
-def test_contacts_job_has_no_date_range():
+def test_contacts_job_is_scoped_to_a_created_at_window_not_the_whole_roster():
+    # A diferencia de attention/calls (date_init/date_end, hoy 00:00-23:59), contacts trocea
+    # por date_field/date_start/date_end -- ver reports.contacts_export_window_params sobre
+    # por que (el roster completo de una cuenta grande 500ea pedido de una sola vez).
     job = _job("contacts")
 
+    assert job.params["date_field"] == "created_at"
+    assert "date_start" in job.params
+    assert "date_end" in job.params
     assert "date_init" not in job.params
-    assert "date_end" not in job.params
     assert job.params["company_id"] == "ALL"
 
 
@@ -353,6 +399,61 @@ def test_run_job_preserves_query_string_already_in_endpoint_when_params_empty(
     downloads.run_job(_client(handler), job)
 
     assert "X-Amz-Signature=abc123" in seen_urls[0]
+
+
+def test_fetch_window_bytes_returns_content_without_writing_to_disk(isolated_downloads_dir):
+    body = b"contenido-del-excel"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "application/vnd.ms-excel"}, content=body)
+
+    job = downloads.DownloadJob(name="contacts", endpoint="/fake", params={})
+    data, status_code, elapsed = downloads.fetch_window_bytes(_client(handler), job)
+
+    assert data == body
+    assert status_code == 200
+    assert elapsed >= 0
+    assert list(isolated_downloads_dir.iterdir()) == []
+
+
+def test_fetch_window_bytes_raises_download_error_on_html_response(isolated_downloads_dir):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/html"}, text="<html>x</html>")
+
+    job = downloads.DownloadJob(name="contacts", endpoint="/fake", params={})
+
+    with pytest.raises(downloads.DownloadError):
+        downloads.fetch_window_bytes(_client(handler), job)
+
+
+def test_write_merged_xlsx_round_trips_through_parse_xlsx(isolated_downloads_dir):
+    from app.extraction import parsing
+
+    rows = [
+        {"Nombre": "Ana", "Empresa": "ACME"},
+        {"Nombre": "Beto", "Empresa": "ACME"},
+    ]
+
+    dest = downloads.write_merged_xlsx(rows, datetime.date(2026, 8, 18))
+
+    assert dest.name == "contacts_2026-08-18_sync.xlsx"
+    assert dest.parent == isolated_downloads_dir
+    assert parsing.parse_xlsx(dest) == rows
+
+
+def test_write_merged_xlsx_prunes_old_contacts_files(isolated_downloads_dir: Path):
+    for i in range(downloads._KEEP_PER_REPORT):
+        _touch(isolated_downloads_dir / f"contacts_2026-07-{10 + i}_sync.xlsx", i)
+
+    downloads.write_merged_xlsx([{"Nombre": "Ana"}], datetime.date(2026, 8, 18))
+
+    remaining = list(isolated_downloads_dir.glob("contacts_*"))
+    assert len(remaining) == downloads._KEEP_PER_REPORT
+
+
+def test_write_merged_xlsx_rejects_empty_rows(isolated_downloads_dir):
+    with pytest.raises(ValueError):
+        downloads.write_merged_xlsx([], datetime.date(2026, 8, 18))
 
 
 def test_latest_file_returns_none_when_nothing_downloaded_yet(isolated_downloads_dir):

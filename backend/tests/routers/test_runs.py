@@ -12,6 +12,7 @@ from app.extraction import state
 from app.main import app
 from app.schemas import (
     BackfillRunSummary,
+    ContactsSyncStatus,
     HistoricalBackfillStatus,
     HistoricalRunSummary,
     RunSummary,
@@ -30,6 +31,17 @@ _BACKFILL_SUMMARY = BackfillRunSummary(
     ok=True,
     target_date="2026-08-10",
     jobs=[],
+)
+
+_CONTACTS_SYNC_STATUS_RUNNING = ContactsSyncStatus(
+    phase="running", started_at="2026-08-13T06:00:00-05:00"
+)
+
+_CONTACTS_SYNC_STATUS_DONE = ContactsSyncStatus(
+    phase="done",
+    started_at="2026-08-13T06:00:00-05:00",
+    finished_at="2026-08-13T06:05:00-05:00",
+    result=_SUMMARY,
 )
 
 _HISTORICAL_STATUS_RUNNING = HistoricalBackfillStatus(
@@ -193,61 +205,52 @@ def test_backfill_status_returns_the_last_backfill_run_summary(
     assert response.json() == _BACKFILL_SUMMARY.model_dump()
 
 
-def test_contacts_sync_returns_the_run_summary(
+def test_contacts_sync_returns_202_and_the_running_status(
     monkeypatch: pytest.MonkeyPatch, client: TestClient
 ):
-    monkeypatch.setattr(state, "run_contacts_sync", lambda: _SUMMARY)
+    monkeypatch.setattr(
+        state, "start_contacts_sync", lambda: _CONTACTS_SYNC_STATUS_RUNNING
+    )
 
     response = client.post("/extraction/contacts/sync")
 
-    assert response.status_code == 200
-    assert response.json() == _SUMMARY.model_dump()
+    assert response.status_code == 202
+    assert response.json() == _CONTACTS_SYNC_STATUS_RUNNING.model_dump()
 
 
 def test_contacts_sync_returns_409_when_already_running(
     monkeypatch: pytest.MonkeyPatch, client: TestClient
 ):
     def boom():
-        raise state.AlreadyRunningError("ya hay una extraccion en curso")
+        raise state.AlreadyRunningError("ya hay una sincronizacion de contactos en curso")
 
-    monkeypatch.setattr(state, "run_contacts_sync", boom)
+    monkeypatch.setattr(state, "start_contacts_sync", boom)
 
     response = client.post("/extraction/contacts/sync")
 
     assert response.status_code == 409
 
 
-def test_contacts_sync_returns_502_on_auth_or_network_failure(
+def test_contacts_sync_status_returns_idle_before_any_run(
     monkeypatch: pytest.MonkeyPatch, client: TestClient
 ):
-    def boom():
-        raise RuntimeError("credenciales invalidas")
-
-    monkeypatch.setattr(state, "run_contacts_sync", boom)
-
-    response = client.post("/extraction/contacts/sync")
-
-    assert response.status_code == 502
-
-
-def test_contacts_sync_status_returns_no_runs_yet_before_any_run(
-    monkeypatch: pytest.MonkeyPatch, client: TestClient
-):
-    monkeypatch.setattr(state, "last_contacts_sync_run", lambda: None)
+    monkeypatch.setattr(state, "contacts_sync_status", lambda: ContactsSyncStatus())
 
     response = client.get("/extraction/contacts/sync/status")
 
-    assert response.json() == {"status": "no_runs_yet"}
+    assert response.json() == ContactsSyncStatus().model_dump()
 
 
-def test_contacts_sync_status_returns_the_last_run_summary(
+def test_contacts_sync_status_returns_the_done_status(
     monkeypatch: pytest.MonkeyPatch, client: TestClient
 ):
-    monkeypatch.setattr(state, "last_contacts_sync_run", lambda: _SUMMARY)
+    monkeypatch.setattr(
+        state, "contacts_sync_status", lambda: _CONTACTS_SYNC_STATUS_DONE
+    )
 
     response = client.get("/extraction/contacts/sync/status")
 
-    assert response.json() == _SUMMARY.model_dump()
+    assert response.json() == _CONTACTS_SYNC_STATUS_DONE.model_dump()
 
 
 def test_historical_backfill_returns_202_and_the_running_status(

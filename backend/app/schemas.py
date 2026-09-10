@@ -43,6 +43,14 @@ class HistoricalBackfillStatus(BaseModel):
     error: str | None = None
 
 
+class ContactsSyncStatus(BaseModel):
+    phase: Literal["idle", "running", "done", "error"] = "idle"
+    started_at: str | None = None
+    finished_at: str | None = None
+    result: RunSummary | None = None
+    error: str | None = None
+
+
 class NoRunsYet(BaseModel):
     status: Literal["no_runs_yet"] = "no_runs_yet"
 

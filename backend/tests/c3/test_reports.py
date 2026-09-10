@@ -96,6 +96,17 @@ def test_contacts_export_has_no_date_range_params():
     assert reports.CONTACTS_EXPORT_DEFAULT_PARAMS["company_id"] == "ALL"
 
 
+def test_contacts_export_window_params_adds_created_at_range_on_top_of_the_defaults():
+    params = reports.contacts_export_window_params("2026-01-01", "2026-01-31")
+
+    assert params["date_field"] == "created_at"
+    assert params["date_start"] == "2026-01-01"
+    assert params["date_end"] == "2026-01-31"
+    # El resto de los defaults (sin filtro por nombre/doc/empresa) se preserva sin cambios.
+    for key, value in reports.CONTACTS_EXPORT_DEFAULT_PARAMS.items():
+        assert params[key] == value
+
+
 def test_transfer_export_endpoint_and_default_filters():
     assert reports.TRANSFER_EXPORT_ENDPOINT == "/user/report_message/transfer/export"
     assert reports.TRANSFER_EXPORT_DEFAULT_PARAMS == {

@@ -6,14 +6,19 @@ import httpx
 import pytest
 
 from app import config
-from app.c3 import reports
-from app.extraction import service, store
+from app.c3 import downloads, reports
+from app.extraction import parsing, service, store
 
 
 @pytest.fixture(autouse=True)
 def isolated_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(config, "DOWNLOADS_DIR", tmp_path / "downloads")
     monkeypatch.setattr(store, "get_connection", lambda: sqlite3.connect(":memory:"))
+    # Achica el rango real (3 anios / ventanas de 30 dias) a exactamente 2 ventanas, para que
+    # los tests de contacts-sync sigan siendo cortos de escribir sin dejar de ejercitar el
+    # merge real entre ventanas (ver test_run_contacts_sync_jobs_*).
+    monkeypatch.setattr(config, "CONTACTS_SYNC_LOOKBACK_DAYS", 9)
+    monkeypatch.setattr(config, "CONTACTS_SYNC_WINDOW_DAYS", 5)
 
 
 def _sequenced_client(steps: list[tuple[str, httpx.Response]]) -> httpx.Client:
@@ -57,7 +62,8 @@ def _download_steps() -> list[tuple[str, httpx.Response]]:
 
 
 def _contacts_sync_steps() -> list[tuple[str, httpx.Response]]:
-    return [(CONTACTS_EXPORT, _file_response())]
+    # isolated_state fija CONTACTS_SYNC_LOOKBACK_DAYS/WINDOW_DAYS a exactamente 2 ventanas.
+    return [(CONTACTS_EXPORT, _file_response()), (CONTACTS_EXPORT, _file_response())]
 
 
 def _backfill_steps() -> list[tuple[str, httpx.Response]]:
@@ -125,18 +131,51 @@ def _real_xlsx_bytes(rows: list[tuple]) -> bytes:
     return buffer.getvalue()
 
 
-def test_run_contacts_sync_jobs_downloads_only_contacts_and_fills_the_snapshot_table():
-    body = _real_xlsx_bytes([("Nombre",), ("Ana",)])
-    client = _sequenced_client([(CONTACTS_EXPORT, _file_response(body))])
+def test_run_contacts_sync_jobs_downloads_every_window_and_fills_the_snapshot_table():
+    # isolated_state fija CONTACTS_SYNC_LOOKBACK_DAYS/WINDOW_DAYS a exactamente 2 ventanas.
+    window_1 = _real_xlsx_bytes([("Nombre",), ("Ana",)])
+    window_2 = _real_xlsx_bytes([("Nombre",), ("Beto",)])
+    client = _sequenced_client(
+        [(CONTACTS_EXPORT, _file_response(window_1)), (CONTACTS_EXPORT, _file_response(window_2))]
+    )
     conn = sqlite3.connect(":memory:")
     store._init_schema(conn)
 
     run = service.run_contacts_sync_jobs(client, conn=conn)
 
     assert {outcome.job.name for outcome in run.jobs} == {"contacts"}
+    assert len(run.jobs) == 2
     assert run.ok is True
     assert all(outcome.ingest_error is None for outcome in run.jobs)
+    # Una fila por ventana -- las filas de las 2 ventanas se mergean en un unico insert.
+    assert conn.execute("SELECT COUNT(*) FROM contacts_snapshot").fetchone()[0] == 2
+    merged = downloads.latest_file("contacts")
+    assert merged is not None
+    assert [row["Nombre"] for row in parsing.parse_xlsx(merged)] == ["Ana", "Beto"]
+
+
+def test_run_contacts_sync_jobs_one_failing_window_does_not_abort_the_rest():
+    ok_body = _real_xlsx_bytes([("Nombre",), ("Ana",)])
+    html_error = httpx.Response(
+        200, headers={"content-type": "text/html"}, text="<html>error</html>"
+    )
+    client = _sequenced_client(
+        [(CONTACTS_EXPORT, html_error), (CONTACTS_EXPORT, _file_response(ok_body))]
+    )
+    conn = sqlite3.connect(":memory:")
+    store._init_schema(conn)
+
+    run = service.run_contacts_sync_jobs(client, conn=conn)
+
+    assert len(run.jobs) == 2
+    assert run.ok is False
+    failed, ok = run.jobs
+    assert failed.error is not None
+    assert ok.error is None
+    # La ventana que si funciono igual se mergea/inserta -- una ventana rota no tira todo abajo.
     assert conn.execute("SELECT COUNT(*) FROM contacts_snapshot").fetchone()[0] == 1
+    merged = downloads.latest_file("contacts")
+    assert [row["Nombre"] for row in parsing.parse_xlsx(merged)] == ["Ana"]
 
 
 def test_run_contacts_sync_logs_in_then_downloads_only_contacts():

@@ -37,6 +37,22 @@ def test_parse_xlsx_concatenates_all_sheets(tmp_path: Path):
     ]
 
 
+def test_parse_xlsx_bytes_matches_parse_xlsx_for_the_same_content(tmp_path: Path):
+    path = tmp_path / "reporte.xlsx"
+    _write_workbook(
+        path,
+        {
+            "Campaña A": [("Nombre", "Estado"), ("Ana", "Abierta")],
+            "Campaña B": [("Nombre", "Estado"), ("Luis", "Cerrada")],
+        },
+    )
+
+    from_path = parsing.parse_xlsx(path)
+    from_bytes = parsing.parse_xlsx_bytes(path.read_bytes())
+
+    assert from_bytes == from_path
+
+
 def test_parse_xlsx_skips_sheets_without_a_header(tmp_path: Path):
     path = tmp_path / "reporte.xlsx"
     _write_workbook(

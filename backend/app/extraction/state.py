@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 from .. import config
 from ..schemas import (
     BackfillRunSummary,
+    ContactsSyncStatus,
     HistoricalBackfillStatus,
     HistoricalRunSummary,
     JobSummary,
@@ -16,14 +17,20 @@ logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _historical_lock = threading.Lock()
+# Lock propio (no _lock) por el mismo motivo que _historical_lock: el sync de contactos ahora
+# pide el roster en ventanas por fecha (c3/downloads.py's _contacts_sync_jobs) -- varios minutos
+# en cuentas grandes -- y no deberia bloquear ni ser bloqueado por el refresh regular de 5
+# minutos. Correrlos en paralelo es seguro: cada uno abre su propia sesion C3 (httpx.Client
+# independiente) y los upserts/inserts a Turso no pisan filas del otro.
+_contacts_sync_lock = threading.Lock()
 _last_run: RunSummary | None = None
 _last_backfill_run: BackfillRunSummary | None = None
-_last_contacts_sync_run: RunSummary | None = None
 _historical_backfill_status = HistoricalBackfillStatus()
+_contacts_sync_status = ContactsSyncStatus()
 
 _KIND_LAST_RUN = "last_run"
 _KIND_LAST_BACKFILL_RUN = "last_backfill_run"
-_KIND_LAST_CONTACTS_SYNC_RUN = "last_contacts_sync_run"
+_KIND_CONTACTS_SYNC_STATUS = "contacts_sync_status"
 _KIND_HISTORICAL_BACKFILL_STATUS = "historical_backfill_status"
 
 _hydrated_kinds: set[str] = set()
@@ -184,37 +191,72 @@ def last_backfill_run() -> BackfillRunSummary | None:
     return _last_backfill_run
 
 
-def run_contacts_sync() -> RunSummary:
-    global _last_contacts_sync_run
-    if not _lock.acquire(blocking=False):
-        raise AlreadyRunningError("Ya hay una extraccion en curso.")
-    logger.info("Sync de contactos: iniciando")
+def _run_contacts_sync_worker(started_at: str) -> None:
+    global _contacts_sync_status
+    logger.info("Sync de contactos: corriendo en background")
     try:
-        started_at = datetime.now(config.TZ)
         run = service.run_contacts_sync()
-    finally:
-        _lock.release()
+    except Exception as exc:
+        logger.warning("Sync de contactos: fallo antes de completar -- %s", exc)
+        error_status = ContactsSyncStatus(
+            phase="error",
+            started_at=started_at,
+            finished_at=datetime.now(config.TZ).isoformat(),
+            error=str(exc),
+        )
+        _persist_sync_status(_KIND_CONTACTS_SYNC_STATUS, error_status)
+        # mismo motivo que _run_historical_backfill_worker: el flip del global va al final, es
+        # la señal que el polling (incluido el frontend) usa para saber que ya no hay nada mas
+        # pendiente, persistencia incluida.
+        _contacts_sync_status = error_status
+        _contacts_sync_lock.release()
+        return
 
     _log_job_outcomes("Sync de contactos", run.jobs)
-    summary = RunSummary(
-        started_at=started_at.isoformat(),
-        finished_at=datetime.now(config.TZ).isoformat(),
-        ok=run.ok,
-        jobs=[_job_summary(o) for o in run.jobs],
+
+    finished_at = datetime.now(config.TZ).isoformat()
+    done_status = ContactsSyncStatus(
+        phase="done",
+        started_at=started_at,
+        finished_at=finished_at,
+        result=RunSummary(
+            started_at=started_at,
+            finished_at=finished_at,
+            ok=run.ok,
+            jobs=[_job_summary(o) for o in run.jobs],
+        ),
     )
-    _last_contacts_sync_run = summary
-    _persist_sync_status(_KIND_LAST_CONTACTS_SYNC_RUN, summary)
-    logger.info("Sync de contactos: terminado (ok=%s)", summary.ok)
-    return summary
+    _persist_sync_status(_KIND_CONTACTS_SYNC_STATUS, done_status)
+    logger.info("Sync de contactos: terminado (ok=%s)", run.ok)
+    _contacts_sync_status = done_status
+    _contacts_sync_lock.release()
 
 
-def last_contacts_sync_run() -> RunSummary | None:
-    global _last_contacts_sync_run
-    if _last_contacts_sync_run is None:
-        loaded = _hydrate_once(_KIND_LAST_CONTACTS_SYNC_RUN, RunSummary)
+def start_contacts_sync() -> ContactsSyncStatus:
+    global _contacts_sync_status
+    if not _contacts_sync_lock.acquire(blocking=False):
+        raise AlreadyRunningError("Ya hay una sincronizacion de contactos en curso.")
+
+    logger.info("Sync de contactos: iniciando en background")
+    started_at = datetime.now(config.TZ).isoformat()
+    running_status = ContactsSyncStatus(phase="running", started_at=started_at)
+    _contacts_sync_status = running_status
+    _persist_sync_status(_KIND_CONTACTS_SYNC_STATUS, running_status)
+    threading.Thread(
+        target=_run_contacts_sync_worker,
+        args=(started_at,),
+        daemon=True,
+    ).start()
+    return running_status
+
+
+def contacts_sync_status() -> ContactsSyncStatus:
+    global _contacts_sync_status
+    if _contacts_sync_status.phase == "idle":
+        loaded = _hydrate_once(_KIND_CONTACTS_SYNC_STATUS, ContactsSyncStatus)
         if loaded is not None:
-            _last_contacts_sync_run = loaded
-    return _last_contacts_sync_run
+            _contacts_sync_status = loaded
+    return _contacts_sync_status
 
 
 def _run_historical_backfill_worker(

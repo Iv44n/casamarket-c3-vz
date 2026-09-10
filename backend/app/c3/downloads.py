@@ -1,10 +1,11 @@
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import httpx
+import openpyxl
 
 from .. import config
 from . import reports
@@ -35,7 +36,7 @@ class DownloadJob:
 class DownloadResult:
     job: DownloadJob
     status_code: int
-    path: Path
+    path: Path | None
     content_type: str | None
     size_bytes: int
     elapsed_seconds: float
@@ -111,12 +112,33 @@ def _call_job(name: str, target_date: date | None = None) -> DownloadJob:
     )
 
 
-def _contacts_job() -> DownloadJob:
-    return DownloadJob(
-        name="contacts",
-        endpoint=reports.CONTACTS_EXPORT_ENDPOINT,
-        params=dict(reports.CONTACTS_EXPORT_DEFAULT_PARAMS),
-    )
+def _contacts_sync_jobs(today: date) -> list[DownloadJob]:
+    """Un DownloadJob por ventana de config.CONTACTS_SYNC_WINDOW_DAYS dias, cubriendo
+    [today - CONTACTS_SYNC_LOOKBACK_DAYS, today] sin huecos ni superposicion -- ver
+    reports.contacts_export_window_params sobre por que particionar por created_at es seguro.
+    Estos jobs nunca se escriben a disco individualmente (ver downloads.fetch_window_bytes /
+    extraction/service.py's run_contacts_sync_jobs) -- file_label solo identifica la ventana en
+    logs/JobSummary.name, no un archivo real."""
+    window = timedelta(days=config.CONTACTS_SYNC_WINDOW_DAYS)
+    range_start = today - timedelta(days=config.CONTACTS_SYNC_LOOKBACK_DAYS)
+
+    jobs = []
+    window_start = range_start
+    while window_start <= today:
+        window_end = min(window_start + window - timedelta(days=1), today)
+        jobs.append(
+            DownloadJob(
+                name="contacts",
+                endpoint=reports.CONTACTS_EXPORT_ENDPOINT,
+                params=reports.contacts_export_window_params(
+                    window_start.isoformat(), window_end.isoformat()
+                ),
+                file_date=today,
+                file_label=f"chunk_{window_start.isoformat()}_to_{window_end.isoformat()}",
+            )
+        )
+        window_start = window_end + timedelta(days=1)
+    return jobs
 
 
 def _transfer_job(target_date: date | None = None) -> DownloadJob:
@@ -141,8 +163,8 @@ def build_jobs() -> list[DownloadJob]:
     return jobs
 
 
-def build_contacts_sync_jobs() -> list[DownloadJob]:
-    return [_contacts_job()]
+def build_contacts_sync_jobs(today: date | None = None) -> list[DownloadJob]:
+    return _contacts_sync_jobs(today or config.hoy())
 
 
 def build_backfill_jobs(target_date: date) -> list[DownloadJob]:
@@ -294,7 +316,7 @@ def _filename_from_response(response: httpx.Response, fallback: str) -> str:
     return f"{fallback}{ext}"
 
 
-def run_job(client: httpx.Client, job: DownloadJob) -> DownloadResult:
+def _fetch_and_validate(client: httpx.Client, job: DownloadJob) -> tuple[httpx.Response, float]:
     started = time.monotonic()
     response = client.get(job.endpoint, params=job.params or None)
     elapsed = time.monotonic() - started
@@ -309,6 +331,13 @@ def run_job(client: httpx.Client, job: DownloadJob) -> DownloadResult:
         )
     if not response.content:
         raise DownloadError(f"'{job.name}' devolvio una respuesta vacia.")
+
+    return response, elapsed
+
+
+def run_job(client: httpx.Client, job: DownloadJob) -> DownloadResult:
+    response, elapsed = _fetch_and_validate(client, job)
+    content_type = response.headers.get("content-type", "")
 
     filename = _filename_from_response(response, fallback="export")
 
@@ -327,3 +356,39 @@ def run_job(client: httpx.Client, job: DownloadJob) -> DownloadResult:
         size_bytes=len(response.content),
         elapsed_seconds=elapsed,
     )
+
+
+def fetch_window_bytes(client: httpx.Client, job: DownloadJob) -> tuple[bytes, int, float]:
+    """Como run_job(), pero sin escribir a disco -- usado por el sync de contactos troceado por
+    fecha (extraction/service.py's run_contacts_sync_jobs): un archivo por ventana en
+    config.DOWNLOADS_DIR confundiria a latest_file("contacts"), que espera UN archivo = el roster
+    completo. El caller mergea las filas de todas las ventanas y recien ahi escribe un unico
+    archivo (ver write_merged_xlsx)."""
+    response, elapsed = _fetch_and_validate(client, job)
+    return response.content, response.status_code, elapsed
+
+
+def write_merged_xlsx(rows: list[dict], file_date: date) -> Path:
+    """Arma un .xlsx de una sola hoja a partir de filas ya mergeadas (mismo shape que
+    parsing.parse_xlsx() lee) y lo guarda como config.DOWNLOADS_DIR/contacts_<file_date>_sync.xlsx
+    -- el mismo patron de nombre `contacts_20??-??-??_*` que latest_file("contacts") ya espera, asi
+    que /data/contacts no necesita cambios. `rows` no puede ser vacio -- el caller decide no
+    llamar aca cuando ninguna ventana trajo filas, para no pisar el ultimo archivo bueno con uno
+    vacio."""
+    if not rows:
+        raise ValueError("write_merged_xlsx() necesita al menos una fila.")
+
+    columns = list(rows[0].keys())
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(columns)
+    for row in rows:
+        sheet.append([row.get(column) for column in columns])
+
+    config.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    dest = config.DOWNLOADS_DIR / f"contacts_{file_date.isoformat()}_sync.xlsx"
+    workbook.save(dest)
+    workbook.close()
+
+    prune_old_files("contacts")
+    return dest

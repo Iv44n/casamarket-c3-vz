@@ -314,7 +314,6 @@ export type NoRunsYet = {
 }
 export type ExtractionStatus = RunSummary | NoRunsYet
 export type BackfillStatus = BackfillRunSummary | NoRunsYet
-export type ContactsSyncStatus = RunSummary | NoRunsYet
 export type HistoricalRunSummary = {
   started_at: string
   finished_at: string
@@ -329,6 +328,17 @@ export type HistoricalBackfillStatus = {
   started_at: string | null
   finished_at: string | null
   result: HistoricalRunSummary | null
+  error: string | null
+}
+// Mismo shape que HistoricalBackfillStatus -- el sync de contactos ahora corre en background
+// (troceado por ventanas de fecha, ver backend/CLAUDE.md) en vez de bloquear la respuesta del
+// POST, asi que necesita el mismo polling por fase que el backfill historico.
+export type ContactsSyncPhase = HistoricalBackfillPhase
+export type ContactsSyncStatus = {
+  phase: ContactsSyncPhase
+  started_at: string | null
+  finished_at: string | null
+  result: RunSummary | null
   error: string | null
 }
 

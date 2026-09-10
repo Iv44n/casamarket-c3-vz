@@ -6,7 +6,13 @@ from pydantic import BaseModel
 
 from ..auth.dependencies import get_current_user
 from ..extraction import state
-from ..schemas import BackfillRunSummary, HistoricalBackfillStatus, NoRunsYet, RunSummary
+from ..schemas import (
+    BackfillRunSummary,
+    ContactsSyncStatus,
+    HistoricalBackfillStatus,
+    NoRunsYet,
+    RunSummary,
+)
 
 router = APIRouter(
     prefix="/extraction", tags=["extraction"], dependencies=[Depends(get_current_user)]
@@ -58,22 +64,17 @@ def backfill_status() -> BackfillRunSummary | NoRunsYet:
     return run
 
 
-@router.post("/contacts/sync")
-def contacts_sync() -> RunSummary:
+@router.post("/contacts/sync", status_code=202)
+def contacts_sync() -> ContactsSyncStatus:
     try:
-        return state.run_contacts_sync()
+        return state.start_contacts_sync()
     except state.AlreadyRunningError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except (RuntimeError, httpx.HTTPError) as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.get("/contacts/sync/status")
-def contacts_sync_status() -> RunSummary | NoRunsYet:
-    run = state.last_contacts_sync_run()
-    if run is None:
-        return NoRunsYet()
-    return run
+def contacts_sync_status() -> ContactsSyncStatus:
+    return state.contacts_sync_status()
 
 
 @router.post("/historical/backfill", status_code=202)
