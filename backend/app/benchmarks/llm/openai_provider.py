@@ -29,7 +29,7 @@ def build_openai_provider(
     use_json_response_format: bool = True,
 ) -> OpenAIProvider:
     return OpenAIProvider(
-        client=OpenAI(api_key=api_key, base_url=base_url),
+        client=OpenAI(api_key=api_key, base_url=base_url, max_retries=0),
         model=model,
         use_json_response_format=use_json_response_format,
     )
