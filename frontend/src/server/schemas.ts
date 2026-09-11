@@ -451,6 +451,21 @@ export const benchmarkResultsRequestSchema = z.object({
   dateFrom: z.string().regex(ISO_DATE_REGEX).optional(),
   dateTo: z.string().regex(ISO_DATE_REGEX).optional()
 })
+export const benchmarkResultsPageRequestSchema = z.object({
+  direction: z.enum(BENCHMARK_DIRECTIONS).optional(),
+  dateFrom: z.string().regex(ISO_DATE_REGEX).optional(),
+  dateTo: z.string().regex(ISO_DATE_REGEX).optional(),
+  agentes: z.union([z.literal('all'), z.array(z.string())]).default('all'),
+  page: z.number().int().min(1).default(1),
+  pageSize: z.number().int().min(1).max(200).default(50)
+})
+export type BenchmarkResultsPageRequest = z.infer<
+  typeof benchmarkResultsPageRequestSchema
+>
+export type BenchmarkResultsPage = {
+  total: number
+  rows: BenchmarkCaseResult[]
+}
 export const BENCHMARKS_VIEWS = ['resultados', 'administracion'] as const
 export type BenchmarksView = (typeof BENCHMARKS_VIEWS)[number]
 export const benchmarksSearchSchema = z.object({

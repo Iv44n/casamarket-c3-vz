@@ -67,9 +67,12 @@ def build_case_benchmarks(
 ) -> list[CaseBenchmark]:
     """Itera `rows` (los casos PENDIENTES de veredicto -- nunca los ya benchmarkeados, ver
     store.already_benchmarked_ids) y hace `zip_texts.get(id)`; un caso cerrado sin PDF en el
-    zip de hoy sigue generando un CaseBenchmark (con `conversation_text=None`), para que su
-    tiempo de primera respuesta quede registrado igual aunque todavia no tenga veredicto de
-    calidad. `transfer_origins` (default vacio, ver store.transfer_origin_agents_for_cases)
+    zip de hoy sigue generando un CaseBenchmark (con `conversation_text=None`) para que
+    `analyze_direction` sepa que existe y lo vuelva a intentar en una corrida futura -- pero
+    ya NO genera fila en `benchmark_result` mientras le falte el veredicto (ver
+    `_is_complete_judgement` en `analyze_direction`), asi que su tiempo de primera respuesta
+    tampoco queda registrado hasta que el LLM lo juzgue por completo. `transfer_origins`
+    (default vacio, ver store.transfer_origin_agents_for_cases)
     mapea que casos tuvieron una transferencia real a la lista de agentes_origen de todos sus
     saltos -- decide si judge_conversation les pregunta por el aviso, y ademas se persiste tal
     cual (el `agente` de la fila es siempre el agente FINAL que cerro el caso, no el origen)."""
@@ -92,6 +95,23 @@ def build_case_benchmarks(
             )
         )
     return cases
+
+
+def _is_complete_judgement(judgement: QualityJudgement | None) -> bool:
+    """Un judgement "completo" tiene sus 5 criterios de calidad -- NO incluye
+    `informed_transfer`, que es legitimamente None en un judgement exitoso cuando el caso no
+    tuvo transferencia (ver judge_conversation). `judge_conversation` nunca lanza por un caso
+    raro: si el LLM devuelve JSON invalido o sin las claves esperadas, retorna un
+    QualityJudgement con TODOS los campos en None en vez de levantar una excepcion (ver su
+    docstring) -- ese caso pasa por aca igual que uno que nunca se intento, sin distincion."""
+    return (
+        judgement is not None
+        and judgement.greeting_level is not None
+        and judgement.has_farewell is not None
+        and judgement.complexity is not None
+        and judgement.handled_well_for_complexity is not None
+        and judgement.spelling_ok is not None
+    )
 
 
 def _to_benchmark_row(
@@ -148,10 +168,12 @@ def analyze_direction(
     `date_from`/`date_to` acotan que casos locales se consideran candidatos, Y ademas scopean
     el reporte masivo de C3 en si (`massive.run_direction` mas abajo le pasa el mismo rango) --
     si no se dan, cae al lookback fijo de siempre (`lookback_days` dias atras hasta hoy).
-    `force_reanalyze=True` no excluye los casos que ya tienen veredicto real (deja
-    que already_benchmarked_ids no se aplique), para poder re-juzgarlos; ver el filtro despues
-    de construir `rows_to_store` que evita que un caso sin PDF ESTA vez pise un veredicto
-    bueno ya guardado."""
+    `force_reanalyze=True` no excluye los casos que ya tienen veredicto real (deja que
+    already_benchmarked_ids no se aplique), para poder re-juzgarlos; no hay riesgo de que un
+    caso sin PDF ESTA vez pise un veredicto bueno ya guardado, porque solo se graba fila para
+    judgements completos (ver `_is_complete_judgement`/`rows_to_store` mas abajo) -- si este
+    intento no produce un judgement completo, simplemente no se graba nada y el veredicto
+    anterior queda intacto."""
     try:
         effective_date_from = date_from or (
             config.hoy() - timedelta(days=lookback_days)
@@ -239,20 +261,21 @@ def analyze_direction(
                                 cancelled,
                             )
 
+        # Solo se graba fila para casos con judgement COMPLETO -- un caso sin PDF todavia, o
+        # cuyo judgement quedo incompleto (LLM fallo/cuota agotada/JSON invalido, ver
+        # _is_complete_judgement), no genera fila en absoluto. Esto tambien vuelve innecesario
+        # el viejo filtro de force_reanalyze que evitaba pisar un veredicto real con uno en
+        # blanco: ya no puede construirse una fila en blanco para empezar. El costo es que
+        # first_response_seconds de un caso sin veredicto completo ya no queda registrado
+        # hasta que una corrida futura SI logre un judgement completo -- decision explicita
+        # del usuario sobre la alternativa (guardar first_response_seconds igual, sin
+        # veredicto).
         observed_at = datetime.now(config.TZ).isoformat()
         rows_to_store = [
-            _to_benchmark_row(case, judgements.get(case.id_atencion), llm_model)
+            _to_benchmark_row(case, judgements[case.id_atencion], llm_model)
             for case in cases
+            if _is_complete_judgement(judgements.get(case.id_atencion))
         ]
-        if force_reanalyze:
-            # No dejar que un caso sin PDF en ESTA corrida pise (con una fila nueva, en blanco)
-            # un veredicto real que ya estaba guardado de una corrida anterior -- ver docstring.
-            already_verdicts = store.already_benchmarked_ids(conn, direction, list(pending))
-            rows_to_store = [
-                row
-                for row in rows_to_store
-                if row["id_atencion"] not in already_verdicts or row["greeting_level"] is not None
-            ]
         if rows_to_store:
             store.record_benchmark_results(conn, rows_to_store, observed_at, run_id=run_id)
 
@@ -263,18 +286,18 @@ def analyze_direction(
             # la contaba como corrida exitosa (fase "done"/"Completado" en el frontend) aunque
             # cases_analyzed quedara en 0 -- confirmado en vivo el 2026-09-10 con un run que
             # mostraba "Completado" pese a que el LLM nunca pudo evaluar nada por falta de
-            # credito. Las filas si quedan guardadas (ver record_benchmark_results arriba, con
-            # first_response_seconds aunque sin veredicto de calidad), y los casos sin intentar
-            # siguen pendientes para la proxima corrida (ver already_benchmarked_ids).
+            # credito. Ninguno de los casos afectados por la cuota agotada llega a grabar fila
+            # (ver _is_complete_judgement arriba), asi que todos siguen pendientes para la
+            # proxima corrida (ver already_benchmarked_ids) sin necesidad de force_reanalyze.
             return schemas.BenchmarkDirectionSummary(
                 direction=direction,
                 action="failed",
                 cases_closed=len(closed),
                 cases_pending=len(pending),
                 cases_with_pdf=len(zip_texts),
-                cases_analyzed=len(judgements),
+                cases_analyzed=len(rows_to_store),
                 error=(
-                    f"Cuota del LLM agotada (429) -- solo se evaluaron {len(judgements)} de "
+                    f"Cuota del LLM agotada (429) -- solo se evaluaron {len(rows_to_store)} de "
                     f"{len(judgeable)} casos con PDF; el resto queda pendiente para la proxima "
                     "corrida."
                 ),
@@ -286,7 +309,7 @@ def analyze_direction(
             cases_closed=len(closed),
             cases_pending=len(pending),
             cases_with_pdf=len(zip_texts),
-            cases_analyzed=len(judgements),
+            cases_analyzed=len(rows_to_store),
         )
     except Exception as exc:
         logger.warning("Benchmark de '%s' fallo -- %s", direction, exc)

@@ -83,6 +83,7 @@ import { formatSecondsAsDuration } from '#/lib/duration'
 import { cn, withoutScrollReset } from '#/lib/utils'
 import {
   getBenchmarkResults,
+  getBenchmarkResultsPage,
   getBenchmarkRunStatus,
   getBenchmarkRuns,
   getLlmSettings,
@@ -184,6 +185,7 @@ function BenchmarksPage() {
   const search = Route.useSearch()
   const navigate = withoutScrollReset(Route.useNavigate())
   const fetchResults = useServerFn(getBenchmarkResults)
+  const fetchResultsPage = useServerFn(getBenchmarkResultsPage)
 
   const [results, setResults] = useState(initialResults)
   const [resultsLoading, setResultsLoading] = useState(false)
@@ -266,19 +268,56 @@ function BenchmarksPage() {
 
   const [resultsPage, setResultsPage] = useState(1)
   const [resultsPageSize, setResultsPageSize] = useState<50 | 100>(50)
-  const resultsTotalPages = Math.max(
-    1,
-    Math.ceil(filteredResults.length / resultsPageSize)
-  )
+  const [pagedResults, setPagedResults] = useState<
+    Awaited<ReturnType<typeof getBenchmarkResultsPage>>['rows']
+  >([])
+  const [pagedTotal, setPagedTotal] = useState(0)
+  const [pagedResultsLoading, setPagedResultsLoading] = useState(true)
+  const resultsTotalPages = Math.max(1, Math.ceil(pagedTotal / resultsPageSize))
   const resultsPageSafe = Math.min(resultsPage, resultsTotalPages)
-  const pagedResults = useMemo(
-    () =>
-      filteredResults.slice(
-        (resultsPageSafe - 1) * resultsPageSize,
-        resultsPageSafe * resultsPageSize
-      ),
-    [filteredResults, resultsPageSafe, resultsPageSize]
-  )
+
+  // La tabla de casos pagina a nivel de backend/DB (LIMIT/OFFSET real, ver
+  // store.benchmark_results_page) en vez de traer todo el rango y recortarlo en
+  // memoria -- KPIs/ranking/grafico siguen usando filteredResults completo porque
+  // esos SI necesitan el dataset entero para agregar bien.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: resetea la pagina cuando cambia cualquier filtro -- el efecto no necesita LEER esos valores, solo dispararse.
+  useEffect(() => {
+    setResultsPage(1)
+  }, [search.direction, search.date, search.dateEnd, search.agentes])
+
+  useEffect(() => {
+    let cancelled = false
+    setPagedResultsLoading(true)
+    fetchResultsPage({
+      data: {
+        direction: search.direction === 'all' ? undefined : search.direction,
+        dateFrom: search.date,
+        dateTo: search.dateEnd ?? search.date,
+        agentes: search.agentes,
+        page: resultsPage,
+        pageSize: resultsPageSize
+      }
+    })
+      .then(result => {
+        if (cancelled) return
+        setPagedResults(result.rows)
+        setPagedTotal(result.total)
+      })
+      .finally(() => {
+        if (!cancelled) setPagedResultsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    search.direction,
+    search.date,
+    search.dateEnd,
+    search.agentes,
+    resultsPage,
+    resultsPageSize,
+    fetchResultsPage
+  ])
   function handleResultsPageSizeChange(value: string | null) {
     if (value === null) return
     setResultsPageSize(Number(value) as 50 | 100)
@@ -596,19 +635,19 @@ function BenchmarksPage() {
             <CardHeader>
               <CardTitle>Detalle por caso</CardTitle>
               <CardDescription>
-                {filteredResults.length} caso
-                {filteredResults.length === 1 ? '' : 's'} en el rango elegido.
+                {pagedTotal} caso
+                {pagedTotal === 1 ? '' : 's'} en el rango elegido.
               </CardDescription>
             </CardHeader>
             <CardContent
               className={cn(
                 'transition-opacity',
-                resultsLoading && 'opacity-50'
+                pagedResultsLoading && 'opacity-50'
               )}
             >
               <BenchmarkResultsTable results={pagedResults} />
             </CardContent>
-            {filteredResults.length > 0 && (
+            {pagedTotal > 0 && (
               <CardFooter className="flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-muted-foreground">Mostrar</span>
@@ -933,7 +972,7 @@ function BenchmarkAgentTable({ agents }: { agents: AgentBenchmarkDatum[] }) {
             <TableHead>
               <KpiHeader
                 label="Casos evaluados"
-                explanation='Casos de este agente a los que el LLM juez ya les asignó una complejidad (baja/media/alta), sobre el total de casos de este agente en el rango elegido -- "233 / 400" significa que a 233 de sus 400 casos ya se les asignó complejidad, el resto todavía no fue juzgado. Es la base de "Score ponderado" y "Razón".'
+                explanation='Casos de este agente a los que el LLM juez ya les asignó una complejidad (baja/media/alta), sobre el total de casos de este agente que YA fueron procesados por alguna corrida de benchmarks en este rango. Ese total NO es el total real de atenciones del agente (para eso ver /atenciones) -- benchmarks solo procesa casos con estado "Cerrada", y solo cubre el rango de fechas que cada corrida efectivamente analizó (la corrida automática solo mira los últimos 3 días hacia atrás), que puede ser mucho más angosto que el rango elegido acá en pantalla. Es la base de "Score ponderado" y "Razón".'
                 column="casosEvaluados"
                 sortState={sortState}
                 onSort={handleSort}

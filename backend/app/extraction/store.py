@@ -1252,6 +1252,57 @@ _BENCHMARK_RESULT_COLUMNS = (
 )
 
 
+def _benchmark_where(
+    direction: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    agentes: list[str] | None,
+) -> tuple[str, list]:
+    """Filtro compartido por benchmark_result_rows (trae todo) y benchmark_results_page
+    (LIMIT/OFFSET) -- misma logica de "ultima version por caso" documentada en
+    benchmark_result_rows, mas el filtro opcional por agente (espeja benchmarkAgentLabel del
+    frontend: NULL o vacio normaliza a "Sin agente", ver _norm_expr)."""
+    clauses = ["id IN (SELECT MAX(id) FROM benchmark_result GROUP BY id_atencion, direction)"]
+    params: list = []
+    if direction:
+        clauses.append("direction = ?")
+        params.append(direction)
+    if date_from:
+        iso_expr = _iso_date_expr("fecha_final")
+        clauses.append(f"{iso_expr} BETWEEN ? AND ?")
+        params.append(date_from)
+        params.append(date_to or date_from)
+    if agentes is not None:
+        if len(agentes) == 0:
+            # Mismo espiritu que la guarda de estados=[]/agentes=[] en _attention_where.
+            clauses.append("1=0")
+        else:
+            agente_norm = _norm_expr("agente", "Sin agente")
+            placeholders = ", ".join("?" for _ in agentes)
+            clauses.append(f"{agente_norm} IN ({placeholders})")
+            params.extend(agentes)
+    return " AND ".join(clauses), params
+
+
+def _row_to_benchmark_dict(record: tuple) -> dict:
+    row = dict(zip(_BENCHMARK_RESULT_COLUMNS, record))
+    # bool(0/1) por nombre de columna, no por indice posicional -- evita tener que
+    # recalcular numeros a mano cada vez que _BENCHMARK_RESULT_COLUMNS cambia de orden
+    # o largo (ya paso dos veces).
+    for bool_column in (
+        "has_farewell",
+        "handled_well_for_complexity",
+        "spelling_ok",
+        "had_transfer",
+        "informed_transfer",
+        "quality_ok",
+    ):
+        row[bool_column] = None if row[bool_column] is None else bool(row[bool_column])
+    raw_agents = row["transferred_from_agents"]
+    row["transferred_from_agents"] = json.loads(raw_agents) if raw_agents else []
+    return row
+
+
 def benchmark_result_rows(
     conn: DBConnection,
     *,
@@ -1273,43 +1324,57 @@ def benchmark_result_rows(
     NULL en un caso todavia sin veredicto). El calculo de "ultima version" va SIN los filtros
     de fecha/direccion de esta funcion -- filtrarlo ahi tambien podria, si un caso se reabre y
     cierra en otra fecha entre corridas, perder de vista su version mas reciente o mostrar una
-    vieja por error."""
-    clauses = ["id IN (SELECT MAX(id) FROM benchmark_result GROUP BY id_atencion, direction)"]
-    params: list = []
-    if direction:
-        clauses.append("direction = ?")
-        params.append(direction)
-    if date_from:
-        iso_expr = _iso_date_expr("fecha_final")
-        clauses.append(f"{iso_expr} BETWEEN ? AND ?")
-        params.append(date_from)
-        params.append(date_to or date_from)
-    where_sql = " AND ".join(clauses)
+    vieja por error.
+
+    Trae TODO el rango de una -- a proposito: lo usan las agregaciones por agente (KPIs,
+    grafico de productividad), que necesitan el dataset completo del rango elegido para calcular
+    bien sus porcentajes/ranking, no una pagina. Para la tabla de casos individual (que puede
+    crecer sin limite) usar benchmark_results_page en su lugar."""
+    where_sql, params = _benchmark_where(direction, date_from, date_to, None)
     order_expr = _iso_datetime_expr("fecha_final", "hora_final")
     cursor = conn.execute(
         f"SELECT {', '.join(_BENCHMARK_RESULT_COLUMNS)} FROM benchmark_result "
         f"WHERE {where_sql} ORDER BY {order_expr} DESC, id_atencion",
         tuple(params),
     )
-    rows = []
-    for record in cursor.fetchall():
-        row = dict(zip(_BENCHMARK_RESULT_COLUMNS, record))
-        # bool(0/1) por nombre de columna, no por indice posicional -- evita tener que
-        # recalcular numeros a mano cada vez que _BENCHMARK_RESULT_COLUMNS cambia de orden
-        # o largo (ya paso dos veces).
-        for bool_column in (
-            "has_farewell",
-            "handled_well_for_complexity",
-            "spelling_ok",
-            "had_transfer",
-            "informed_transfer",
-            "quality_ok",
-        ):
-            row[bool_column] = None if row[bool_column] is None else bool(row[bool_column])
-        raw_agents = row["transferred_from_agents"]
-        row["transferred_from_agents"] = json.loads(raw_agents) if raw_agents else []
-        rows.append(row)
-    return rows
+    return [_row_to_benchmark_dict(record) for record in cursor.fetchall()]
+
+
+@dataclass(frozen=True)
+class BenchmarkResultsPage:
+    total: int
+    rows: list[dict]
+
+
+def benchmark_results_page(
+    conn: DBConnection,
+    *,
+    direction: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    agentes: list[str] | None = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> BenchmarkResultsPage:
+    """Version paginada de benchmark_result_rows -- LIMIT/OFFSET en SQL (mismo patron que
+    attention_records_page), para la tabla de casos de /benchmarks, que a diferencia de las
+    agregaciones por agente no necesita el dataset completo en memoria -- solo la pagina
+    visible."""
+    where_sql, params = _benchmark_where(direction, date_from, date_to, agentes)
+
+    count_sql = f"SELECT COUNT(*) FROM benchmark_result WHERE {where_sql}"
+    total = conn.execute(count_sql, tuple(params)).fetchone()[0] or 0
+
+    order_expr = _iso_datetime_expr("fecha_final", "hora_final")
+    offset = (page - 1) * page_size
+    page_sql = (
+        f"SELECT {', '.join(_BENCHMARK_RESULT_COLUMNS)} FROM benchmark_result "
+        f"WHERE {where_sql} ORDER BY {order_expr} DESC, id_atencion "
+        "LIMIT ? OFFSET ?"
+    )
+    cursor = conn.execute(page_sql, tuple(params) + (page_size, offset))
+    rows = [_row_to_benchmark_dict(record) for record in cursor.fetchall()]
+    return BenchmarkResultsPage(total=total, rows=rows)
 
 
 def create_benchmark_run(

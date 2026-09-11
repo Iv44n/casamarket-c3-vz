@@ -125,7 +125,7 @@ def test_build_case_benchmarks_defaults_had_transfer_to_false_without_transfer_o
     assert cases[0].transferred_from_agents == []
 
 
-def test_analyze_direction_records_response_time_for_all_pending_and_judges_only_those_with_pdf(
+def test_analyze_direction_only_stores_rows_for_cases_with_a_complete_judgement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     conn = _conn()
@@ -164,8 +164,9 @@ def test_analyze_direction_records_response_time_for_all_pending_and_judges_only
     assert rows["1"]["greeting_level"] == "formal"
     assert rows["1"]["quality_ok"] is True
     assert rows["1"]["first_response_seconds"] == 90.0
-    assert rows["2"]["greeting_level"] is None
-    assert rows["2"]["first_response_seconds"] == 90.0
+    # El caso "2" no tuvo PDF -> nunca se le arma un judgement -> no genera fila en absoluto
+    # (ni siquiera con first_response_seconds) -- queda pendiente para una corrida futura.
+    assert "2" not in rows
 
 
 class _QuotaExhaustedProvider:
@@ -211,11 +212,11 @@ def test_analyze_direction_returns_failed_summary_when_llm_quota_is_exhausted(
     assert "429" in summary.error
     assert "Cuota" in summary.error
 
-    # El tiempo de primera respuesta si queda grabado -- no depende del LLM.
+    # Sin judgement completo no se graba fila -- ni siquiera con first_response_seconds --
+    # asi que el caso queda pendiente para la proxima corrida (already_benchmarked_ids no lo
+    # ve como ya evaluado).
     rows = {r["id_atencion"]: r for r in store.benchmark_result_rows(conn)}
-    assert rows["1"]["first_response_seconds"] == 90.0
-    assert rows["1"]["greeting_level"] is None
-    assert rows["1"]["analyzed_at"] is None
+    assert "1" not in rows
 
 
 def test_analyze_direction_asks_about_transfer_only_for_cases_with_a_transfer_row(

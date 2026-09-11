@@ -153,6 +153,9 @@ def results(
     date_from: str | None = Query(default=None, pattern=ISO_DATE_PATTERN),
     date_to: str | None = Query(default=None, pattern=ISO_DATE_PATTERN),
 ) -> list[BenchmarkCaseResult]:
+    """Trae TODO el rango de una -- lo consumen las agregaciones por agente del frontend
+    (KPIs, ranking, grafico de productividad), que necesitan el dataset completo. Para listar
+    casos individuales de a una pagina usar GET /results/page."""
     conn = store.get_connection()
     try:
         rows = store.benchmark_result_rows(
@@ -161,3 +164,30 @@ def results(
     finally:
         conn.close()
     return rows
+
+
+@router.get("/results/page")
+def results_page(
+    direction: Literal["attention", "outboundattention"] | None = Query(default=None),
+    date_from: str | None = Query(default=None, pattern=ISO_DATE_PATTERN),
+    date_to: str | None = Query(default=None, pattern=ISO_DATE_PATTERN),
+    agentes: list[str] | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    """Version paginada (LIMIT/OFFSET server-side, ver store.benchmark_results_page) para la
+    tabla de casos de /benchmarks -- mismo shape de respuesta que GET /data/attention-records."""
+    conn = store.get_connection()
+    try:
+        page_result = store.benchmark_results_page(
+            conn,
+            direction=direction,
+            date_from=date_from,
+            date_to=date_to,
+            agentes=agentes,
+            page=page,
+            page_size=page_size,
+        )
+    finally:
+        conn.close()
+    return {"total": page_result.total, "rows": page_result.rows}

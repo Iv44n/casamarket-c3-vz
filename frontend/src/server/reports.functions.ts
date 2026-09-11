@@ -15,6 +15,7 @@ import {
   fetchAttentionRecordsPage,
   fetchBackfillStatus,
   fetchBenchmarkResults,
+  fetchBenchmarkResultsPage,
   fetchBenchmarkRunStatus,
   fetchBenchmarkRuns,
   fetchContactsSyncStatus,
@@ -38,6 +39,7 @@ import type {
   AttentionRecord,
   AttentionRecordsPage,
   AttentionsAnalytics,
+  BenchmarkResultsPage,
   DailyTrendAnalytics,
   DemandAnalytics,
   DemandBucketCount,
@@ -51,6 +53,7 @@ import type {
 import {
   attentionRecordsPageRequestSchema,
   backfillRequestSchema,
+  benchmarkResultsPageRequestSchema,
   benchmarkResultsRequestSchema,
   benchmarkRunRequestSchema,
   dateAndAgentesFilterSchema,
@@ -653,6 +656,24 @@ export const getBenchmarkResults = createServerFn({ method: 'GET' })
   .validator(benchmarkResultsRequestSchema)
   .handler(async ({ data }) => {
     return fetchBenchmarkResults(data)
+  })
+
+export const getBenchmarkResultsPage = createServerFn({ method: 'GET' })
+  .validator(benchmarkResultsPageRequestSchema)
+  .handler(async ({ data }): Promise<BenchmarkResultsPage> => {
+    // Mismo atajo que getAttentionRecordsPage: "ningun agente seleccionado" es una
+    // seleccion valida (0 resultados), no hace falta pegarle al backend para saberlo.
+    if (data.agentes !== 'all' && data.agentes.length === 0) {
+      return { total: 0, rows: [] }
+    }
+    return fetchBenchmarkResultsPage({
+      direction: data.direction,
+      dateFrom: data.dateFrom,
+      dateTo: data.dateTo,
+      agentes: data.agentes === 'all' ? undefined : data.agentes,
+      page: data.page,
+      pageSize: data.pageSize
+    })
   })
 
 export const getBenchmarkRuns = createServerFn({ method: 'GET' }).handler(

@@ -334,6 +334,28 @@ export async function fetchBenchmarkResults(params: {
   )
   return response.json()
 }
+export async function fetchBenchmarkResultsPage(params: {
+  direction?: BenchmarkDirection
+  dateFrom?: string
+  dateTo?: string
+  agentes?: string[]
+  page: number
+  pageSize: number
+}): Promise<{ total: number; rows: BenchmarkCaseResult[] }> {
+  const query = new URLSearchParams()
+  if (params.direction) query.set('direction', params.direction)
+  if (params.dateFrom) query.set('date_from', params.dateFrom)
+  if (params.dateTo) query.set('date_to', params.dateTo)
+  if (params.agentes) {
+    for (const agente of params.agentes) query.append('agentes', agente)
+  }
+  query.set('page', String(params.page))
+  query.set('page_size', String(params.pageSize))
+  const response = await backendFetch(
+    `/benchmarks/results/page?${query.toString()}`
+  )
+  return response.json()
+}
 export async function fetchLlmSettings(): Promise<LlmSettings> {
   const response = await backendFetch('/benchmarks/settings')
   return response.json()
