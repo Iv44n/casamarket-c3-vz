@@ -1,4 +1,9 @@
 import { BarChart } from '@mui/x-charts/BarChart'
+import {
+  getValueToPositionMapper,
+  useXScale,
+  useYScale
+} from '@mui/x-charts/hooks'
 import { ChevronDownIcon } from 'lucide-react'
 import { useState } from 'react'
 import { ChartThemeProvider } from '#/components/mui-chart-theme'
@@ -7,6 +12,8 @@ import { Checkbox } from '#/components/ui/checkbox'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger
 } from '#/components/ui/dropdown-menu'
 import { Label } from '#/components/ui/label'
@@ -37,6 +44,8 @@ const CHART_HEIGHT_PX = 320
 // X ya rotado.
 const QUALITY_CHART_HEIGHT_PX = 420
 const TRANSFER_CHART_COLOR = 'var(--color-chart-1)'
+const PRODUCTIVITY_RAW_CHART_COLOR = 'var(--color-chart-3)'
+const PRODUCTIVITY_WEIGHTED_CHART_COLOR = 'var(--color-primary)'
 // Saludo/despedida son 2 de los 4 criterios que antes componian el score combinado
 // "calidad general" (junto con ortografia/manejo adecuado, que tienen su propio
 // color) -- tonos mas claros del mismo verde para que se lean como su misma familia
@@ -78,6 +87,53 @@ function pct(value: number | null | undefined): string {
   return `${Math.round(value ?? 0)}%`
 }
 
+// Etiqueta "x1.85" arriba del par de barras (bruto/ponderado) de cada agente --
+// la razon score/bruto que responde "que tan cargada de complejidad media/alta
+// esta la mezcla de este agente" (ver lib/benchmark-analytics.ts). Renderizada
+// como <text> plano dentro del <svg> del chart (mismo patron que
+// PieCenterLabel en status-donut-chart.tsx), no como HTML superpuesto, para
+// que quede alineada en las mismas coordenadas que las barras sin importar el
+// tamano del contenedor. useXScale/useYScale solo funcionan como hijos de un
+// componente MUI X Charts (leen el contexto que ChartsDataProvider provee) --
+// no se puede precalcular esto fuera del <BarChart>.
+function ProductivityRatioLabels({
+  data
+}: {
+  data: Array<{
+    agente: string
+    complexityCheckedCount: number
+    complexityWeightedScore: number
+  }>
+}) {
+  const xPosition = getValueToPositionMapper(useXScale())
+  const yPosition = getValueToPositionMapper(useYScale())
+  return (
+    <>
+      {data.map(item => {
+        if (item.complexityCheckedCount === 0) return null
+        const ratio = item.complexityWeightedScore / item.complexityCheckedCount
+        const topValue = Math.max(
+          item.complexityCheckedCount,
+          item.complexityWeightedScore
+        )
+        return (
+          <text
+            key={item.agente}
+            x={xPosition(item.agente)}
+            y={yPosition(topValue) - 22}
+            textAnchor="middle"
+            fontSize={CHART_VALUE_LABEL_FONT_SIZE}
+            fontWeight={700}
+            fill="var(--color-foreground)"
+          >
+            {`×${ratio.toFixed(2)}`}
+          </text>
+        )
+      })}
+    </>
+  )
+}
+
 // Los 3 segmentos de complejidad cuentan como UNA sola barra (apilada) a
 // efectos del selector "Mostrar" -- ocultar/mostrar complejidad los mueve a
 // los tres juntos, no tiene sentido activar solo un segmento del apilado.
@@ -89,6 +145,18 @@ const QUALITY_METRIC_OPTIONS = [
   { key: 'complexity', label: 'Complejidad (baja/media/alta)' }
 ] as const
 type QualityMetricKey = (typeof QUALITY_METRIC_OPTIONS)[number]['key']
+
+// Criterio de orden del chart de productividad -- 'ratio' es el score
+// ponderado entre casos evaluados (razon "x1.85" de ProductivityRatioLabels),
+// no un cuarto numero nuevo: reordena las mismas barras por esa razon en vez
+// de por el score absoluto, para responder "que agente maneja la mezcla mas
+// pesada" en vez de "quien tiene el score mas alto" (que favorece volumen).
+const PRODUCTIVITY_SORT_OPTIONS = [
+  { key: 'weighted', label: 'Score ponderado' },
+  { key: 'raw', label: 'Casos evaluados (bruto)' },
+  { key: 'ratio', label: 'Razón (score ÷ bruto)' }
+] as const
+type ProductivitySortKey = (typeof PRODUCTIVITY_SORT_OPTIONS)[number]['key']
 
 function QualityMetricsQuickActions({
   onSelectAll,
@@ -140,6 +208,8 @@ export function BenchmarkAgentChart({
   const [visibleMetrics, setVisibleMetrics] = useState<QualityMetricKey[]>(
     QUALITY_METRIC_OPTIONS.map(option => option.key)
   )
+  const [productivitySortKey, setProductivitySortKey] =
+    useState<ProductivitySortKey>('weighted')
   function isMetricVisible(key: QualityMetricKey) {
     return visibleMetrics.includes(key)
   }
@@ -202,6 +272,24 @@ export function BenchmarkAgentChart({
   const qualitySorted = [...agents].sort(
     (a, b) => qualitySortValue(a) - qualitySortValue(b)
   )
+  // 'ratio' (score / bruto) es 0 para un agente sin ningun caso con
+  // complejidad juzgada -- mismo tratamiento que 'weighted'/'raw' en ese caso
+  // (se van al fondo del orden ascendente, no rompen la division por 0).
+  function productivitySortValue(agent: AgentBenchmarkDatum): number {
+    switch (productivitySortKey) {
+      case 'raw':
+        return agent.complexityCheckedCount
+      case 'ratio':
+        return agent.complexityCheckedCount > 0
+          ? agent.complexityWeightedScore / agent.complexityCheckedCount
+          : 0
+      default:
+        return agent.complexityWeightedScore
+    }
+  }
+  const productivitySorted = [...agents].sort(
+    (a, b) => productivitySortValue(a) - productivitySortValue(b)
+  )
   const transferSorted = [...transferNotifications].sort(
     (a, b) => (a.informedPct ?? 0) - (b.informedPct ?? 0)
   )
@@ -217,6 +305,10 @@ export function BenchmarkAgentChart({
   )
   const transferWidth = Math.max(
     transferSorted.length * AGENT_COLUMN_WIDTH_PX,
+    CHART_MIN_WIDTH_PX
+  )
+  const productivityWidth = Math.max(
+    productivitySorted.length * 2 * QUALITY_BAR_SLOT_WIDTH_PX,
     CHART_MIN_WIDTH_PX
   )
   const responseAriaLabel = `Tiempo promedio de primera respuesta por agente, de menor a mayor: ${responseSorted
@@ -251,6 +343,18 @@ export function BenchmarkAgentChart({
   const transferAriaLabel = `Porcentaje de casos donde se avisó al cliente antes de transferir, por agente que transfiere, de menor a mayor: ${transferSorted
     .map(t => `${t.agente} ${pct(t.informedPct)}`)
     .join('; ')}`
+  const productivitySortLabel =
+    PRODUCTIVITY_SORT_OPTIONS.find(option => option.key === productivitySortKey)
+      ?.label ?? ''
+  const productivityAriaLabel = `Casos evaluados y score de productividad ponderado por complejidad (baja=1, media=2, alta=3) por agente, de menor a mayor ${productivitySortLabel.toLowerCase()}: ${productivitySorted
+    .map(a => {
+      const ratio =
+        a.complexityCheckedCount > 0
+          ? (a.complexityWeightedScore / a.complexityCheckedCount).toFixed(2)
+          : null
+      return `${a.agente} ${a.complexityCheckedCount} casos, score ${a.complexityWeightedScore}${ratio !== null ? `, razón x${ratio}` : ''}`
+    })
+    .join('; ')}`
   const responseDataset = responseSorted.map(a => ({
     agente: a.agente,
     avgFirstResponseSeconds: a.avgFirstResponseSeconds ?? 0
@@ -269,6 +373,26 @@ export function BenchmarkAgentChart({
     agente: t.agente,
     informedPct: t.informedPct ?? 0
   }))
+  const productivityDataset = productivitySorted.map(a => ({
+    agente: a.agente,
+    complexityCheckedCount: a.complexityCheckedCount,
+    complexityWeightedScore: a.complexityWeightedScore
+  }))
+  // Headroom explicito arriba de la barra mas alta -- sin esto el eje Y auto-
+  // escala pegado al valor maximo y la etiqueta de razon (ProductivityRatioLabels)
+  // queda encima del propio numero de la barra (o se corta contra el borde del
+  // chart).
+  const productivityMaxValue = Math.max(
+    0,
+    ...productivityDataset.flatMap(d => [
+      d.complexityCheckedCount,
+      d.complexityWeightedScore
+    ])
+  )
+  const productivityYAxisMax =
+    productivityMaxValue > 0
+      ? Math.ceil(productivityMaxValue * 1.35)
+      : undefined
   const qualitySeriesDefs: Array<{
     metric: QualityMetricKey
     dataKey: string
@@ -461,6 +585,96 @@ export function BenchmarkAgentChart({
             </ChartThemeProvider>
           </div>
         )}
+      </div>
+      <div>
+        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-medium text-muted-foreground">
+            Productividad: casos evaluados vs. score ponderado por complejidad
+            (baja=1, media=2, alta=3)
+          </p>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground">
+              Ordenar por
+            </span>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-48 justify-between font-normal"
+                  />
+                }
+              >
+                <span className="min-w-0 truncate">
+                  {productivitySortLabel}
+                </span>
+                <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-56">
+                <DropdownMenuRadioGroup
+                  value={productivitySortKey}
+                  onValueChange={value =>
+                    setProductivitySortKey(value as ProductivitySortKey)
+                  }
+                >
+                  {PRODUCTIVITY_SORT_OPTIONS.map(option => (
+                    <DropdownMenuRadioItem key={option.key} value={option.key}>
+                      {option.label}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+        <div
+          role="img"
+          aria-label={productivityAriaLabel}
+          className="w-full overflow-x-auto"
+        >
+          <ChartThemeProvider>
+            <BarChart
+              dataset={productivityDataset}
+              width={productivityWidth}
+              height={CHART_HEIGHT_PX}
+              xAxis={[agentAxis()]}
+              yAxis={[{ ...hiddenValueAxis, max: productivityYAxisMax }]}
+              series={[
+                {
+                  dataKey: 'complexityCheckedCount',
+                  label: 'Casos evaluados (bruto)',
+                  color: PRODUCTIVITY_RAW_CHART_COLOR,
+                  valueFormatter: value => String(value ?? 0),
+                  barLabel: item => String(item.value ?? 0)
+                },
+                {
+                  dataKey: 'complexityWeightedScore',
+                  label: 'Score ponderado por complejidad',
+                  color: PRODUCTIVITY_WEIGHTED_CHART_COLOR,
+                  valueFormatter: value => String(value ?? 0),
+                  barLabel: item => String(item.value ?? 0)
+                }
+              ]}
+              borderRadius={4}
+              slotProps={{
+                legend: {
+                  direction: 'horizontal',
+                  position: { vertical: 'bottom', horizontal: 'center' }
+                }
+              }}
+              sx={{
+                '& .MuiBarChart-label': {
+                  fill: '#0a0a0a !important',
+                  fontWeight: 700,
+                  fontSize: CHART_VALUE_LABEL_FONT_SIZE
+                }
+              }}
+            >
+              <ProductivityRatioLabels data={productivityDataset} />
+            </BarChart>
+          </ChartThemeProvider>
+        </div>
       </div>
       {transferNotifications.length > 0 && (
         <div>

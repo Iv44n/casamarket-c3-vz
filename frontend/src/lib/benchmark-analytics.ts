@@ -1,4 +1,20 @@
-import type { AgentLimit, BenchmarkCaseResult } from '#/server/schemas'
+import type {
+  AgentLimit,
+  BenchmarkCaseResult,
+  BenchmarkComplexity
+} from '#/server/schemas'
+
+// Un caso resuelto no cuesta lo mismo segun su complejidad (juzgada por el LLM,
+// ver judge.py) -- contar casos en bruto hace que un agente que solo recibe
+// casos "baja" luzca mas productivo que uno que recibe "alta" pese a que este
+// ultimo invierte mas tiempo/esfuerzo por caso. Pesos fijos y explicitos (no
+// derivados de datos) para que el ranking de productividad sea comparable
+// entre agentes con mezclas de complejidad distintas.
+export const COMPLEXITY_WEIGHTS: Record<BenchmarkComplexity, number> = {
+  baja: 1,
+  media: 2,
+  alta: 3
+}
 
 // "ownConductOk*" recalcula el mismo AND-logic que el backend usa para quality_ok
 // (greeting_level != 'ninguno' AND has_farewell AND handled_well_for_complexity AND
@@ -10,6 +26,12 @@ import type { AgentLimit, BenchmarkCaseResult } from '#/server/schemas'
 // bug real reportado por el usuario, confirmado y con fix acordado con backend.
 export type AgentBenchmarkDatum = {
   agente: string
+  // Total de casos de este agente en el rango filtrado, sin importar si
+  // tienen algun dato juzgado (complejidad, calidad, etc.) -- el denominador
+  // real para saber que fraccion de la carga de un agente ya fue evaluada,
+  // ya que complexityCheckedCount/casesAnalyzed/casesWithResponseTime son
+  // subconjuntos parciales de este numero, no equivalentes entre si.
+  totalCasesCount: number
   casesWithResponseTime: number
   avgFirstResponseSeconds: number | null
   casesAnalyzed: number
@@ -25,9 +47,17 @@ export type AgentBenchmarkDatum = {
   handledWellCheckedCount: number
   handledWellPct: number | null
   complexityCheckedCount: number
+  complexityLowCount: number
   complexityLowPct: number | null
+  complexityMediumCount: number
   complexityMediumPct: number | null
+  complexityHighCount: number
   complexityHighPct: number | null
+  // Suma de casos_con_complejidad_X * COMPLEXITY_WEIGHTS[X] -- solo cubre los
+  // casos con complejidad juzgada (complexityCheckedCount), no todos los
+  // casesAnalyzed; un agente sin ningun caso juzgado por el LLM da 0, no null,
+  // para que siga siendo comparable/ordenable junto al resto.
+  complexityWeightedScore: number
 }
 
 function agenteKeyOf(value: string | null): string {
@@ -57,6 +87,7 @@ function ownConductOkOf(row: BenchmarkCaseResult): boolean | null {
 }
 
 type AgentAccumulator = {
+  totalCases: number
   responseTotal: number
   responseCount: number
   ownConductOk: number
@@ -82,6 +113,7 @@ export function buildAgentBenchmarkRanking(
   for (const row of results) {
     const agente = agenteKeyOf(row.agente)
     const current: AgentAccumulator = byAgent.get(agente) ?? {
+      totalCases: 0,
       responseTotal: 0,
       responseCount: 0,
       ownConductOk: 0,
@@ -98,6 +130,7 @@ export function buildAgentBenchmarkRanking(
       complexityMedium: 0,
       complexityHigh: 0
     }
+    current.totalCases += 1
     if (row.first_response_seconds !== null) {
       current.responseTotal += row.first_response_seconds
       current.responseCount += 1
@@ -146,6 +179,7 @@ export function buildAgentBenchmarkRanking(
         stats.complexityLow + stats.complexityMedium + stats.complexityHigh
       return {
         agente,
+        totalCasesCount: stats.totalCases,
         casesWithResponseTime: stats.responseCount,
         avgFirstResponseSeconds:
           stats.responseCount > 0
@@ -177,18 +211,25 @@ export function buildAgentBenchmarkRanking(
             ? (stats.handledWellOk / handledWellCheckedCount) * 100
             : null,
         complexityCheckedCount,
+        complexityLowCount: stats.complexityLow,
         complexityLowPct:
           complexityCheckedCount > 0
             ? (stats.complexityLow / complexityCheckedCount) * 100
             : null,
+        complexityMediumCount: stats.complexityMedium,
         complexityMediumPct:
           complexityCheckedCount > 0
             ? (stats.complexityMedium / complexityCheckedCount) * 100
             : null,
+        complexityHighCount: stats.complexityHigh,
         complexityHighPct:
           complexityCheckedCount > 0
             ? (stats.complexityHigh / complexityCheckedCount) * 100
-            : null
+            : null,
+        complexityWeightedScore:
+          stats.complexityLow * COMPLEXITY_WEIGHTS.baja +
+          stats.complexityMedium * COMPLEXITY_WEIGHTS.media +
+          stats.complexityHigh * COMPLEXITY_WEIGHTS.alta
       }
     })
     .sort(
@@ -231,6 +272,18 @@ export function bestQualityAgent(
   if (withQuality.length === 0) return null
   return withQuality.reduce((best, current) =>
     (current.ownConductOkPct ?? 0) > (best.ownConductOkPct ?? 0)
+      ? current
+      : best
+  )
+}
+
+export function bestProductivityAgent(
+  agents: AgentBenchmarkDatum[]
+): AgentBenchmarkDatum | null {
+  const withCases = agents.filter(a => a.complexityCheckedCount > 0)
+  if (withCases.length === 0) return null
+  return withCases.reduce((best, current) =>
+    current.complexityWeightedScore > best.complexityWeightedScore
       ? current
       : best
   )

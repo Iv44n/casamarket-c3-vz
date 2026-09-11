@@ -1,10 +1,14 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
 import {
+  ArrowDownIcon,
+  ArrowUpIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  ChevronsUpDownIcon,
+  InfoIcon,
   PlayIcon,
   SettingsIcon,
   XIcon
@@ -67,7 +71,9 @@ import {
   TooltipTrigger
 } from '#/components/ui/tooltip'
 import {
+  type AgentBenchmarkDatum,
   benchmarkTotals,
+  bestProductivityAgent,
   bestQualityAgent,
   buildAgentBenchmarkRanking,
   buildTransferNotificationRanking
@@ -256,6 +262,7 @@ function BenchmarksPage() {
     'all'
   )
   const topQualityAgent = bestQualityAgent(agentRanking)
+  const topProductivityAgent = bestProductivityAgent(agentRanking)
 
   const [resultsPage, setResultsPage] = useState(1)
   const [resultsPageSize, setResultsPageSize] = useState<50 | 100>(50)
@@ -511,14 +518,42 @@ function BenchmarksPage() {
                   transferir.
                 </CardDescription>
               </div>
-              {topQualityAgent && (
-                <Badge variant="secondary" className="max-w-64">
-                  <span className="min-w-0 truncate">
-                    Mejor calidad: {topQualityAgent.agente} (
-                    {Math.round(topQualityAgent.ownConductOkPct ?? 0)}%)
-                  </span>
-                </Badge>
-              )}
+              <div className="flex flex-wrap gap-2">
+                {topQualityAgent && (
+                  <Badge variant="secondary" className="max-w-64">
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={<span className="min-w-0 truncate" />}
+                      >
+                        Mejor calidad: {topQualityAgent.agente} (
+                        {Math.round(topQualityAgent.ownConductOkPct ?? 0)}%)
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        Mejor calidad: {topQualityAgent.agente} (
+                        {Math.round(topQualityAgent.ownConductOkPct ?? 0)}%)
+                      </TooltipContent>
+                    </Tooltip>
+                  </Badge>
+                )}
+                {topProductivityAgent && (
+                  <Badge variant="secondary" className="max-w-64">
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={<span className="min-w-0 truncate" />}
+                      >
+                        Mejor productividad ponderada:{' '}
+                        {topProductivityAgent.agente} (
+                        {topProductivityAgent.complexityWeightedScore})
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        Mejor productividad ponderada:{' '}
+                        {topProductivityAgent.agente} (
+                        {topProductivityAgent.complexityWeightedScore})
+                      </TooltipContent>
+                    </Tooltip>
+                  </Badge>
+                )}
+              </div>
             </CardHeader>
             <CardContent
               className={cn(
@@ -536,6 +571,24 @@ function BenchmarksPage() {
                   transferNotifications={transferNotifications}
                 />
               )}
+            </CardContent>
+          </Card>
+
+          <Card className="mt-4">
+            <CardHeader>
+              <CardTitle>Agentes</CardTitle>
+              <CardDescription>
+                KPIs por agente. Click en el ícono ↕ de una columna para ordenar
+                por ese valor (por defecto: mayor a menor score ponderado).
+              </CardDescription>
+            </CardHeader>
+            <CardContent
+              className={cn(
+                'transition-opacity',
+                resultsLoading && 'opacity-50'
+              )}
+            >
+              <BenchmarkAgentTable agents={agentRanking} />
             </CardContent>
           </Card>
 
@@ -728,6 +781,285 @@ function AgenteCell({
           Desde: {transferredFromAgents.join(' → ')}
         </div>
       )}
+    </div>
+  )
+}
+
+// Cada columna de BenchmarkAgentTable sale de una formula distinta, con
+// denominadores que NO coinciden entre si (ej. "1ra respuesta" solo cuenta
+// casos con ese dato disponible, "Casos evaluados" solo casos con complejidad
+// ya juzgada por el LLM) -- sin esta leyenda, dos columnas pueden parecer
+// inconsistentes entre si cuando en realidad estan promediando sobre bases
+// distintas.
+type AgentSortColumn =
+  | 'agente'
+  | 'casosEvaluados'
+  | 'scorePonderado'
+  | 'razon'
+  | 'primeraRespuesta'
+  | 'complejidadBaja'
+  | 'complejidadMedia'
+  | 'complejidadAlta'
+type AgentSortDirection = 'asc' | 'desc'
+type AgentSortState = {
+  column: AgentSortColumn
+  direction: AgentSortDirection
+}
+
+// El icono de doble flecha (ChevronsUpDown) va SIEMPRE a la izquierda del
+// label -- separado del icono ⓘ de explicacion, que es su propio trigger de
+// tooltip (hover, no click) en vez de vivir dentro del <button> de orden: un
+// tooltip-trigger anidado dentro de un elemento clickeable es ambiguo para
+// teclado/lector de pantalla, y ademas clickear el icono ⓘ no deberia
+// disparar un cambio de orden.
+function KpiHeader({
+  label,
+  explanation,
+  column,
+  sortState,
+  onSort
+}: {
+  label: string
+  explanation?: string
+  column: AgentSortColumn
+  sortState: AgentSortState
+  onSort: (column: AgentSortColumn) => void
+}) {
+  const isActive = sortState.column === column
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => onSort(column)}
+        className="flex cursor-pointer items-center gap-1 hover:text-foreground"
+        aria-label={`Ordenar por ${label}`}
+      >
+        {isActive ? (
+          sortState.direction === 'asc' ? (
+            <ArrowUpIcon className="size-3.5" />
+          ) : (
+            <ArrowDownIcon className="size-3.5" />
+          )
+        ) : (
+          <ChevronsUpDownIcon className="size-3.5 text-muted-foreground" />
+        )}
+        {label}
+      </button>
+      {explanation && (
+        <Tooltip>
+          <TooltipTrigger render={<span className="cursor-default" />}>
+            <InfoIcon className="size-3.5 text-muted-foreground" />
+          </TooltipTrigger>
+          <TooltipContent className="max-w-64">{explanation}</TooltipContent>
+        </Tooltip>
+      )}
+    </div>
+  )
+}
+
+// 'razon' y las 3 de complejidad tratan null/sin-datos como 0 -- mismo
+// criterio que qualitySortValue en benchmark-agent-chart.tsx (agentes sin
+// ese dato se van al fondo en vez de romper la comparacion).
+function agentSortValue(
+  agent: AgentBenchmarkDatum,
+  column: AgentSortColumn
+): number | string {
+  switch (column) {
+    case 'agente':
+      return agent.agente
+    case 'casosEvaluados':
+      return agent.complexityCheckedCount
+    case 'scorePonderado':
+      return agent.complexityWeightedScore
+    case 'razon':
+      return agent.complexityCheckedCount > 0
+        ? agent.complexityWeightedScore / agent.complexityCheckedCount
+        : 0
+    case 'primeraRespuesta':
+      return agent.avgFirstResponseSeconds ?? 0
+    case 'complejidadBaja':
+      return agent.complexityLowPct ?? 0
+    case 'complejidadMedia':
+      return agent.complexityMediumPct ?? 0
+    case 'complejidadAlta':
+      return agent.complexityHighPct ?? 0
+  }
+}
+
+function BenchmarkAgentTable({ agents }: { agents: AgentBenchmarkDatum[] }) {
+  // Default = mismo orden que el badge "Mejor productividad ponderada" --
+  // de mayor a menor score, para que la fila de arriba sea siempre el agente
+  // que ese KPI destaca hasta que el usuario elija otra columna.
+  const [sortState, setSortState] = useState<AgentSortState>({
+    column: 'scorePonderado',
+    direction: 'desc'
+  })
+  function handleSort(column: AgentSortColumn) {
+    setSortState(current =>
+      current.column === column
+        ? { column, direction: current.direction === 'asc' ? 'desc' : 'asc' }
+        : { column, direction: column === 'agente' ? 'asc' : 'desc' }
+    )
+  }
+  if (agents.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Todavía no hay resultados para el rango elegido.
+      </p>
+    )
+  }
+  const sorted = [...agents].sort((a, b) => {
+    const va = agentSortValue(a, sortState.column)
+    const vb = agentSortValue(b, sortState.column)
+    const cmp =
+      typeof va === 'string' && typeof vb === 'string'
+        ? va.localeCompare(vb)
+        : (va as number) - (vb as number)
+    return sortState.direction === 'asc' ? cmp : -cmp
+  })
+  return (
+    <div className="overflow-x-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>
+              <KpiHeader
+                label="Agente"
+                column="agente"
+                sortState={sortState}
+                onSort={handleSort}
+              />
+            </TableHead>
+            <TableHead>
+              <KpiHeader
+                label="Casos evaluados"
+                explanation='Casos de este agente a los que el LLM juez ya les asignó una complejidad (baja/media/alta), sobre el total de casos de este agente en el rango elegido -- "233 / 400" significa que a 233 de sus 400 casos ya se les asignó complejidad, el resto todavía no fue juzgado. Es la base de "Score ponderado" y "Razón".'
+                column="casosEvaluados"
+                sortState={sortState}
+                onSort={handleSort}
+              />
+            </TableHead>
+            <TableHead>
+              <KpiHeader
+                label="Score ponderado"
+                explanation="Suma de los casos evaluados, cada uno multiplicado por el peso de su complejidad: baja×1, media×2, alta×3. Un agente con 20 casos baja (score 20) y otro con 10 casos media (score 20) quedan parejos en vez de que el segundo luzca menos productivo."
+                column="scorePonderado"
+                sortState={sortState}
+                onSort={handleSort}
+              />
+            </TableHead>
+            <TableHead>
+              <KpiHeader
+                label="Razón (score ÷ bruto)"
+                explanation="Score ponderado dividido entre casos evaluados: el peso promedio por caso de este agente. Cerca de ×1 = casi todo complejidad baja; cerca de ×3 = casi todo alta; ×2 puede ser mayoria media o una mezcla pareja de baja y alta."
+                column="razon"
+                sortState={sortState}
+                onSort={handleSort}
+              />
+            </TableHead>
+            <TableHead>
+              <KpiHeader
+                label="1ra respuesta"
+                explanation="Promedio de segundos entre que el caso se abre y el agente responde por primera vez, sobre los casos de este agente donde ese dato esta disponible."
+                column="primeraRespuesta"
+                sortState={sortState}
+                onSort={handleSort}
+              />
+            </TableHead>
+            <TableHead>
+              <KpiHeader
+                label="Complejidad baja"
+                explanation="Porcentaje de los casos evaluados (con complejidad juzgada) que el LLM clasificó como baja complejidad, con el numero de casos debajo. Baja + media + alta suman 100% (y sus 3 conteos suman 'Casos evaluados')."
+                column="complejidadBaja"
+                sortState={sortState}
+                onSort={handleSort}
+              />
+            </TableHead>
+            <TableHead>
+              <KpiHeader
+                label="Complejidad media"
+                explanation="Porcentaje de los casos evaluados (con complejidad juzgada) que el LLM clasificó como complejidad media, con el numero de casos debajo. Baja + media + alta suman 100% (y sus 3 conteos suman 'Casos evaluados')."
+                column="complejidadMedia"
+                sortState={sortState}
+                onSort={handleSort}
+              />
+            </TableHead>
+            <TableHead>
+              <KpiHeader
+                label="Complejidad alta"
+                explanation="Porcentaje de los casos evaluados (con complejidad juzgada) que el LLM clasificó como complejidad alta, con el numero de casos debajo. Baja + media + alta suman 100% (y sus 3 conteos suman 'Casos evaluados')."
+                column="complejidadAlta"
+                sortState={sortState}
+                onSort={handleSort}
+              />
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {sorted.map(agent => (
+            <TableRow key={agent.agente}>
+              <TableCell>{agent.agente}</TableCell>
+              <TableCell>
+                <div>
+                  {agent.complexityCheckedCount} / {agent.totalCasesCount}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {agent.totalCasesCount > 0
+                    ? `${Math.round((agent.complexityCheckedCount / agent.totalCasesCount) * 100)}%`
+                    : '—'}
+                </div>
+              </TableCell>
+              <TableCell>{agent.complexityWeightedScore}</TableCell>
+              <TableCell>
+                {agent.complexityCheckedCount > 0
+                  ? `×${(agent.complexityWeightedScore / agent.complexityCheckedCount).toFixed(2)}`
+                  : '—'}
+              </TableCell>
+              <TableCell>
+                {agent.avgFirstResponseSeconds !== null
+                  ? formatSecondsAsDuration(agent.avgFirstResponseSeconds)
+                  : '—'}
+              </TableCell>
+              <TableCell>
+                {agent.complexityLowPct !== null ? (
+                  <>
+                    <div>{Math.round(agent.complexityLowPct)}%</div>
+                    <div className="text-xs text-muted-foreground">
+                      {agent.complexityLowCount}
+                    </div>
+                  </>
+                ) : (
+                  '—'
+                )}
+              </TableCell>
+              <TableCell>
+                {agent.complexityMediumPct !== null ? (
+                  <>
+                    <div>{Math.round(agent.complexityMediumPct)}%</div>
+                    <div className="text-xs text-muted-foreground">
+                      {agent.complexityMediumCount}
+                    </div>
+                  </>
+                ) : (
+                  '—'
+                )}
+              </TableCell>
+              <TableCell>
+                {agent.complexityHighPct !== null ? (
+                  <>
+                    <div>{Math.round(agent.complexityHighPct)}%</div>
+                    <div className="text-xs text-muted-foreground">
+                      {agent.complexityHighCount}
+                    </div>
+                  </>
+                ) : (
+                  '—'
+                )}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
     </div>
   )
 }
