@@ -572,9 +572,9 @@ def test_run_benchmark_cycle_builds_llm_provider_from_settings_when_not_injected
     )
     fake_llm_config = pipeline.llm_settings.LLMConfig(
         provider_name="minimax",
-        minimax_api_key="x",
-        minimax_model="MiniMax-M1",
-        minimax_base_url="https://api.minimax.io/v1",
+        api_key="x",
+        model="MiniMax-M1",
+        base_url="https://api.minimax.io/v1",
     )
     settings_conn = _conn()
     monkeypatch.setattr(pipeline.llm_settings, "get_connection", lambda: settings_conn)

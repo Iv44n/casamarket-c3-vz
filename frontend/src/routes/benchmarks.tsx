@@ -97,6 +97,8 @@ import {
   type BenchmarksSearch,
   type BenchmarksView,
   benchmarksSearchSchema,
+  LLM_PROVIDERS,
+  type LlmProviderName,
   todayIsoDate
 } from '#/server/schemas'
 
@@ -1161,11 +1163,16 @@ function LlmSettingsCard({
   const doUpdateSettings = useServerFn(updateLlmSettings)
   const [settings, setSettings] = useState(initialSettings)
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [providerName, setProviderName] = useState(settings.provider_name)
-  const [model, setModel] = useState(settings.minimax_model ?? '')
-  const [baseUrl, setBaseUrl] = useState(settings.minimax_base_url ?? '')
+  const [providerName, setProviderName] = useState<LlmProviderName>(
+    settings.provider_name as LlmProviderName
+  )
+  const [model, setModel] = useState(settings.model ?? '')
+  const [baseUrl, setBaseUrl] = useState(settings.base_url ?? '')
   const [apiKey, setApiKey] = useState('')
   const [pending, setPending] = useState(false)
+  // Claude no usa base_url (el backend lo ignora del todo para ese proveedor -- ver
+  // anthropic_provider.py); ocultar el campo evita que un admin piense que hace algo ahi.
+  const showBaseUrl = providerName !== 'claude'
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
@@ -1174,9 +1181,9 @@ function LlmSettingsCard({
       const updated = await doUpdateSettings({
         data: {
           provider_name: providerName,
-          ...(apiKey ? { minimax_api_key: apiKey } : {}),
-          minimax_model: model,
-          minimax_base_url: baseUrl
+          ...(apiKey ? { api_key: apiKey } : {}),
+          model,
+          ...(showBaseUrl && baseUrl ? { base_url: baseUrl } : {})
         }
       })
       setSettings(updated)
@@ -1204,9 +1211,9 @@ function LlmSettingsCard({
           onOpenChange={open => {
             setDialogOpen(open)
             if (open) {
-              setProviderName(settings.provider_name)
-              setModel(settings.minimax_model ?? '')
-              setBaseUrl(settings.minimax_base_url ?? '')
+              setProviderName(settings.provider_name as LlmProviderName)
+              setModel(settings.model ?? '')
+              setBaseUrl(settings.base_url ?? '')
               setApiKey('')
             }
           }}
@@ -1226,12 +1233,28 @@ function LlmSettingsCard({
             <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="llm-provider">Proveedor</Label>
-                <Input
-                  id="llm-provider"
+                <Select
                   value={providerName}
-                  onChange={e => setProviderName(e.target.value)}
-                  required
-                />
+                  onValueChange={value =>
+                    setProviderName(value as LlmProviderName)
+                  }
+                >
+                  <SelectTrigger id="llm-provider">
+                    <SelectValue>
+                      {() =>
+                        LLM_PROVIDERS.find(p => p.value === providerName)
+                          ?.label ?? providerName
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {LLM_PROVIDERS.map(p => (
+                      <SelectItem key={p.value} value={p.value}>
+                        {p.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="llm-model">Modelo</Label>
@@ -1242,16 +1265,21 @@ function LlmSettingsCard({
                   required
                 />
               </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="llm-base-url">Base URL</Label>
-                <Input
-                  id="llm-base-url"
-                  type="url"
-                  value={baseUrl}
-                  onChange={e => setBaseUrl(e.target.value)}
-                  required
-                />
-              </div>
+              {showBaseUrl && (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="llm-base-url">Base URL (opcional)</Label>
+                  <Input
+                    id="llm-base-url"
+                    type="url"
+                    value={baseUrl}
+                    onChange={e => setBaseUrl(e.target.value)}
+                    placeholder={`Dejar en blanco para usar el default de ${
+                      LLM_PROVIDERS.find(p => p.value === providerName)
+                        ?.label ?? providerName
+                    }`}
+                  />
+                </div>
+              )}
               <div className="flex flex-col gap-2">
                 <Label htmlFor="llm-api-key">API key</Label>
                 <Input
@@ -1285,18 +1313,21 @@ function LlmSettingsCard({
       <CardContent className="space-y-1.5 text-sm">
         <p className="text-muted-foreground">
           Proveedor:{' '}
-          <span className="text-foreground">{settings.provider_name}</span>
+          <span className="text-foreground">
+            {LLM_PROVIDERS.find(p => p.value === settings.provider_name)
+              ?.label ?? settings.provider_name}
+          </span>
         </p>
         <p className="text-muted-foreground">
           Modelo:{' '}
           <span className="text-foreground">
-            {settings.minimax_model ?? 'sin configurar'}
+            {settings.model ?? 'sin configurar'}
           </span>
         </p>
         <p className="text-muted-foreground">
           Base URL:{' '}
           <span className="text-foreground">
-            {settings.minimax_base_url ?? 'sin configurar'}
+            {settings.base_url ?? 'default del proveedor'}
           </span>
         </p>
         <p className="flex items-center gap-2 text-muted-foreground">

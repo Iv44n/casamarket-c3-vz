@@ -20,6 +20,7 @@ dependencies = [
     "bcrypt>=5.0.0",
     "pyjwt>=2.13.0",
     "pypdfium2>=5.13.0",
+    "anthropic>=1.5.0",
 ]
 
 [dependency-groups]

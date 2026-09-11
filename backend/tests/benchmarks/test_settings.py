@@ -23,9 +23,9 @@ def test_save_llm_config_then_load_returns_the_same_values():
     )
 
     assert saved.provider_name == "minimax"
-    assert saved.minimax_api_key == "mm-secreta"
-    assert saved.minimax_model == "MiniMax-M1"
-    assert saved.minimax_base_url == "https://api.minimax.io/v1"
+    assert saved.api_key == "mm-secreta"
+    assert saved.model == "MiniMax-M1"
+    assert saved.base_url == "https://api.minimax.io/v1"
     assert saved.updated_at == "2026-08-27T00:00:00"
 
     loaded = settings.load_llm_config(conn)
@@ -43,8 +43,23 @@ def test_save_llm_config_overwrites_the_previous_singleton_row():
     )
 
     loaded = settings.load_llm_config(conn)
-    assert loaded.minimax_api_key == "new-key"
-    assert loaded.minimax_model == "MiniMax-M2"
+    assert loaded.api_key == "new-key"
+    assert loaded.model == "MiniMax-M2"
+
+
+def test_save_llm_config_can_switch_provider_and_omit_base_url():
+    conn = _conn()
+    settings.save_llm_config(
+        conn, "minimax", "mm-secreta", "MiniMax-M1", "https://api.minimax.io/v1", "2026-08-27T00:00:00"
+    )
+
+    updated = settings.save_llm_config(
+        conn, "claude", "sk-ant-secreta", "claude-sonnet-5", None, "2026-09-11T00:00:00"
+    )
+
+    assert updated.provider_name == "claude"
+    assert updated.model == "claude-sonnet-5"
+    assert updated.base_url is None
 
 
 def test_save_llm_config_with_api_key_none_preserves_the_existing_key():
@@ -57,8 +72,8 @@ def test_save_llm_config_with_api_key_none_preserves_the_existing_key():
         conn, "minimax", None, "MiniMax-M2", "https://api.minimax.io/v1", "2026-08-27T00:01:00"
     )
 
-    assert updated.minimax_api_key == "keep-me"
-    assert updated.minimax_model == "MiniMax-M2"
+    assert updated.api_key == "keep-me"
+    assert updated.model == "MiniMax-M2"
 
 
 def test_save_llm_config_with_api_key_none_and_nothing_saved_yet_leaves_it_empty():
@@ -68,16 +83,51 @@ def test_save_llm_config_with_api_key_none_and_nothing_saved_yet_leaves_it_empty
         conn, "minimax", None, "MiniMax-M1", "https://api.minimax.io/v1", "2026-08-27T00:00:00"
     )
 
-    assert saved.minimax_api_key is None
+    assert saved.api_key is None
 
 
-def test_llm_config_model_label_is_none_for_a_provider_with_no_model_field():
-    llm_config = settings.LLMConfig(provider_name="unlisted")
+def test_migrate_generic_columns_backfills_from_a_pre_multi_provider_table():
+    """Simula una tabla creada antes de que este modulo soportara mas de un proveedor (solo
+    minimax_api_key/minimax_model/minimax_base_url, sin las columnas genericas) -- confirma
+    que _migrate_generic_columns las agrega y copia el valor ya guardado, para que un admin
+    que ya habia configurado MiniMax no pierda esa config al desplegar este cambio."""
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        """
+        CREATE TABLE llm_settings (
+            id                INTEGER PRIMARY KEY CHECK (id = 1),
+            provider_name     TEXT NOT NULL,
+            minimax_api_key   TEXT,
+            minimax_model     TEXT,
+            minimax_base_url  TEXT,
+            updated_at        TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO llm_settings (id, provider_name, minimax_api_key, minimax_model, "
+        "minimax_base_url, updated_at) VALUES (1, 'minimax', 'mm-secreta', 'MiniMax-M1', "
+        "'https://api.minimax.io/v1', '2026-08-27T00:00:00')"
+    )
+    conn.commit()
 
-    assert llm_config.model_label is None
+    settings._migrate_generic_columns(conn)
+
+    loaded = settings.load_llm_config(conn)
+    assert loaded.provider_name == "minimax"
+    assert loaded.api_key == "mm-secreta"
+    assert loaded.model == "MiniMax-M1"
+    assert loaded.base_url == "https://api.minimax.io/v1"
 
 
-def test_llm_config_model_label_returns_the_model_for_minimax():
-    llm_config = settings.LLMConfig(provider_name="minimax", minimax_model="MiniMax-M1")
+def test_migrate_generic_columns_is_a_no_op_on_an_already_generic_table():
+    conn = _conn()
+    settings.save_llm_config(
+        conn, "gemini", "g-secreta", "gemini-3.1-flash-lite", None, "2026-09-11T00:00:00"
+    )
 
-    assert llm_config.model_label == "MiniMax-M1"
+    settings._migrate_generic_columns(conn)
+
+    loaded = settings.load_llm_config(conn)
+    assert loaded.api_key == "g-secreta"
+    assert loaded.model == "gemini-3.1-flash-lite"

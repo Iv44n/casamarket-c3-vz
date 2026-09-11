@@ -85,14 +85,47 @@ reports for a few more days," not privilege escalation.
 Turso-backed singleton row (`llm_settings` table, own self-contained `get_connection()`/schema-init,
 same pattern as `app/auth/store.py`), set via `PUT /benchmarks/settings` (admin-only,
 `Depends(require_admin)`) and read via `GET /benchmarks/settings` -- which never returns the raw
-`minimax_api_key`, only `has_api_key: bool`, same "never expose the secret back" principle as
-`UserPublic` never exposing `password_hash`. A `PUT` with `minimax_api_key` omitted/`None`
-preserves whatever key is already saved (`settings.save_llm_config()`), so an admin can tweak the
-model or base URL without re-entering the secret every time. `pipeline.run_benchmark_cycle()`
-raises a clear `RuntimeError` (not `build_provider()`'s generic missing-fields `ValueError`) if no
-admin has configured this yet at all (`settings.load_llm_config()` returns `None` -- distinct from
-a saved-but-incomplete row). No env var, no `.env.example` entry, no fallback -- this is a deliberate
+`api_key`, only `has_api_key: bool`, same "never expose the secret back" principle as `UserPublic`
+never exposing `password_hash`. A `PUT` with `api_key` omitted/`None` preserves whatever key is
+already saved (`settings.save_llm_config()`), so an admin can tweak the provider/model/base URL
+without re-entering the secret every time. `pipeline.run_benchmark_cycle()` raises a clear
+`RuntimeError` (not `build_provider()`'s generic missing-fields `ValueError`) if no admin has
+configured this yet at all (`settings.load_llm_config()` returns `None` -- distinct from a
+saved-but-incomplete row). No env var, no `.env.example` entry, no fallback -- this is a deliberate
 full cutover, not "env first, DB overrides."
+
+**Strategy pattern for the LLM itself** (`app/benchmarks/llm/`): `LLMProvider` (`base.py`) is a
+one-method Protocol (`complete(prompt) -> str`) -- that single method is the whole contract
+`judge.py`/`pipeline.py` depend on, so neither knows or cares which of the 5 supported providers
+(`settings.LLM_PROVIDER_NAMES`: `minimax`, `deepseek`, `openai`, `gemini`, `claude`) is actually
+running. `LLMConfig` (`settings.py`) is deliberately generic (`api_key`/`model`/`base_url`, not
+`minimax_api_key`/etc. anymore) because the same 3 fields describe all 5 -- 4 of them speak the
+wire format that OpenAI popularized (Chat Completions + `response_format: json_object`, confirmed
+live against MiniMax) and reuse `OpenAIProvider` (`openai_provider.py`) as-is, only differing in
+`base_url`/model default (`llm/__init__.py`'s `build_provider()`, a plain factory keyed by
+`provider_name` -- `_OPENAI_COMPATIBLE_DEFAULTS` holds each one's official endpoint, e.g.
+`https://api.deepseek.com`, so an admin normally never has to type a base_url at all; `LLMConfig.
+base_url` still lets one override it, e.g. pointing `"minimax"` at OpenRouter instead of MiniMax's
+own API, without touching code). Claude is the one real exception -- Anthropic's Messages API has
+no OpenAI-compatible shape and no `response_format`, so it's the only provider with its own class
+(`anthropic_provider.py`, `AnthropicProvider`, relying entirely on the judge prompt's own "respond
+with ONLY a JSON object" instruction plus `judge.py`'s already-tolerant parsing). Adding a 6th
+OpenAI-compatible provider is one dict entry in `_OPENAI_COMPATIBLE_DEFAULTS`; adding one with a
+genuinely different API is a new class + one new `if` branch in `build_provider()`, same shape as
+Claude, without touching the other providers. Both `openai_provider.py`'s and
+`anthropic_provider.py`'s clients are built with `max_retries=0` -- a 429 from any of these vendors
+in practice means a quota/plan limit, not a transient rate spike, so retrying never helps and only
+delays the per-case failure `pipeline.analyze_direction()` already handles (it duck-types
+`getattr(exc, "status_code", None) == 429`, deliberately not importing either SDK's exception type,
+so this same cutoff logic works unmodified for all 5 providers).
+
+The `llm_settings` table's columns used to be named `minimax_api_key`/`minimax_model`/
+`minimax_base_url` from when this only supported one vendor -- `settings._migrate_generic_columns()`
+(same lazily-run-once-in-`get_connection()`, additive-only `ALTER TABLE ADD COLUMN` pattern as
+`extraction/store.py`'s `_migrate_benchmark_result_quality_columns`) adds the generic columns and
+backfills them from the old ones for a deployment that already had MiniMax configured before this
+change, so no admin has to re-enter anything. The old columns are left in place, unused -- never
+dropped, same reasoning as `extraction/store.py`'s migrations.
 
 ## Tooling
 

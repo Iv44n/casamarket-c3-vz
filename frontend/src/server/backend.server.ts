@@ -346,9 +346,9 @@ export async function fetchBenchmarkRuns(
 }
 export async function updateLlmSettingsOnBackend(data: {
   provider_name?: string
-  minimax_api_key?: string
-  minimax_model: string
-  minimax_base_url: string
+  api_key?: string
+  model: string
+  base_url?: string
 }): Promise<LlmSettings> {
   const response = await backendFetch('/benchmarks/settings', {
     method: 'PUT',

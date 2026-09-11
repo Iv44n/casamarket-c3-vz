@@ -419,18 +419,32 @@ export type BenchmarkRunRecord = {
   directions: BenchmarkDirectionSummary[]
   error: string | null
 }
+// Mismos 5 proveedores que backend/app/benchmarks/settings.py's LLM_PROVIDER_NAMES -- sin
+// import compartido entre Python/TS, hay que mantenerlos en sync a mano (mismo patron que
+// REPORT_NAMES mas arriba).
+export const LLM_PROVIDERS = [
+  { value: 'minimax', label: 'MiniMax' },
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'openai', label: 'ChatGPT (OpenAI)' },
+  { value: 'gemini', label: 'Gemini' },
+  { value: 'claude', label: 'Claude (Anthropic)' }
+] as const
+export const LLM_PROVIDER_NAMES = LLM_PROVIDERS.map(p => p.value)
+export type LlmProviderName = (typeof LLM_PROVIDERS)[number]['value']
 export type LlmSettings = {
   provider_name: string
-  minimax_model: string | null
-  minimax_base_url: string | null
+  model: string | null
+  base_url: string | null
   has_api_key: boolean
   updated_at: string | null
 }
 export const updateLlmSettingsRequestSchema = z.object({
-  provider_name: z.string().min(1).optional(),
-  minimax_api_key: z.string().min(1).optional(),
-  minimax_model: z.string().min(1),
-  minimax_base_url: z.string().min(1)
+  provider_name: z.enum(LLM_PROVIDER_NAMES).optional(),
+  api_key: z.string().min(1).optional(),
+  model: z.string().min(1),
+  // Optional -- el backend usa el default fijo del proveedor elegido si se omite (ver
+  // llm/__init__.py's _OPENAI_COMPATIBLE_DEFAULTS); Claude lo ignora del todo.
+  base_url: z.string().min(1).optional()
 })
 export const benchmarkResultsRequestSchema = z.object({
   direction: z.enum(BENCHMARK_DIRECTIONS).optional(),

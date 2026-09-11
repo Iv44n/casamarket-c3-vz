@@ -343,7 +343,7 @@ def run_benchmark_cycle(
                     "que completarlo en Configuracion > LLM antes de poder correr un benchmark."
                 )
             llm_provider = llm_module.build_provider(llm_config)
-            llm_model = llm_config.model_label
+            llm_model = llm_config.model
 
         creds = creds or config.load_credentials()
         c3_session = massive.C3Session(creds, transport=transport)

@@ -279,8 +279,8 @@ def test_get_llm_settings_defaults_when_nothing_configured_yet(
     assert response.status_code == 200
     assert response.json() == {
         "provider_name": "minimax",
-        "minimax_model": None,
-        "minimax_base_url": None,
+        "model": None,
+        "base_url": None,
         "has_api_key": False,
         "updated_at": None,
     }
@@ -294,17 +294,17 @@ def test_put_llm_settings_saves_and_never_returns_the_raw_api_key(
     response = client.put(
         "/benchmarks/settings",
         json={
-            "minimax_api_key": "mm-secreta",
-            "minimax_model": "MiniMax-M1",
-            "minimax_base_url": "https://api.minimax.io/v1",
+            "api_key": "mm-secreta",
+            "model": "MiniMax-M1",
+            "base_url": "https://api.minimax.io/v1",
         },
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["has_api_key"] is True
-    assert body["minimax_model"] == "MiniMax-M1"
-    assert "minimax_api_key" not in body
+    assert body["model"] == "MiniMax-M1"
+    assert "api_key" not in body
     assert "mm-secreta" not in response.text
 
 
@@ -315,17 +315,48 @@ def test_put_llm_settings_without_api_key_preserves_the_existing_one(
     client.put(
         "/benchmarks/settings",
         json={
-            "minimax_api_key": "mm-secreta",
-            "minimax_model": "MiniMax-M1",
-            "minimax_base_url": "https://api.minimax.io/v1",
+            "api_key": "mm-secreta",
+            "model": "MiniMax-M1",
+            "base_url": "https://api.minimax.io/v1",
         },
     )
 
     response = client.put(
         "/benchmarks/settings",
-        json={"minimax_model": "MiniMax-M2", "minimax_base_url": "https://api.minimax.io/v1"},
+        json={"model": "MiniMax-M2", "base_url": "https://api.minimax.io/v1"},
     )
 
     assert response.status_code == 200
     assert response.json()["has_api_key"] is True
-    assert response.json()["minimax_model"] == "MiniMax-M2"
+    assert response.json()["model"] == "MiniMax-M2"
+
+
+def test_put_llm_settings_accepts_any_of_the_five_supported_providers(
+    client: TestClient, tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    _patch_llm_settings_connection(monkeypatch, tmp_path)
+
+    response = client.put(
+        "/benchmarks/settings",
+        json={
+            "provider_name": "claude",
+            "api_key": "sk-ant-secreta",
+            "model": "claude-sonnet-5",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["provider_name"] == "claude"
+
+
+def test_put_llm_settings_rejects_an_unknown_provider(
+    client: TestClient, tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    _patch_llm_settings_connection(monkeypatch, tmp_path)
+
+    response = client.put(
+        "/benchmarks/settings",
+        json={"provider_name": "llama", "api_key": "secreta", "model": "algun-modelo"},
+    )
+
+    assert response.status_code == 422
