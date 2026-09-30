@@ -72,11 +72,17 @@ import {
 } from '#/components/ui/tooltip'
 import {
   type AgentBenchmarkDatum,
+  type AttentionTimeUnitKey,
+  attentionTimeUnitOf,
   benchmarkTotals,
   bestProductivityAgent,
   bestQualityAgent,
   buildAgentBenchmarkRanking,
-  buildTransferNotificationRanking
+  buildTransferNotificationRanking,
+  DEFAULT_ATTENTION_TIME_UNIT,
+  formatAttentionSecondsIn,
+  formatWeightedScorePerTime,
+  weightedScorePerTime
 } from '#/lib/benchmark-analytics'
 import { CHART_BIG_NUMBER_FONT_SIZE } from '#/lib/chart-typography'
 import { formatSecondsAsDuration } from '#/lib/duration'
@@ -189,6 +195,11 @@ function BenchmarksPage() {
 
   const [results, setResults] = useState(initialResults)
   const [resultsLoading, setResultsLoading] = useState(false)
+  // Unidad de "puntos por tiempo de atencion": el selector vive en el grafico, pero la
+  // tabla de agentes muestra la misma metrica -- estado aca para que las dos sigan
+  // siempre la misma unidad.
+  const [attentionTimeUnit, setAttentionTimeUnit] =
+    useState<AttentionTimeUnitKey>(DEFAULT_ATTENTION_TIME_UNIT)
   const isFirstResultsRun = useRef(true)
   const resultsRequestIdRef = useRef(0)
 
@@ -608,6 +619,8 @@ function BenchmarksPage() {
                 <BenchmarkAgentChart
                   agents={agentRanking}
                   transferNotifications={transferNotifications}
+                  timeUnit={attentionTimeUnit}
+                  onTimeUnitChange={setAttentionTimeUnit}
                 />
               )}
             </CardContent>
@@ -627,7 +640,10 @@ function BenchmarksPage() {
                 resultsLoading && 'opacity-50'
               )}
             >
-              <BenchmarkAgentTable agents={agentRanking} />
+              <BenchmarkAgentTable
+                agents={agentRanking}
+                timeUnit={attentionTimeUnit}
+              />
             </CardContent>
           </Card>
 
@@ -835,6 +851,7 @@ type AgentSortColumn =
   | 'casosEvaluados'
   | 'scorePonderado'
   | 'razon'
+  | 'puntosPorTiempo'
   | 'primeraRespuesta'
   | 'complejidadBaja'
   | 'complejidadMedia'
@@ -914,6 +931,10 @@ function agentSortValue(
       return agent.complexityCheckedCount > 0
         ? agent.complexityWeightedScore / agent.complexityCheckedCount
         : 0
+    case 'puntosPorTiempo':
+      // La unidad solo reescala el numero, no cambia el orden -- se ordena por
+      // puntos por segundo sin importar cual este elegida.
+      return weightedScorePerTime(agent, 1) ?? 0
     case 'primeraRespuesta':
       return agent.avgFirstResponseSeconds ?? 0
     case 'complejidadBaja':
@@ -925,7 +946,14 @@ function agentSortValue(
   }
 }
 
-function BenchmarkAgentTable({ agents }: { agents: AgentBenchmarkDatum[] }) {
+function BenchmarkAgentTable({
+  agents,
+  timeUnit
+}: {
+  agents: AgentBenchmarkDatum[]
+  timeUnit: AttentionTimeUnitKey
+}) {
+  const unit = attentionTimeUnitOf(timeUnit)
   // Default = mismo orden que el badge "Mejor productividad ponderada" --
   // de mayor a menor score, para que la fila de arriba sea siempre el agente
   // que ese KPI destaca hasta que el usuario elija otra columna.
@@ -998,6 +1026,15 @@ function BenchmarkAgentTable({ agents }: { agents: AgentBenchmarkDatum[] }) {
             </TableHead>
             <TableHead>
               <KpiHeader
+                label={`Puntos por ${unit.label}`}
+                explanation={`Puntos de complejidad ÷ tiempo de atención con el agente: suma los puntos de sus casos (baja 1, media 2, alta 3) y los divide entre el tiempo que el agente tuvo esos mismos casos, desde que los tomó hasta el cierre (sin el tiempo previo con otros agentes, y sin tope para los casos largos). Debajo se ve la cuenta: puntos ÷ tiempo en ${unit.plural}. Solo entran los casos con complejidad y tiempo de atención. La unidad se cambia en el selector del gráfico "Productividad por tiempo".`}
+                column="puntosPorTiempo"
+                sortState={sortState}
+                onSort={handleSort}
+              />
+            </TableHead>
+            <TableHead>
+              <KpiHeader
                 label="1ra respuesta"
                 explanation="Promedio de segundos entre que el caso se abre y el agente responde por primera vez, sobre los casos de este agente donde ese dato esta disponible."
                 column="primeraRespuesta"
@@ -1053,6 +1090,26 @@ function BenchmarkAgentTable({ agents }: { agents: AgentBenchmarkDatum[] }) {
                 {agent.complexityCheckedCount > 0
                   ? `×${(agent.complexityWeightedScore / agent.complexityCheckedCount).toFixed(2)}`
                   : '—'}
+              </TableCell>
+              <TableCell>
+                {agent.attentionSecondsTotal > 0 ? (
+                  <>
+                    <div>
+                      {formatWeightedScorePerTime(
+                        weightedScorePerTime(agent, unit.seconds) ?? 0
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {agent.timedWeightedScore} pts ÷{' '}
+                      {formatAttentionSecondsIn(
+                        agent.attentionSecondsTotal,
+                        unit
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  '—'
+                )}
               </TableCell>
               <TableCell>
                 {agent.avgFirstResponseSeconds !== null

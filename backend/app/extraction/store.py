@@ -1251,6 +1251,49 @@ _BENCHMARK_RESULT_COLUMNS = (
     "analyzed_at",
 )
 
+# "Tiempo de atencion" de C3: cuanto tiempo tuvo el caso el agente que lo CERRO (desde que lo
+# tomo hasta el cierre) -- en un caso transferido NO cuenta el tiempo previo con otros agentes
+# ni el de cola (verificado contra los xlsx reales: sin transferencia coincide con fin - inicio;
+# con transferencia es siempre menor que fin - ultima transferencia). Es el denominador de
+# "puntos de complejidad por hora" en /benchmarks.
+#
+# Ya viaja dentro de row_json (la fila completa de attention/outboundattention), asi que se lee
+# de ahi con json_extract en cada consulta en vez de duplicarlo en una columna nueva: funciona
+# igual para las filas viejas, sin migracion ni backfill. row_json se guarda con
+# ensure_ascii=True (la "o" acentuada queda escapada como \u00f3 en el texto) y SQLite
+# compara la clave del path contra el JSON ya decodificado -- verificado contra sqlite3 3.46 y
+# contra la Turso real (1128 de 1128 filas vigentes devolvieron valor).
+_ATTENTION_TIME_JSON_PATH = '$."Tiempo de atención"'
+_BENCHMARK_SELECT_SQL = ", ".join(
+    (*_BENCHMARK_RESULT_COLUMNS, f"json_extract(row_json, '{_ATTENTION_TIME_JSON_PATH}')")
+)
+
+_EMPTY_DURATION_VALUES = {"", "n.a", "-"}
+
+
+def parse_duration_seconds(value: object) -> float | None:
+    """'HH:MM:SS' o 'MM:SS' -> segundos; vacio, 'n.a', '-' o malformado -> None. Espejo de
+    parseDurationToSeconds (frontend/src/lib/duration.ts): 'Tiempo de atencion' puede venir en
+    cualquiera de los dos formatos, por eso no se reusa pipeline._parse_hhmmss_seconds (3 partes
+    exactas, pensado para 'Tiempo de primera respuesta'). Una entrada de 2 partes es MM:SS, no
+    HH:MM."""
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    if trimmed.lower() in _EMPTY_DURATION_VALUES:
+        return None
+    parts = trimmed.split(":")
+    if len(parts) not in (2, 3):
+        return None
+    try:
+        numbers = [int(part) for part in parts]
+    except ValueError:
+        return None
+    if any(number < 0 for number in numbers):
+        return None
+    hours, minutes, seconds = numbers if len(numbers) == 3 else [0, *numbers]
+    return float(hours * 3600 + minutes * 60 + seconds)
+
 
 def _benchmark_where(
     direction: str | None,
@@ -1285,7 +1328,11 @@ def _benchmark_where(
 
 
 def _row_to_benchmark_dict(record: tuple) -> dict:
-    row = dict(zip(_BENCHMARK_RESULT_COLUMNS, record))
+    # `record` sigue el orden de _BENCHMARK_SELECT_SQL: las columnas de
+    # _BENCHMARK_RESULT_COLUMNS y, al final, el texto crudo de "Tiempo de atencion".
+    *column_values, attention_time = record
+    row = dict(zip(_BENCHMARK_RESULT_COLUMNS, column_values))
+    row["attention_seconds"] = parse_duration_seconds(attention_time)
     # bool(0/1) por nombre de columna, no por indice posicional -- evita tener que
     # recalcular numeros a mano cada vez que _BENCHMARK_RESULT_COLUMNS cambia de orden
     # o largo (ya paso dos veces).
@@ -1333,7 +1380,7 @@ def benchmark_result_rows(
     where_sql, params = _benchmark_where(direction, date_from, date_to, None)
     order_expr = _iso_datetime_expr("fecha_final", "hora_final")
     cursor = conn.execute(
-        f"SELECT {', '.join(_BENCHMARK_RESULT_COLUMNS)} FROM benchmark_result "
+        f"SELECT {_BENCHMARK_SELECT_SQL} FROM benchmark_result "
         f"WHERE {where_sql} ORDER BY {order_expr} DESC, id_atencion",
         tuple(params),
     )
@@ -1368,7 +1415,7 @@ def benchmark_results_page(
     order_expr = _iso_datetime_expr("fecha_final", "hora_final")
     offset = (page - 1) * page_size
     page_sql = (
-        f"SELECT {', '.join(_BENCHMARK_RESULT_COLUMNS)} FROM benchmark_result "
+        f"SELECT {_BENCHMARK_SELECT_SQL} FROM benchmark_result "
         f"WHERE {where_sql} ORDER BY {order_expr} DESC, id_atencion "
         "LIMIT ? OFFSET ?"
     )

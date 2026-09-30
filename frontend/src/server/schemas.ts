@@ -366,6 +366,9 @@ export type BenchmarkCaseResult = {
   hora_final: string | null
   cliente: string | null
   first_response_seconds: number | null
+  // "Tiempo de atencion" de C3: cuanto tuvo el caso el agente que lo cerro (desde que lo tomo
+  // hasta el cierre, sin el tiempo previo con otros agentes) -- ver backend store.parse_duration_seconds.
+  attention_seconds: number | null
   greeting_level: BenchmarkGreetingLevel | null
   spelling_ok: boolean | null
   has_farewell: boolean | null

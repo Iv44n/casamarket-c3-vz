@@ -70,6 +70,9 @@ class BenchmarkCaseResult(BaseModel):
     hora_final: str | None
     cliente: str | None
     first_response_seconds: float | None
+    # "Tiempo de atencion" de C3: cuanto tuvo el caso el agente que lo cerro (ver
+    # store.parse_duration_seconds / _ATTENTION_TIME_JSON_PATH).
+    attention_seconds: float | None
     greeting_level: Literal["ninguno", "casual", "formal"] | None
     has_farewell: bool | None
     complexity: Literal["baja", "media", "alta"] | None

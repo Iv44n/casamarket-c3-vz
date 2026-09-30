@@ -18,9 +18,16 @@ import {
 } from '#/components/ui/dropdown-menu'
 import { Label } from '#/components/ui/label'
 import { Separator } from '#/components/ui/separator'
-import type {
-  AgentBenchmarkDatum,
-  TransferNotificationDatum
+import {
+  type AgentBenchmarkDatum,
+  ATTENTION_TIME_UNITS,
+  type AttentionTimeUnit,
+  type AttentionTimeUnitKey,
+  attentionTimeUnitOf,
+  formatAttentionSecondsIn,
+  formatWeightedScorePerTime,
+  type TransferNotificationDatum,
+  weightedScorePerTime
 } from '#/lib/benchmark-analytics'
 import {
   CHART_AXIS_LABEL_FONT_SIZE,
@@ -33,6 +40,10 @@ const MAX_AGENT_LABEL_CHARS = 14
 // columna por agente) en vez de la altura -- lo opuesto del chart horizontal
 // de al lado. El contenedor scrollea horizontalmente si no entra.
 const AGENT_COLUMN_WIDTH_PX = 64
+// Ancho aproximado de un caracter de la etiqueta de valor (12px, negrita) y aire a
+// los costados -- para ensanchar la columna cuando la etiqueta es larga.
+const VALUE_LABEL_CHAR_WIDTH_PX = 8
+const VALUE_LABEL_PADDING_PX = 16
 // Ancho por CADA barra visible dentro del grupo de un agente (saludo,
 // despedida, ortografia, manejo adecuado, complejidad apilada) -- el ancho
 // total de la fila de calidad escala con cuantas de esas 5 estan activas via
@@ -158,6 +169,49 @@ const PRODUCTIVITY_SORT_OPTIONS = [
 ] as const
 type ProductivitySortKey = (typeof PRODUCTIVITY_SORT_OPTIONS)[number]['key']
 
+// Explicacion siempre visible (no escondida en un tooltip) de como sale cada barra
+// del chart de "puntos por tiempo": la formula, que tiempo se usa, un ejemplo con
+// numeros y la decision de NO topar los casos largos. El ejemplo cambia con el
+// selector de unidad para que se vea que lo unico que cambia es por cuanto se divide.
+const EXAMPLE_CASES_MINUTES = [20, 30, 60]
+function ProductivityPerTimeExplanation({ unit }: { unit: AttentionTimeUnit }) {
+  const examplePoints = 1 + 2 + 3
+  const exampleSeconds =
+    EXAMPLE_CASES_MINUTES.reduce((sum, minutes) => sum + minutes, 0) * 60
+  return (
+    <div className="mb-3 flex flex-col gap-1 text-xs text-muted-foreground">
+      <p>
+        <span className="font-medium text-foreground">Cómo se calcula:</span>{' '}
+        puntos de complejidad ÷ tiempo de atención. Cada caso suma 1 punto
+        (baja), 2 (media) o 3 (alta). Más alto = resuelve más complejidad en
+        menos tiempo.
+      </p>
+      <p>
+        <span className="font-medium text-foreground">Tiempo de atención:</span>{' '}
+        el que el agente que cerró el caso lo tuvo, desde que lo tomó hasta el
+        cierre. No es el tiempo total del caso: no cuenta lo que estuvo con
+        otros agentes antes de una transferencia.
+      </p>
+      <p>
+        <span className="font-medium text-foreground">Ejemplo:</span> 3 casos de
+        20 min (baja), 30 min (media) y 60 min (alta) → (1 + 2 + 3) ÷{' '}
+        {formatWeightedScorePerTime(exampleSeconds / unit.seconds)} {unit.abbr}{' '}
+        ={' '}
+        {formatWeightedScorePerTime(
+          (examplePoints / exampleSeconds) * unit.seconds
+        )}{' '}
+        puntos por {unit.label}.
+      </p>
+      <p>
+        <span className="font-medium text-foreground">Sin tope:</span> el tiempo
+        de cada caso cuenta completo, así el número se puede verificar a mano
+        con la tabla de abajo. Un caso que queda abierto muchas horas baja el
+        resultado del agente.
+      </p>
+    </div>
+  )
+}
+
 function QualityMetricsQuickActions({
   onSelectAll,
   onSelectNone
@@ -200,10 +254,16 @@ function QualityMetricsQuickActions({
 // complejidad evaluada de ese agente.
 export function BenchmarkAgentChart({
   agents,
-  transferNotifications
+  transferNotifications,
+  timeUnit,
+  onTimeUnitChange
 }: {
   agents: AgentBenchmarkDatum[]
   transferNotifications: TransferNotificationDatum[]
+  // Controlado desde la pagina (no estado local): la tabla de agentes de mas abajo
+  // muestra la misma metrica y tiene que seguir el mismo selector.
+  timeUnit: AttentionTimeUnitKey
+  onTimeUnitChange: (unit: AttentionTimeUnitKey) => void
 }) {
   const [visibleMetrics, setVisibleMetrics] = useState<QualityMetricKey[]>(
     QUALITY_METRIC_OPTIONS.map(option => option.key)
@@ -293,6 +353,17 @@ export function BenchmarkAgentChart({
   const transferSorted = [...transferNotifications].sort(
     (a, b) => (a.informedPct ?? 0) - (b.informedPct ?? 0)
   )
+  // Puntos por tiempo de atencion. Un agente sin ningun caso con tiempo queda FUERA
+  // del grafico en vez de dibujarse como 0 -- un 0 se leeria como "productividad
+  // nula", cuando en realidad es "sin dato" (se avisa abajo cuantos son).
+  const unit = attentionTimeUnitOf(timeUnit)
+  const perTimeSorted = agents
+    .filter(a => a.attentionSecondsTotal > 0)
+    .sort(
+      (a, b) =>
+        (weightedScorePerTime(a, 1) ?? 0) - (weightedScorePerTime(b, 1) ?? 0)
+    )
+  const perTimeWithoutDataCount = agents.length - perTimeSorted.length
   const responseWidth = Math.max(
     responseSorted.length * AGENT_COLUMN_WIDTH_PX,
     CHART_MIN_WIDTH_PX
@@ -305,6 +376,26 @@ export function BenchmarkAgentChart({
   )
   const transferWidth = Math.max(
     transferSorted.length * AGENT_COLUMN_WIDTH_PX,
+    CHART_MIN_WIDTH_PX
+  )
+  // La etiqueta de valor se alarga al achicar la unidad (0.352 por hora, 0.00587 por
+  // minuto, 0.0000979 por segundo): la columna se ensancha segun la etiqueta mas
+  // larga para que no se pisen las de barras vecinas.
+  const perTimeLongestLabelChars = Math.max(
+    0,
+    ...perTimeSorted.map(
+      a =>
+        formatWeightedScorePerTime(weightedScorePerTime(a, unit.seconds) ?? 0)
+          .length
+    )
+  )
+  const perTimeColumnWidth = Math.max(
+    AGENT_COLUMN_WIDTH_PX,
+    perTimeLongestLabelChars * VALUE_LABEL_CHAR_WIDTH_PX +
+      VALUE_LABEL_PADDING_PX
+  )
+  const perTimeWidth = Math.max(
+    perTimeSorted.length * perTimeColumnWidth,
     CHART_MIN_WIDTH_PX
   )
   const productivityWidth = Math.max(
@@ -355,6 +446,12 @@ export function BenchmarkAgentChart({
       return `${a.agente} ${a.complexityCheckedCount} casos, score ${a.complexityWeightedScore}${ratio !== null ? `, razón x${ratio}` : ''}`
     })
     .join('; ')}`
+  const perTimeAriaLabel = `Puntos de complejidad por ${unit.label} de atención con el agente, por agente, de menor a mayor: ${perTimeSorted
+    .map(
+      a =>
+        `${a.agente} ${formatWeightedScorePerTime(weightedScorePerTime(a, unit.seconds) ?? 0)}, ${a.timedWeightedScore} puntos en ${formatAttentionSecondsIn(a.attentionSecondsTotal, unit)}`
+    )
+    .join('; ')}`
   const responseDataset = responseSorted.map(a => ({
     agente: a.agente,
     avgFirstResponseSeconds: a.avgFirstResponseSeconds ?? 0
@@ -377,6 +474,13 @@ export function BenchmarkAgentChart({
     agente: a.agente,
     complexityCheckedCount: a.complexityCheckedCount,
     complexityWeightedScore: a.complexityWeightedScore
+  }))
+  const perTimeDataset = perTimeSorted.map(a => ({
+    agente: a.agente,
+    pointsPerTime: weightedScorePerTime(a, unit.seconds) ?? 0,
+    points: a.timedWeightedScore,
+    attentionSeconds: a.attentionSecondsTotal,
+    cases: a.timedCasesCount
   }))
   // Headroom explicito arriba de la barra mas alta -- sin esto el eje Y auto-
   // escala pegado al valor maximo y la etiqueta de razon (ProductivityRatioLabels)
@@ -675,6 +779,108 @@ export function BenchmarkAgentChart({
             </BarChart>
           </ChartThemeProvider>
         </div>
+      </div>
+      <div>
+        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-medium text-muted-foreground">
+            Productividad por tiempo: puntos de complejidad por {unit.label} de
+            atención con el agente
+          </p>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground">
+              Puntos por
+            </span>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-32 justify-between font-normal"
+                  />
+                }
+              >
+                <span className="min-w-0 truncate capitalize">
+                  {unit.label}
+                </span>
+                <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-32">
+                <DropdownMenuRadioGroup
+                  value={timeUnit}
+                  onValueChange={value =>
+                    onTimeUnitChange(value as AttentionTimeUnitKey)
+                  }
+                >
+                  {ATTENTION_TIME_UNITS.map(option => (
+                    <DropdownMenuRadioItem key={option.key} value={option.key}>
+                      <span className="capitalize">{option.label}</span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+        <ProductivityPerTimeExplanation unit={unit} />
+        {perTimeDataset.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Todavía no hay casos con tiempo de atención para el rango elegido.
+          </p>
+        ) : (
+          <>
+            <div
+              role="img"
+              aria-label={perTimeAriaLabel}
+              className="w-full overflow-x-auto"
+            >
+              <ChartThemeProvider>
+                <BarChart
+                  dataset={perTimeDataset}
+                  width={perTimeWidth}
+                  height={CHART_HEIGHT_PX}
+                  xAxis={[agentAxis()]}
+                  yAxis={[{ ...hiddenValueAxis, min: 0 }]}
+                  series={[
+                    {
+                      dataKey: 'pointsPerTime',
+                      label: `Puntos de complejidad por ${unit.label}`,
+                      color: PRODUCTIVITY_WEIGHTED_CHART_COLOR,
+                      // El tooltip muestra la cuenta completa, no solo el cociente:
+                      // puntos ÷ tiempo (en la unidad elegida) y sobre cuantos casos.
+                      valueFormatter: (value, { dataIndex }) => {
+                        const item = perTimeDataset[dataIndex]
+                        const rate = formatWeightedScorePerTime(value ?? 0)
+                        return item
+                          ? `${rate} (${item.points} puntos ÷ ${formatAttentionSecondsIn(item.attentionSeconds, unit)}, ${item.cases} casos)`
+                          : rate
+                      },
+                      barLabel: item =>
+                        formatWeightedScorePerTime(item.value ?? 0)
+                    }
+                  ]}
+                  borderRadius={4}
+                  hideLegend
+                  sx={{
+                    '& .MuiBarChart-label': {
+                      fill: '#0a0a0a !important',
+                      fontWeight: 700,
+                      fontSize: CHART_VALUE_LABEL_FONT_SIZE
+                    }
+                  }}
+                />
+              </ChartThemeProvider>
+            </div>
+            {perTimeWithoutDataCount > 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {perTimeWithoutDataCount === 1
+                  ? '1 agente no aparece: no tiene casos'
+                  : `${perTimeWithoutDataCount} agentes no aparecen: no tienen casos`}{' '}
+                con complejidad y tiempo de atención en este rango.
+              </p>
+            )}
+          </>
+        )}
       </div>
       {transferNotifications.length > 0 && (
         <div>

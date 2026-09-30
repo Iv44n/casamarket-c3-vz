@@ -921,6 +921,86 @@ def test_record_benchmark_results_extracts_fecha_hora_final_and_cliente_from_row
     assert rows[0]["cliente"] == "Ana Perez"
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("00:12:34", 754.0),
+        ("01:00:00", 3600.0),
+        ("40:15:09", 144909.0),
+        # 2 partes es MM:SS, no HH:MM -- el mismo criterio que parseDurationToSeconds del front.
+        ("45:10", 2710.0),
+        ("  00:00:07  ", 7.0),
+        ("", None),
+        ("n.a", None),
+        ("N.A", None),
+        ("-", None),
+        ("12", None),
+        ("1:2:3:4", None),
+        ("aa:bb", None),
+        ("-1:30", None),
+        (None, None),
+        (754, None),
+    ],
+)
+def test_parse_duration_seconds(raw, expected):
+    assert store.parse_duration_seconds(raw) == expected
+
+
+def test_benchmark_result_rows_expose_attention_seconds_from_row_json():
+    conn = _conn()
+    store.record_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "hhmmss",
+                "direction": "attention",
+                "row_json": {"Tiempo de atención": "01:02:03"},
+            },
+            {
+                "id_atencion": "mmss",
+                "direction": "attention",
+                "row_json": {"Tiempo de atención": "45:10"},
+            },
+            {
+                "id_atencion": "not_available",
+                "direction": "attention",
+                "row_json": {"Tiempo de atención": "n.a"},
+            },
+            {"id_atencion": "missing", "direction": "attention", "row_json": {}},
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    rows = {r["id_atencion"]: r for r in store.benchmark_result_rows(conn)}
+
+    # La clave lleva tilde y row_json se guarda con ensure_ascii (\u00f3 en el texto) -- este
+    # test cubre justo que json_extract la encuentre igual.
+    assert rows["hhmmss"]["attention_seconds"] == 3723.0
+    assert rows["mmss"]["attention_seconds"] == 2710.0
+    assert rows["not_available"]["attention_seconds"] is None
+    assert rows["missing"]["attention_seconds"] is None
+
+
+def test_benchmark_results_page_expose_attention_seconds_too():
+    conn = _conn()
+    store.record_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "1",
+                "direction": "attention",
+                "row_json": {"Tiempo de atención": "00:20:00"},
+            }
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    page = store.benchmark_results_page(conn)
+
+    assert page.total == 1
+    assert page.rows[0]["attention_seconds"] == 1200.0
+
+
 def test_record_benchmark_results_appends_instead_of_overwriting_on_a_later_run():
     conn = _conn()
     store.record_benchmark_results(
