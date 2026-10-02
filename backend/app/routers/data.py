@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..auth.dependencies import get_current_user
 from ..extraction import parsing, store
-from ..schemas import DailyCount
+from ..schemas import ClientCaseCount, DailyCount
 
 router = APIRouter(prefix="/data", tags=["data"], dependencies=[Depends(get_current_user)])
 
@@ -33,6 +33,7 @@ def get_attention_records(
     agentes: list[str] | None = Query(default=None),
     date_from: str | None = Query(default=None, pattern=ISO_DATE_PATTERN),
     date_to: str | None = Query(default=None, pattern=ISO_DATE_PATTERN),
+    cliente: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
 ) -> dict:
@@ -52,6 +53,7 @@ def get_attention_records(
             agentes=agentes,
             date_from=date_from,
             date_to=date_to,
+            cliente=cliente,
             page=page,
             page_size=page_size,
         )
@@ -64,6 +66,24 @@ def get_attention_records(
         "rows": page_result.rows,
         "transfers": page_result.transfers,
     }
+
+
+@router.get("/attention-records/clients")
+def get_attention_record_clients(
+    agentes: list[str] | None = Query(default=None),
+    date_from: str | None = Query(default=None, pattern=ISO_DATE_PATTERN),
+    date_to: str | None = Query(default=None, pattern=ISO_DATE_PATTERN),
+) -> list[ClientCaseCount]:
+    """Clientes con atenciones (entrantes + salientes) en el rango y cuantas tiene cada uno --
+    ver store.attention_client_counts(). Cada `key` se manda tal cual como `cliente` a
+    /data/attention-records para listar exactamente esos casos."""
+    conn = store.get_connection()
+    try:
+        return store.attention_client_counts(
+            conn, agentes=agentes, date_from=date_from, date_to=date_to
+        )
+    finally:
+        conn.close()
 
 
 @router.get("/{report_name}")

@@ -62,7 +62,10 @@ function renderTicket(
     ticket.tiempoSegundos === null
       ? ''
       : ` (${formatSecondsAsDuration(ticket.tiempoSegundos)})`
-  const line = `- ${ticket.descripcion || 'Sin descripción'} -- ${ticket.agente || 'Sin agente'}${tiempo}${closed}`
+  const telefono = ticket.telefonoCliente
+    ? ` -- tel. cliente ${ticket.telefonoCliente}`
+    : ''
+  const line = `- ${ticket.descripcion || 'Sin descripción'} -- ${ticket.agente || 'Sin agente'}${telefono}${tiempo}${closed}`
   const maxWidth = doc.internal.pageSize.getWidth() - x - PAGE_MARGIN_PX
   const wrappedLines: string[] = doc.splitTextToSize(line, maxWidth)
   for (const wrappedLine of wrappedLines) {

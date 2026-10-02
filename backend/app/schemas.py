@@ -60,6 +60,16 @@ class DailyCount(BaseModel):
     count: int
 
 
+class ClientCaseCount(BaseModel):
+    # `key` es la clave opaca de cliente (ver store._client_key_expr): se manda tal cual como
+    # filtro `cliente` a /data/attention-records para traer exactamente las atenciones contadas.
+    key: str
+    name: str
+    # None cuando la atencion no trae numero_cliente (el cliente se identifica solo por nombre).
+    phone: str | None
+    count: int
+
+
 class BenchmarkCaseResult(BaseModel):
     id_atencion: str
     direction: Literal["attention", "outboundattention"]

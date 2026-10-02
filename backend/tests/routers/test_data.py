@@ -347,3 +347,127 @@ def test_get_attention_records_filters_by_query_params(
     assert response.status_code == 200
     rows = response.json()["rows"]
     assert [row["ID atención"] for row in rows] == ["match"]
+
+
+def _seed_attention_clients(conn: sqlite3.Connection) -> None:
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [
+            {
+                "ID atención": "a1",
+                "Agente": "Ana",
+                "Fecha registro": "18/08/2026",
+                "Número cliente": 51987654321,
+                "Nombre de cliente": "Rosa Quispe",
+            },
+            {
+                "ID atención": "a2",
+                "Agente": "Ana",
+                "Fecha registro": "19/08/2026",
+                "Número cliente": 51987654321,
+                "Nombre de cliente": "Rosa Quispe",
+            },
+            {
+                "ID atención": "a3",
+                "Agente": "Bot",
+                "Fecha registro": "18/08/2026",
+                "Número cliente": None,
+                "Nombre de cliente": "Distribuidora Sur",
+            },
+        ],
+        observed_at="2026-08-19T00:00:00",
+    )
+    store.upsert_report_rows(
+        conn,
+        "outboundattention",
+        [
+            {
+                "ID atención": "o1",
+                "Agente": "Ana",
+                "Fecha registro": "18/08/2026",
+                "Número cliente": 51987654321,
+                "Nombre de cliente": "Rosa Quispe",
+            }
+        ],
+        observed_at="2026-08-19T00:00:00",
+    )
+
+
+def test_get_attention_record_clients_returns_case_counts_per_client(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    store._init_schema(conn)
+    _seed_attention_clients(conn)
+    monkeypatch.setattr(store, "get_connection", lambda: conn)
+
+    response = client.get("/data/attention-records/clients")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {"key": "51987654321", "name": "Rosa Quispe", "phone": "51987654321", "count": 3},
+        {
+            "key": "nombre:Distribuidora Sur",
+            "name": "Distribuidora Sur",
+            "phone": None,
+            "count": 1,
+        },
+    ]
+
+
+def test_get_attention_record_clients_filters_by_date_range_and_agentes(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    store._init_schema(conn)
+    _seed_attention_clients(conn)
+    monkeypatch.setattr(store, "get_connection", lambda: conn)
+
+    response = client.get(
+        "/data/attention-records/clients",
+        params={"date_from": "2026-08-18", "date_to": "2026-08-18", "agentes": ["Ana"]},
+    )
+
+    assert response.status_code == 200
+    # a2 queda afuera por fecha y a3 (agente "Bot") por agente: solo a1 + o1 de Rosa.
+    assert response.json() == [
+        {"key": "51987654321", "name": "Rosa Quispe", "phone": "51987654321", "count": 2}
+    ]
+
+
+def test_get_attention_record_clients_returns_an_empty_list_when_nothing_matches(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    store._init_schema(conn)
+    monkeypatch.setattr(store, "get_connection", lambda: conn)
+
+    response = client.get("/data/attention-records/clients")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_get_attention_record_clients_422s_for_malformed_date_from(client: TestClient):
+    response = client.get(
+        "/data/attention-records/clients", params={"date_from": "18-08-2026"}
+    )
+
+    assert response.status_code == 422
+
+
+def test_get_attention_records_filters_by_cliente_key_from_the_clients_endpoint(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    store._init_schema(conn)
+    _seed_attention_clients(conn)
+    monkeypatch.setattr(store, "get_connection", lambda: conn)
+
+    response = client.get("/data/attention-records", params={"cliente": "51987654321"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 3
+    assert {row["ID atención"] for row in body["rows"]} == {"a1", "a2", "o1"}

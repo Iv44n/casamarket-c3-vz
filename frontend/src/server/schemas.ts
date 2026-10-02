@@ -157,13 +157,22 @@ export const attentionsSearchSchema = z.object({
   plan: z.string().default('all'),
   date: dateFilterValue.default(todayIsoDate),
   dateEnd: dateEndValue,
-  demorasPage: z.number().int().min(1).default(1)
+  demorasPage: z.number().int().min(1).default(1),
+  // Clave opaca de cliente (ClientCaseCount.key, la arma el backend): filtra la lista de
+  // Demoras a las atenciones de ese cliente. `clienteNombre` NO filtra nada, solo rotula el
+  // chip -- asi el front no necesita interpretar el formato de la clave.
+  cliente: z.string().optional(),
+  clienteNombre: z.string().optional()
 })
 export type AttentionsSearch = z.infer<typeof attentionsSearchSchema>
+export const CLIENT_ORDERS = ['desc', 'asc'] as const
+export type ClientOrder = (typeof CLIENT_ORDERS)[number]
 export const tendenciasHistoricasSearchSchema =
   dateAndAgentesFilterSchema.extend({
     date: dateFilterValue.default(defaultDemandWeekStart),
-    dateEnd: dateEndValue.default(defaultDemandWeekEnd)
+    dateEnd: dateEndValue.default(defaultDemandWeekEnd),
+    // En la URL (no en estado local) para que sobreviva al ir al detalle de un cliente y volver.
+    clientesOrden: z.enum(CLIENT_ORDERS).default('desc')
   })
 export type TendenciasHistoricasSearch = z.infer<
   typeof tendenciasHistoricasSearchSchema
@@ -238,6 +247,7 @@ export const attentionRecordsPageRequestSchema = z.object({
   agentes: z.union([z.literal('all'), z.array(z.string())]).default('all'),
   date: dateFilterValue.default(todayIsoDate),
   dateEnd: dateEndValue,
+  cliente: z.string().optional(),
   page: z.number().int().min(1).default(1),
   pageSize: z.number().int().min(1).max(200).default(50)
 })
@@ -264,6 +274,18 @@ export type DailyCaseCount = {
   date: string // yyyy-mm-dd (Lima)
   count: number
 }
+// Un cliente con casos en el rango. `key` es opaca (la define el backend, ver
+// store._client_key_expr): se manda tal cual como `cliente` a /atenciones para listar
+// exactamente los casos contados en `count`. `phone` es null cuando las atenciones no traen
+// numero (el cliente se identifica solo por nombre); `plan` sale del reporte de contactos,
+// cruzado por telefono, y es '' si no hay match.
+export type ClientCaseCount = {
+  key: string
+  name: string
+  phone: string | null
+  plan: string
+  count: number
+}
 export type DailyTrendAnalytics = {
   available: boolean
   days: DailyCaseCount[]
@@ -276,6 +298,8 @@ export type IncidentRecord = {
   resultado: string
   descripcion: string
   agente: string
+  // Telefono del cliente tal como viene en la fila de origen; '' si el caso no lo trae.
+  telefonoCliente: string
   campana: string
   estado: string
   fecha: string

@@ -9,6 +9,7 @@ import type {
   BenchmarkDirection,
   BenchmarkRunRecord,
   BenchmarkRunStatus,
+  ClientCaseCount,
   ContactsSyncStatus,
   CreateUserResult,
   CurrentUser,
@@ -216,6 +217,7 @@ export async function fetchAttentionRecordsPage(params: {
   agentes: AttentionRecordsPageRequest['agentes']
   dateFrom?: string
   dateTo?: string
+  cliente?: string
   page: number
   pageSize: number
 }): Promise<{
@@ -235,10 +237,33 @@ export async function fetchAttentionRecordsPage(params: {
   }
   if (params.dateFrom) query.set('date_from', params.dateFrom)
   if (params.dateTo) query.set('date_to', params.dateTo)
+  if (params.cliente) query.set('cliente', params.cliente)
   query.set('page', String(params.page))
   query.set('page_size', String(params.pageSize))
   const response = await backendFetch(
     `/data/attention-records?${query.toString()}`
+  )
+  return response.json()
+}
+
+// Clientes con casos (entrantes + salientes) en el rango, ya agregados en SQL del lado del
+// backend -- mismo motivo que fetchReportDailyCounts: la alternativa (traer cada fila de
+// /history y contar aca) cuesta segundos y megabytes para un rango de un mes. El conteo usa el
+// mismo WHERE y la misma clave de cliente que fetchAttentionRecordsPage(cliente=...), asi que
+// cada `count` coincide con el `total` del detalle de ese cliente. `plan` lo agrega el caller.
+export async function fetchAttentionClientCounts(params: {
+  agentes: AgentesFilter
+  dateFrom: string
+  dateTo: string
+}): Promise<Omit<ClientCaseCount, 'plan'>[]> {
+  const query = new URLSearchParams()
+  query.set('date_from', params.dateFrom)
+  query.set('date_to', params.dateTo)
+  if (params.agentes !== 'all') {
+    for (const agente of params.agentes) query.append('agentes', agente)
+  }
+  const response = await backendFetch(
+    `/data/attention-records/clients?${query.toString()}`
   )
   return response.json()
 }

@@ -1,11 +1,13 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
-import { ChevronDownIcon, RefreshCwIcon, TriangleAlertIcon } from 'lucide-react'
+import { ChevronDownIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { ClientListCard } from '#/components/client-list-card'
 import { DailyTrendChart } from '#/components/daily-trend-chart'
 import { DateRangeFilter } from '#/components/date-range-filter'
 import { DemandHeatmapChart } from '#/components/demand-heatmap-chart'
+import { LoadError } from '#/components/load-error'
 import { Button } from '#/components/ui/button'
 import {
   Card,
@@ -23,9 +25,14 @@ import {
 import { Label } from '#/components/ui/label'
 import { Separator } from '#/components/ui/separator'
 import { Skeleton } from '#/components/ui/skeleton'
-import { buildDailyTrend, buildDemandHeatmap } from '#/lib/attentions-analytics'
+import {
+  buildClientList,
+  buildDailyTrend,
+  buildDemandHeatmap
+} from '#/lib/attentions-analytics'
 import { cn, withoutScrollReset } from '#/lib/utils'
 import {
+  getClientCaseCounts,
   getDailyCaseTrend,
   getDemandAnalytics
 } from '#/server/reports.functions'
@@ -78,11 +85,12 @@ export const Route = createFileRoute('/tendencias-historicas')({
   loader: async ({ location }) => {
     const { date, dateEnd, agentes } =
       location.search as TendenciasHistoricasSearch
-    const [demand, dailyTrend] = await Promise.all([
+    const [demand, dailyTrend, clients] = await Promise.all([
       getDemandAnalytics({ data: { date, dateEnd, agentes } }),
-      getDailyCaseTrend({ data: { date, dateEnd, agentes } })
+      getDailyCaseTrend({ data: { date, dateEnd, agentes } }),
+      getClientCaseCounts({ data: { date, dateEnd, agentes } })
     ])
-    return { demand, dailyTrend }
+    return { demand, dailyTrend, clients }
   },
   component: TendenciasHistoricasPage
 })
@@ -99,34 +107,13 @@ function DailyTrendSkeleton() {
   )
 }
 
-function DailyTrendError({
-  message,
-  onRetry
-}: {
-  message: string
-  onRetry: () => void
-}) {
-  return (
-    <div className="flex h-[280px] flex-col items-center justify-center gap-2 text-center">
-      <TriangleAlertIcon className="size-8 text-destructive" />
-      <p className="text-sm font-medium">No se pudo cargar la tendencia.</p>
-      <p className="rounded-md bg-muted px-2.5 py-1 font-mono text-xs text-muted-foreground">
-        {message}
-      </p>
-      <Button variant="outline" size="sm" onClick={onRetry} className="mt-1">
-        <RefreshCwIcon data-icon="inline-start" />
-        Reintentar
-      </Button>
-    </div>
-  )
-}
-
 function TendenciasHistoricasPage() {
   const initialData = Route.useLoaderData()
-  const { date, dateEnd, agentes } = Route.useSearch()
+  const { date, dateEnd, agentes, clientesOrden } = Route.useSearch()
   const navigate = withoutScrollReset(Route.useNavigate())
   const fetchDailyTrend = useServerFn(getDailyCaseTrend)
   const fetchDemandAnalytics = useServerFn(getDemandAnalytics)
+  const fetchClientCaseCounts = useServerFn(getClientCaseCounts)
 
   const [dailyTrendAnalytics, setDailyTrendAnalytics] = useState(
     initialData.dailyTrend
@@ -140,6 +127,12 @@ function TendenciasHistoricasPage() {
   const [demandLoading, setDemandLoading] = useState(false)
   const isFirstDemandRun = useRef(true)
   const demandRequestIdRef = useRef(0)
+
+  const [clients, setClients] = useState(initialData.clients)
+  const [clientsLoading, setClientsLoading] = useState(false)
+  const [clientsError, setClientsError] = useState<string | null>(null)
+  const isFirstClientsRun = useRef(true)
+  const clientsRequestIdRef = useRef(0)
 
   // Sin loaderDeps a proposito: si el loader reaccionara al search, TanStack Router
   // muestra su spinner de pagina completa en cada cambio de rango, tapando el estado
@@ -217,6 +210,45 @@ function TendenciasHistoricasPage() {
     refetchDemand(date, dateEnd, agentes)
   }, [date, dateEnd, agentes, refetchDemand])
 
+  // Misma mecanica que la tendencia: la lista de clientes cuelga del MISMO rango y filtro de
+  // agentes de la pagina (no tiene filtro de fecha propio). Cambiar solo el orden
+  // (clientesOrden) no esta en las deps a proposito: se reordena en memoria, sin pedir nada.
+  const refetchClients = useCallback(
+    async (
+      targetDate: typeof date,
+      targetDateEnd: typeof dateEnd,
+      targetAgentes: typeof agentes
+    ) => {
+      const requestId = ++clientsRequestIdRef.current
+      setClientsLoading(true)
+      setClientsError(null)
+      try {
+        const result = await fetchClientCaseCounts({
+          data: {
+            date: targetDate,
+            dateEnd: targetDateEnd,
+            agentes: targetAgentes
+          }
+        })
+        if (requestId !== clientsRequestIdRef.current) return
+        setClients(result)
+      } catch (err) {
+        if (requestId !== clientsRequestIdRef.current) return
+        setClientsError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (requestId === clientsRequestIdRef.current) setClientsLoading(false)
+      }
+    },
+    [fetchClientCaseCounts]
+  )
+  useEffect(() => {
+    if (isFirstClientsRun.current) {
+      isFirstClientsRun.current = false
+      return
+    }
+    refetchClients(date, dateEnd, agentes)
+  }, [date, dateEnd, agentes, refetchClients])
+
   const dailyTrend = useMemo(
     () => buildDailyTrend(dailyTrendAnalytics),
     [dailyTrendAnalytics]
@@ -224,6 +256,10 @@ function TendenciasHistoricasPage() {
   const demandHeatmap = useMemo(
     () => buildDemandHeatmap(demandAnalytics),
     [demandAnalytics]
+  )
+  const clientList = useMemo(
+    () => buildClientList(clients, clientesOrden),
+    [clients, clientesOrden]
   )
   const availableAgentes = demandAnalytics.availableAgentes
 
@@ -352,9 +388,11 @@ function TendenciasHistoricasPage() {
           {trendLoading ? (
             <DailyTrendSkeleton />
           ) : trendError ? (
-            <DailyTrendError
+            <LoadError
+              title="No se pudo cargar la tendencia."
               message={trendError}
               onRetry={() => refetchTrend(date, dateEnd, agentes)}
+              className="h-[280px]"
             />
           ) : dailyTrend.points.length === 0 ? (
             <p className="text-sm text-muted-foreground">
@@ -386,6 +424,23 @@ function TendenciasHistoricasPage() {
           )}
         </CardContent>
       </Card>
+
+      <ClientListCard
+        list={clientList}
+        order={clientesOrden}
+        onOrderChange={order =>
+          navigate({
+            search: prev => ({ ...prev, clientesOrden: order }),
+            replace: true
+          })
+        }
+        loading={clientsLoading}
+        error={clientsError}
+        onRetry={() => refetchClients(date, dateEnd, agentes)}
+        date={date}
+        dateEnd={dateEnd}
+        agentes={agentes}
+      />
     </div>
   )
 }
