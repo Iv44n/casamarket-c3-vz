@@ -4,6 +4,8 @@ import {
   type AttentionDirection,
   type AttentionFilter,
   type AttentionsAnalytics,
+  type ClientCaseCount,
+  type ClientOrder,
   type DailyTrendAnalytics,
   type DemandAnalytics,
   DIRECTION_REPORT_NAME,
@@ -468,4 +470,29 @@ export function buildDemandHeatmap(demand: DemandAnalytics): DemandHeatmap {
     })
   }))
   return { rows, total }
+}
+
+export type ClientList = {
+  clients: ClientCaseCount[]
+  totalClients: number
+  totalCases: number
+}
+const CLIENT_NAME_COLLATOR = new Intl.Collator('es')
+// Reordena la lista de clientes por casos segun el criterio elegido en la UI, sin volver a
+// pedir nada al backend. A igual cantidad de casos desempata siempre por nombre ascendente,
+// tambien en 'asc' -- un simple .reverse() invertiria tambien ese desempate.
+export function buildClientList(
+  clients: ClientCaseCount[],
+  order: ClientOrder
+): ClientList {
+  const direction = order === 'desc' ? -1 : 1
+  return {
+    clients: [...clients].sort(
+      (a, b) =>
+        direction * (a.count - b.count) ||
+        CLIENT_NAME_COLLATOR.compare(a.name, b.name)
+    ),
+    totalClients: clients.length,
+    totalCases: clients.reduce((sum, client) => sum + client.count, 0)
+  }
 }

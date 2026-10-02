@@ -1,5 +1,6 @@
-import { CircleCheckIcon, ClockIcon, UserIcon } from 'lucide-react'
+import { CircleCheckIcon, ClockIcon, PhoneIcon, UserIcon } from 'lucide-react'
 import { useState } from 'react'
+import { CopyButton } from '#/components/copy-button'
 import {
   CHART_AXIS_LABEL_FONT_SIZE,
   CHART_BIG_NUMBER_FONT_SIZE
@@ -26,7 +27,7 @@ function TicketList({ items }: { items: IncidentRecord[] }) {
               <span className="text-muted-foreground">Sin descripción</span>
             )}
           </p>
-          <div className="mt-0.5 flex items-center gap-3 text-muted-foreground text-xs">
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-muted-foreground text-xs">
             <span className="inline-flex items-center gap-1">
               <ClockIcon className="size-3" />
               {item.tiempoSegundos === null
@@ -43,6 +44,25 @@ function TicketList({ items }: { items: IncidentRecord[] }) {
             <span className="inline-flex items-center gap-1">
               <UserIcon className="size-3" />
               {item.agente || 'Sin agente'}
+            </span>
+            <span
+              className="inline-flex items-center gap-1 whitespace-nowrap"
+              title="Teléfono del cliente"
+            >
+              <PhoneIcon className="size-3" />
+              {item.telefonoCliente ? (
+                <>
+                  <span className="tabular-nums">{item.telefonoCliente}</span>
+                  <CopyButton
+                    text={item.telefonoCliente}
+                    noun="teléfono"
+                    subject="del cliente"
+                    className="-my-1 -ml-0.5"
+                  />
+                </>
+              ) : (
+                <span className="italic">Sin teléfono</span>
+              )}
             </span>
           </div>
         </div>

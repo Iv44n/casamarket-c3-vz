@@ -164,7 +164,7 @@ def test_results_returns_rows_from_the_store(monkeypatch: pytest.MonkeyPatch, cl
                 "has_farewell": True,
                 "handled_well_for_complexity": True,
                 "spelling_ok": True,
-                "row_json": {},
+                "row_json": {"Tiempo de atención": "00:20:00"},
             }
         ],
         "2026-08-18T00:00:00",
@@ -178,6 +178,9 @@ def test_results_returns_rows_from_the_store(monkeypatch: pytest.MonkeyPatch, cl
     assert len(body) == 1
     assert body[0]["id_atencion"] == "1"
     assert body[0]["quality_ok"] is True
+    # BenchmarkCaseResult filtra la respuesta por su modelo -- sin el campo declarado ahi,
+    # attention_seconds se perderia aunque el store lo devuelva.
+    assert body[0]["attention_seconds"] == 1200.0
 
 
 def test_results_filters_by_direction(monkeypatch: pytest.MonkeyPatch, client: TestClient):

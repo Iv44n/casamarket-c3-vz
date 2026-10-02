@@ -805,12 +805,41 @@ class AttentionRecordsPage:
     transfers: list[dict]  # row_json de transfer, solo para los id_atencion de `rows`
 
 
+# "Cliente" = quien figura en una atencion. Su identidad es el numero_cliente cuando la fila lo
+# trae; si no (medido en vivo 2026-10-02: 440 de 9796 entrantes y 7 de 2659 salientes, ~4%),
+# pero SI trae "Nombre de cliente" (siempre lo trae), la clave cae al nombre. Descartar esas filas
+# esconderia clientes reales con varios casos (empresas con 10-15 cada una). El prefijo evita que
+# una clave por nombre colisione con un telefono. El nombre vive solo dentro de row_json (no hay
+# columna), igual que "Tiempo de atención" mas abajo -- json_extract, sin migracion.
+_CLIENT_NAME_JSON_PATH = '$."Nombre de cliente"'
+_CLIENT_NAME_KEY_PREFIX = "nombre:"
+_BLANK_CLIENT_NAMES = frozenset({"", "-"})
+
+
+def _client_name_expr() -> str:
+    return f"TRIM(COALESCE(json_extract(row_json, '{_CLIENT_NAME_JSON_PATH}'), ''))"
+
+
+def _client_key_expr() -> str:
+    """Clave de cliente. La MISMA expresion agrupa (attention_client_counts) y filtra
+    (_attention_where's `cliente`): asi el conteo de cada cliente en la lista agregada no puede
+    desfasarse de las filas que devuelve su detalle -- no hay dos definiciones de "mismo cliente"
+    que mantener sincronizadas. CASE evalua perezosamente, asi que el json_extract del nombre solo
+    corre para las filas sin telefono."""
+    phone = "TRIM(COALESCE(numero_cliente, ''))"
+    return (
+        f"CASE WHEN {phone} != '' THEN {phone} "
+        f"ELSE '{_CLIENT_NAME_KEY_PREFIX}' || {_client_name_expr()} END"
+    )
+
+
 def _attention_where(
     estados: list[str] | None,
     campana: str | None,
     agentes: list[str] | None,
     date_from: str | None,
     date_to: str | None,
+    cliente: str | None = None,
 ) -> tuple[str, list]:
     clauses = ["1=1"]
     params: list = []
@@ -843,6 +872,9 @@ def _attention_where(
         clauses.append(f"{iso_expr} BETWEEN ? AND ?")
         params.append(date_from)
         params.append(date_to or date_from)
+    if cliente:
+        clauses.append(f"{_client_key_expr()} = ?")
+        params.append(cliente)
     return " AND ".join(clauses), params
 
 
@@ -879,11 +911,14 @@ def attention_records_page(
     agentes: list[str] | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    cliente: str | None = None,
     page: int = 1,
     page_size: int = 50,
 ) -> AttentionRecordsPage:
     branches = _DIRECTION_TABLES[direction]
-    where_sql, where_params = _attention_where(estados, campana, agentes, date_from, date_to)
+    where_sql, where_params = _attention_where(
+        estados, campana, agentes, date_from, date_to, cliente
+    )
     inner_sql = " UNION ALL ".join(
         _branch_sql(table, label, where_sql) for table, label in branches
     )
@@ -921,6 +956,66 @@ def attention_records_page(
         rows=rows,
         transfers=_transfer_rows_for_ids(conn, ids),
     )
+
+
+def _pick_client_name(name_counts: dict[str, int]) -> str:
+    """Un mismo telefono puede aparecer con mas de un nombre (medido en vivo 2026-10-02: ~2% de
+    los telefonos de attention) -- p.ej. el cliente cambia su nombre de perfil. Se muestra el mas
+    frecuente del periodo; un placeholder ("", "-") solo gana si no hay ningun nombre real, y el
+    desempate es alfabetico para que el resultado sea deterministico entre llamadas."""
+    return min(
+        name_counts.items(),
+        key=lambda item: (item[0] in _BLANK_CLIENT_NAMES, -item[1], item[0]),
+    )[0]
+
+
+def attention_client_counts(
+    conn: DBConnection,
+    *,
+    agentes: list[str] | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[dict]:
+    """Clientes con atenciones en el rango (entrantes + salientes, igual que "Casos diarios") y
+    cuantas tiene cada uno, agregado en SQL (GROUP BY) en vez de traer cada row_json -- mismo
+    motivo que daily_counts(). Usa el mismo WHERE (_attention_where) y la misma clave de cliente
+    (_client_key_expr) que attention_records_page(cliente=...), asi el `count` de cada cliente
+    coincide exactamente con el `total` de su detalle.
+
+    El SQL agrupa por (clave, nombre) y la fusion por clave se hace aca: elegir "el nombre mas
+    frecuente" por cliente no se expresa bien en un GROUP BY, y son pocas filas (una por par
+    clave/nombre distinto, ~una por cliente). Ordenado por casos desc y luego nombre."""
+    branches = _DIRECTION_TABLES["all"]
+    where_sql, where_params = _attention_where(None, None, agentes, date_from, date_to)
+    key_expr = _client_key_expr()
+    name_expr = _client_name_expr()
+    inner_sql = " UNION ALL ".join(
+        f"SELECT {key_expr} AS client_key, {name_expr} AS client_name, COUNT(*) AS cases "
+        f"FROM {table} WHERE {where_sql} GROUP BY client_key, client_name"
+        for table, _label in branches
+    )
+    cursor = conn.execute(
+        "SELECT client_key, client_name, SUM(cases) FROM "
+        f"({inner_sql}) GROUP BY client_key, client_name",
+        tuple(where_params) * len(branches),
+    )
+
+    names_by_key: dict[str, dict[str, int]] = {}
+    for client_key, client_name, cases in cursor.fetchall():
+        name_counts = names_by_key.setdefault(client_key, {})
+        name_counts[client_name] = name_counts.get(client_name, 0) + cases
+
+    clients = [
+        {
+            "key": client_key,
+            "name": _pick_client_name(name_counts),
+            "phone": None if client_key.startswith(_CLIENT_NAME_KEY_PREFIX) else client_key,
+            "count": sum(name_counts.values()),
+        }
+        for client_key, name_counts in names_by_key.items()
+    ]
+    clients.sort(key=lambda client: (-client["count"], client["name"].casefold(), client["key"]))
+    return clients
 
 
 def _transfer_rows_for_ids(conn: DBConnection, ids: set[str]) -> list[dict]:
@@ -1251,6 +1346,49 @@ _BENCHMARK_RESULT_COLUMNS = (
     "analyzed_at",
 )
 
+# "Tiempo de atencion" de C3: cuanto tiempo tuvo el caso el agente que lo CERRO (desde que lo
+# tomo hasta el cierre) -- en un caso transferido NO cuenta el tiempo previo con otros agentes
+# ni el de cola (verificado contra los xlsx reales: sin transferencia coincide con fin - inicio;
+# con transferencia es siempre menor que fin - ultima transferencia). Es el denominador de
+# "puntos de complejidad por hora" en /benchmarks.
+#
+# Ya viaja dentro de row_json (la fila completa de attention/outboundattention), asi que se lee
+# de ahi con json_extract en cada consulta en vez de duplicarlo en una columna nueva: funciona
+# igual para las filas viejas, sin migracion ni backfill. row_json se guarda con
+# ensure_ascii=True (la "o" acentuada queda escapada como \u00f3 en el texto) y SQLite
+# compara la clave del path contra el JSON ya decodificado -- verificado contra sqlite3 3.46 y
+# contra la Turso real (1128 de 1128 filas vigentes devolvieron valor).
+_ATTENTION_TIME_JSON_PATH = '$."Tiempo de atención"'
+_BENCHMARK_SELECT_SQL = ", ".join(
+    (*_BENCHMARK_RESULT_COLUMNS, f"json_extract(row_json, '{_ATTENTION_TIME_JSON_PATH}')")
+)
+
+_EMPTY_DURATION_VALUES = {"", "n.a", "-"}
+
+
+def parse_duration_seconds(value: object) -> float | None:
+    """'HH:MM:SS' o 'MM:SS' -> segundos; vacio, 'n.a', '-' o malformado -> None. Espejo de
+    parseDurationToSeconds (frontend/src/lib/duration.ts): 'Tiempo de atencion' puede venir en
+    cualquiera de los dos formatos, por eso no se reusa pipeline._parse_hhmmss_seconds (3 partes
+    exactas, pensado para 'Tiempo de primera respuesta'). Una entrada de 2 partes es MM:SS, no
+    HH:MM."""
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    if trimmed.lower() in _EMPTY_DURATION_VALUES:
+        return None
+    parts = trimmed.split(":")
+    if len(parts) not in (2, 3):
+        return None
+    try:
+        numbers = [int(part) for part in parts]
+    except ValueError:
+        return None
+    if any(number < 0 for number in numbers):
+        return None
+    hours, minutes, seconds = numbers if len(numbers) == 3 else [0, *numbers]
+    return float(hours * 3600 + minutes * 60 + seconds)
+
 
 def _benchmark_where(
     direction: str | None,
@@ -1285,7 +1423,11 @@ def _benchmark_where(
 
 
 def _row_to_benchmark_dict(record: tuple) -> dict:
-    row = dict(zip(_BENCHMARK_RESULT_COLUMNS, record))
+    # `record` sigue el orden de _BENCHMARK_SELECT_SQL: las columnas de
+    # _BENCHMARK_RESULT_COLUMNS y, al final, el texto crudo de "Tiempo de atencion".
+    *column_values, attention_time = record
+    row = dict(zip(_BENCHMARK_RESULT_COLUMNS, column_values))
+    row["attention_seconds"] = parse_duration_seconds(attention_time)
     # bool(0/1) por nombre de columna, no por indice posicional -- evita tener que
     # recalcular numeros a mano cada vez que _BENCHMARK_RESULT_COLUMNS cambia de orden
     # o largo (ya paso dos veces).
@@ -1333,7 +1475,7 @@ def benchmark_result_rows(
     where_sql, params = _benchmark_where(direction, date_from, date_to, None)
     order_expr = _iso_datetime_expr("fecha_final", "hora_final")
     cursor = conn.execute(
-        f"SELECT {', '.join(_BENCHMARK_RESULT_COLUMNS)} FROM benchmark_result "
+        f"SELECT {_BENCHMARK_SELECT_SQL} FROM benchmark_result "
         f"WHERE {where_sql} ORDER BY {order_expr} DESC, id_atencion",
         tuple(params),
     )
@@ -1368,7 +1510,7 @@ def benchmark_results_page(
     order_expr = _iso_datetime_expr("fecha_final", "hora_final")
     offset = (page - 1) * page_size
     page_sql = (
-        f"SELECT {', '.join(_BENCHMARK_RESULT_COLUMNS)} FROM benchmark_result "
+        f"SELECT {_BENCHMARK_SELECT_SQL} FROM benchmark_result "
         f"WHERE {where_sql} ORDER BY {order_expr} DESC, id_atencion "
         "LIMIT ? OFFSET ?"
     )

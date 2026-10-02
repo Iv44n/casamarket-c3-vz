@@ -16,6 +16,68 @@ export const COMPLEXITY_WEIGHTS: Record<BenchmarkComplexity, number> = {
   alta: 3
 }
 
+// Unidad en que se expresa "puntos de complejidad por tiempo de atencion" -- solo
+// reescala el numero (puntos ÷ segundos × segundosPorUnidad): no cambia el orden entre
+// agentes ni la proporcion entre barras. Por hora da valores legibles (~0.3 a ~3 con
+// datos reales); por minuto y por segundo son 60 y 3600 veces mas chicos.
+export const ATTENTION_TIME_UNITS = [
+  {
+    key: 'hora',
+    label: 'hora',
+    plural: 'horas',
+    abbr: 'h',
+    seconds: 3600,
+    decimals: 1
+  },
+  {
+    key: 'minuto',
+    label: 'minuto',
+    plural: 'minutos',
+    abbr: 'min',
+    seconds: 60,
+    decimals: 0
+  },
+  {
+    key: 'segundo',
+    label: 'segundo',
+    plural: 'segundos',
+    abbr: 's',
+    seconds: 1,
+    decimals: 0
+  }
+] as const
+export type AttentionTimeUnit = (typeof ATTENTION_TIME_UNITS)[number]
+export type AttentionTimeUnitKey = AttentionTimeUnit['key']
+export const DEFAULT_ATTENTION_TIME_UNIT: AttentionTimeUnitKey = 'hora'
+
+export function attentionTimeUnitOf(
+  key: AttentionTimeUnitKey
+): AttentionTimeUnit {
+  return (
+    ATTENTION_TIME_UNITS.find(unit => unit.key === key) ??
+    ATTENTION_TIME_UNITS[0]
+  )
+}
+
+// 3 cifras significativas en vez de una cantidad fija de decimales: el mismo
+// promedio es 1.57 por hora, 0.0262 por minuto y 0.000436 por segundo -- con 2
+// decimales fijos las dos ultimas saldrian como "0.03" y "0.00".
+export function formatWeightedScorePerTime(value: number): string {
+  return value === 0 ? '0' : String(Number(value.toPrecision(3)))
+}
+
+// Tiempo total de atencion expresado en la unidad elegida (133.8 h / 8028 min /
+// 481680 s), para que "puntos ÷ tiempo" se pueda verificar a mano en la tabla.
+export function formatAttentionSecondsIn(
+  seconds: number,
+  unit: AttentionTimeUnit
+): string {
+  const value = (seconds / unit.seconds).toLocaleString('es-PE', {
+    maximumFractionDigits: unit.decimals
+  })
+  return `${value} ${unit.abbr}`
+}
+
 // "ownConductOk*" recalcula el mismo AND-logic que el backend usa para quality_ok
 // (greeting_level != 'ninguno' AND has_farewell AND handled_well_for_complexity AND
 // spelling_ok), pero SIN informed_transfer -- row.quality_ok si lo incluye cuando
@@ -58,6 +120,29 @@ export type AgentBenchmarkDatum = {
   // casesAnalyzed; un agente sin ningun caso juzgado por el LLM da 0, no null,
   // para que siga siendo comparable/ordenable junto al resto.
   complexityWeightedScore: number
+  // "Productividad por tiempo": puntos de complejidad ÷ tiempo de atencion con el
+  // agente. Numerador y denominador salen de LOS MISMOS casos -- solo los que tienen
+  // complejidad juzgada Y tiempo de atencion (attention_seconds) --, si no la razon
+  // quedaria inflada por casos que cuentan de un solo lado. Por eso no reusa
+  // complexityWeightedScore, que cuenta todo caso con complejidad tenga tiempo o no.
+  timedCasesCount: number
+  timedWeightedScore: number
+  attentionSecondsTotal: number
+}
+
+// Puntos de complejidad por unidad de tiempo de atencion (ver ATTENTION_TIME_UNITS);
+// null cuando el agente no tiene ningun caso con tiempo, para que el llamador
+// decida como mostrar "sin dato" en vez de un 0 que pareceria baja productividad.
+export function weightedScorePerTime(
+  agent: Pick<
+    AgentBenchmarkDatum,
+    'timedWeightedScore' | 'attentionSecondsTotal'
+  >,
+  unitSeconds: number
+): number | null {
+  return agent.attentionSecondsTotal > 0
+    ? (agent.timedWeightedScore / agent.attentionSecondsTotal) * unitSeconds
+    : null
 }
 
 function agenteKeyOf(value: string | null): string {
@@ -103,6 +188,9 @@ type AgentAccumulator = {
   complexityLow: number
   complexityMedium: number
   complexityHigh: number
+  timedCases: number
+  timedWeightedScore: number
+  attentionSecondsTotal: number
 }
 
 export function buildAgentBenchmarkRanking(
@@ -128,7 +216,10 @@ export function buildAgentBenchmarkRanking(
       handledWellFail: 0,
       complexityLow: 0,
       complexityMedium: 0,
-      complexityHigh: 0
+      complexityHigh: 0,
+      timedCases: 0,
+      timedWeightedScore: 0,
+      attentionSecondsTotal: 0
     }
     current.totalCases += 1
     if (row.first_response_seconds !== null) {
@@ -165,6 +256,14 @@ export function buildAgentBenchmarkRanking(
     if (row.complexity === 'baja') current.complexityLow += 1
     else if (row.complexity === 'media') current.complexityMedium += 1
     else if (row.complexity === 'alta') current.complexityHigh += 1
+    // typeof y no `!== null`: frontend y backend se despliegan por separado, y contra
+    // un backend que todavia no manda attention_seconds el campo llega undefined --
+    // `undefined !== null` es true y sumarlo contaminaria el total con NaN.
+    if (row.complexity !== null && typeof row.attention_seconds === 'number') {
+      current.timedCases += 1
+      current.timedWeightedScore += COMPLEXITY_WEIGHTS[row.complexity]
+      current.attentionSecondsTotal += row.attention_seconds
+    }
     byAgent.set(agente, current)
   }
   const ranked = [...byAgent.entries()]
@@ -229,7 +328,10 @@ export function buildAgentBenchmarkRanking(
         complexityWeightedScore:
           stats.complexityLow * COMPLEXITY_WEIGHTS.baja +
           stats.complexityMedium * COMPLEXITY_WEIGHTS.media +
-          stats.complexityHigh * COMPLEXITY_WEIGHTS.alta
+          stats.complexityHigh * COMPLEXITY_WEIGHTS.alta,
+        timedCasesCount: stats.timedCases,
+        timedWeightedScore: stats.timedWeightedScore,
+        attentionSecondsTotal: stats.attentionSecondsTotal
       }
     })
     .sort(

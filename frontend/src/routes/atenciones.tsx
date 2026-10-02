@@ -4,7 +4,9 @@ import {
   ChevronDownIcon,
   FileJsonIcon,
   FileTextIcon,
-  RefreshCwIcon
+  RefreshCwIcon,
+  UserRoundIcon,
+  XIcon
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -192,7 +194,9 @@ function AtencionesPage() {
     plan,
     date,
     dateEnd,
-    demorasPage
+    demorasPage,
+    cliente,
+    clienteNombre
   } = Route.useSearch()
   const navigate = withoutScrollReset(Route.useNavigate())
   const refresh = useServerFn(triggerRefresh)
@@ -256,6 +260,7 @@ function AtencionesPage() {
         agentes,
         date,
         dateEnd,
+        cliente,
         page: demorasPage,
         pageSize: DEMORAS_PAGE_SIZE
       }
@@ -277,6 +282,7 @@ function AtencionesPage() {
     agentes,
     date,
     dateEnd,
+    cliente,
     demorasPage,
     fetchAttentionRecordsPage
   ])
@@ -437,6 +443,17 @@ function AtencionesPage() {
   function selectNoAgentes() {
     navigate({
       search: prev => ({ ...prev, agentes: [], demorasPage: 1 }),
+      replace: true
+    })
+  }
+  function clearCliente() {
+    navigate({
+      search: prev => ({
+        ...prev,
+        cliente: undefined,
+        clienteNombre: undefined,
+        demorasPage: 1
+      }),
       replace: true
     })
   }
@@ -1006,6 +1023,26 @@ function AtencionesPage() {
           </p>
 
           <div className="mt-3 flex flex-wrap items-center gap-3">
+            {cliente && (
+              <Badge
+                variant="secondary"
+                className="h-8 gap-1.5 pr-1 pl-3 text-sm"
+              >
+                <UserRoundIcon />
+                <span className="max-w-64 truncate">
+                  Cliente: {clienteNombre ?? cliente}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={clearCliente}
+                  aria-label="Quitar filtro de cliente"
+                >
+                  <XIcon />
+                </Button>
+              </Badge>
+            )}
+
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-muted-foreground">
                 Estado

@@ -60,6 +60,16 @@ class DailyCount(BaseModel):
     count: int
 
 
+class ClientCaseCount(BaseModel):
+    # `key` es la clave opaca de cliente (ver store._client_key_expr): se manda tal cual como
+    # filtro `cliente` a /data/attention-records para traer exactamente las atenciones contadas.
+    key: str
+    name: str
+    # None cuando la atencion no trae numero_cliente (el cliente se identifica solo por nombre).
+    phone: str | None
+    count: int
+
+
 class BenchmarkCaseResult(BaseModel):
     id_atencion: str
     direction: Literal["attention", "outboundattention"]
@@ -70,6 +80,9 @@ class BenchmarkCaseResult(BaseModel):
     hora_final: str | None
     cliente: str | None
     first_response_seconds: float | None
+    # "Tiempo de atencion" de C3: cuanto tuvo el caso el agente que lo cerro (ver
+    # store.parse_duration_seconds / _ATTENTION_TIME_JSON_PATH).
+    attention_seconds: float | None
     greeting_level: Literal["ninguno", "casual", "formal"] | None
     has_farewell: bool | None
     complexity: Literal["baja", "media", "alta"] | None

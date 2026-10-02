@@ -282,9 +282,10 @@ def _row(
     hora_registro: str = "08:00:00",
     fecha_final: str | None = None,
     hora_final: str | None = None,
-    numero_cliente: str = "999999999",
+    numero_cliente: str | None = "999999999",
+    nombre_cliente: str | None = None,
 ) -> dict:
-    return {
+    row = {
         "ID atención": id_atencion,
         "Estado": estado,
         "Agente": agente,
@@ -295,6 +296,9 @@ def _row(
         "Hora final": hora_final,
         "Número cliente": numero_cliente,
     }
+    if nombre_cliente is not None:
+        row["Nombre de cliente"] = nombre_cliente
+    return row
 
 
 def _seed(conn, report_name: str, rows: list[dict]) -> None:
@@ -589,6 +593,281 @@ def test_attention_records_page_returns_transfers_only_for_ids_on_the_page():
     page = store.attention_records_page(conn, direction="all", page=1, page_size=50)
 
     assert [t["Atención ID"] for t in page.transfers] == ["on_page"]
+
+
+def test_attention_client_counts_groups_by_phone_across_both_tables():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("in1", numero_cliente="51987654321", nombre_cliente="Ana Perez"),
+            _row("in2", numero_cliente="51987654321", nombre_cliente="Ana Perez"),
+            _row("in3", numero_cliente="51911111111", nombre_cliente="Luis Soto"),
+        ],
+    )
+    _seed(
+        conn,
+        "outboundattention",
+        [_row("out1", numero_cliente="51987654321", nombre_cliente="Ana Perez")],
+    )
+
+    clients = store.attention_client_counts(conn)
+
+    assert clients == [
+        {"key": "51987654321", "name": "Ana Perez", "phone": "51987654321", "count": 3},
+        {"key": "51911111111", "name": "Luis Soto", "phone": "51911111111", "count": 1},
+    ]
+
+
+def test_attention_client_counts_orders_by_count_desc_then_name():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("b1", numero_cliente="51900000002", nombre_cliente="beto"),
+            _row("a1", numero_cliente="51900000001", nombre_cliente="Ana"),
+            _row("c1", numero_cliente="51900000003", nombre_cliente="Carla"),
+            _row("c2", numero_cliente="51900000003", nombre_cliente="Carla"),
+        ],
+    )
+
+    clients = store.attention_client_counts(conn)
+
+    assert [client["name"] for client in clients] == ["Carla", "Ana", "beto"]
+
+
+def test_attention_client_counts_shows_the_most_frequent_name_for_a_phone():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("1", numero_cliente="51987654321", nombre_cliente="Ana"),
+            _row("2", numero_cliente="51987654321", nombre_cliente="Ana"),
+            _row("3", numero_cliente="51987654321", nombre_cliente="Anita"),
+        ],
+    )
+
+    clients = store.attention_client_counts(conn)
+
+    assert clients == [
+        {"key": "51987654321", "name": "Ana", "phone": "51987654321", "count": 3}
+    ]
+
+
+def test_attention_client_counts_prefers_a_real_name_over_a_more_frequent_placeholder():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("1", numero_cliente="51987654321", nombre_cliente="-"),
+            _row("2", numero_cliente="51987654321", nombre_cliente="-"),
+            _row("3", numero_cliente="51987654321", nombre_cliente="Ana"),
+        ],
+    )
+
+    clients = store.attention_client_counts(conn)
+
+    assert clients[0]["name"] == "Ana"
+    assert clients[0]["count"] == 3
+
+
+def test_attention_client_counts_breaks_name_ties_alphabetically():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("1", numero_cliente="51987654321", nombre_cliente="Zoe"),
+            _row("2", numero_cliente="51987654321", nombre_cliente="Ana"),
+        ],
+    )
+
+    clients = store.attention_client_counts(conn)
+
+    assert clients[0]["name"] == "Ana"
+
+
+def test_attention_client_counts_falls_back_to_the_name_when_there_is_no_phone():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("1", numero_cliente=None, nombre_cliente="Distribuidora Sur"),
+            # Un numero en blanco cuenta igual que uno ausente.
+            _row("2", numero_cliente="  ", nombre_cliente="Distribuidora Sur"),
+            # Mismo nombre pero CON telefono: es otro cliente, no se mezcla con el de arriba.
+            _row("3", numero_cliente="51987654321", nombre_cliente="Distribuidora Sur"),
+        ],
+    )
+
+    clients = {client["key"]: client for client in store.attention_client_counts(conn)}
+
+    assert clients["nombre:Distribuidora Sur"] == {
+        "key": "nombre:Distribuidora Sur",
+        "name": "Distribuidora Sur",
+        "phone": None,
+        "count": 2,
+    }
+    assert clients["51987654321"]["count"] == 1
+
+
+def test_attention_client_counts_filters_by_date_range():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("in", numero_cliente="51987654321", nombre_cliente="Ana", fecha_registro="18/08/2026"),
+            _row("out", numero_cliente="51987654321", nombre_cliente="Ana", fecha_registro="01/09/2026"),
+        ],
+    )
+
+    clients = store.attention_client_counts(conn, date_from="2026-08-18", date_to="2026-08-18")
+
+    assert [client["count"] for client in clients] == [1]
+
+
+def test_attention_client_counts_filters_by_agentes_with_sin_agente_fallback():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("ana", agente="Ana", numero_cliente="51900000001", nombre_cliente="C1"),
+            _row("luis", agente="Luis", numero_cliente="51900000002", nombre_cliente="C2"),
+            _row("dash", agente="-", numero_cliente="51900000003", nombre_cliente="C3"),
+        ],
+    )
+
+    clients = store.attention_client_counts(conn, agentes=["Ana", "Sin agente"])
+
+    assert {client["name"] for client in clients} == {"C1", "C3"}
+
+
+def test_attention_client_counts_agentes_empty_list_matches_nothing():
+    conn = _conn()
+    _seed(conn, "attention", [_row("1", nombre_cliente="Ana")])
+
+    assert store.attention_client_counts(conn, agentes=[]) == []
+
+
+def test_attention_client_counts_returns_empty_when_there_are_no_attentions():
+    assert store.attention_client_counts(_conn()) == []
+
+
+def test_attention_records_page_filters_by_cliente_phone_key_across_both_tables():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("mine_in", numero_cliente="51987654321", nombre_cliente="Ana"),
+            _row("other", numero_cliente="51911111111", nombre_cliente="Luis"),
+        ],
+    )
+    _seed(
+        conn,
+        "outboundattention",
+        [_row("mine_out", numero_cliente="51987654321", nombre_cliente="Ana")],
+    )
+
+    page = store.attention_records_page(
+        conn, direction="all", cliente="51987654321", page=1, page_size=50
+    )
+
+    assert {row["ID atención"] for row in page.rows} == {"mine_in", "mine_out"}
+    assert page.total == 2
+
+
+def test_attention_records_page_filters_by_cliente_name_key_only_among_phoneless_rows():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("phoneless", numero_cliente=None, nombre_cliente="Distribuidora Sur"),
+            _row("with_phone", numero_cliente="51987654321", nombre_cliente="Distribuidora Sur"),
+        ],
+    )
+
+    page = store.attention_records_page(
+        conn, direction="all", cliente="nombre:Distribuidora Sur", page=1, page_size=50
+    )
+
+    assert [row["ID atención"] for row in page.rows] == ["phoneless"]
+
+
+def test_attention_records_page_cliente_combines_with_the_other_filters():
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("in_range", numero_cliente="51987654321", fecha_registro="18/08/2026"),
+            _row("out_of_range", numero_cliente="51987654321", fecha_registro="01/09/2026"),
+        ],
+    )
+
+    page = store.attention_records_page(
+        conn,
+        direction="all",
+        cliente="51987654321",
+        date_from="2026-08-18",
+        date_to="2026-08-18",
+        page=1,
+        page_size=50,
+    )
+
+    assert [row["ID atención"] for row in page.rows] == ["in_range"]
+
+
+def test_attention_client_count_equals_the_total_of_that_clients_detail_list():
+    # La razon de que ambas funciones compartan _client_key_expr: el numero que se ve en la lista
+    # de clientes tiene que ser el mismo "total" que se ve al abrir el detalle de ese cliente.
+    conn = _conn()
+    _seed(
+        conn,
+        "attention",
+        [
+            _row("1", numero_cliente="51987654321", nombre_cliente="Ana", fecha_registro="18/08/2026"),
+            _row("2", numero_cliente="51987654321", nombre_cliente="Ana", fecha_registro="19/08/2026"),
+            _row("3", numero_cliente=None, nombre_cliente="Distribuidora Sur", fecha_registro="18/08/2026"),
+            _row("4", numero_cliente=None, nombre_cliente="-", fecha_registro="18/08/2026"),
+            _row("5", numero_cliente="51911111111", nombre_cliente="Luis", fecha_registro="01/09/2026"),
+        ],
+    )
+    _seed(
+        conn,
+        "outboundattention",
+        [
+            _row("6", numero_cliente="51987654321", nombre_cliente="Ana", fecha_registro="18/08/2026"),
+            _row("7", numero_cliente=None, nombre_cliente="Distribuidora Sur", fecha_registro="19/08/2026"),
+        ],
+    )
+
+    clients = store.attention_client_counts(conn, date_from="2026-08-18", date_to="2026-08-19")
+
+    assert {client["key"] for client in clients} == {
+        "51987654321",
+        "nombre:Distribuidora Sur",
+        "nombre:-",
+    }
+    for client in clients:
+        page = store.attention_records_page(
+            conn,
+            direction="all",
+            date_from="2026-08-18",
+            date_to="2026-08-19",
+            cliente=client["key"],
+            page=1,
+            page_size=50,
+        )
+        assert page.total == client["count"], client["key"]
 
 
 def _closed_attention_row(id_atencion: str, fecha_final: str, estado: str = "Cerrada") -> dict:
@@ -919,6 +1198,86 @@ def test_record_benchmark_results_extracts_fecha_hora_final_and_cliente_from_row
     assert rows[0]["fecha_final"] == "18/08/2026"
     assert rows[0]["hora_final"] == "14:32:10"
     assert rows[0]["cliente"] == "Ana Perez"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("00:12:34", 754.0),
+        ("01:00:00", 3600.0),
+        ("40:15:09", 144909.0),
+        # 2 partes es MM:SS, no HH:MM -- el mismo criterio que parseDurationToSeconds del front.
+        ("45:10", 2710.0),
+        ("  00:00:07  ", 7.0),
+        ("", None),
+        ("n.a", None),
+        ("N.A", None),
+        ("-", None),
+        ("12", None),
+        ("1:2:3:4", None),
+        ("aa:bb", None),
+        ("-1:30", None),
+        (None, None),
+        (754, None),
+    ],
+)
+def test_parse_duration_seconds(raw, expected):
+    assert store.parse_duration_seconds(raw) == expected
+
+
+def test_benchmark_result_rows_expose_attention_seconds_from_row_json():
+    conn = _conn()
+    store.record_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "hhmmss",
+                "direction": "attention",
+                "row_json": {"Tiempo de atención": "01:02:03"},
+            },
+            {
+                "id_atencion": "mmss",
+                "direction": "attention",
+                "row_json": {"Tiempo de atención": "45:10"},
+            },
+            {
+                "id_atencion": "not_available",
+                "direction": "attention",
+                "row_json": {"Tiempo de atención": "n.a"},
+            },
+            {"id_atencion": "missing", "direction": "attention", "row_json": {}},
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    rows = {r["id_atencion"]: r for r in store.benchmark_result_rows(conn)}
+
+    # La clave lleva tilde y row_json se guarda con ensure_ascii (\u00f3 en el texto) -- este
+    # test cubre justo que json_extract la encuentre igual.
+    assert rows["hhmmss"]["attention_seconds"] == 3723.0
+    assert rows["mmss"]["attention_seconds"] == 2710.0
+    assert rows["not_available"]["attention_seconds"] is None
+    assert rows["missing"]["attention_seconds"] is None
+
+
+def test_benchmark_results_page_expose_attention_seconds_too():
+    conn = _conn()
+    store.record_benchmark_results(
+        conn,
+        [
+            {
+                "id_atencion": "1",
+                "direction": "attention",
+                "row_json": {"Tiempo de atención": "00:20:00"},
+            }
+        ],
+        "2026-08-18T00:00:00",
+    )
+
+    page = store.benchmark_results_page(conn)
+
+    assert page.total == 1
+    assert page.rows[0]["attention_seconds"] == 1200.0
 
 
 def test_record_benchmark_results_appends_instead_of_overwriting_on_a_later_run():

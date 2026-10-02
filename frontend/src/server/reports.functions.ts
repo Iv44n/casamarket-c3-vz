@@ -12,6 +12,7 @@ import {
   INCIDENT_SOURCE_REPORTS
 } from '#/lib/incident-analytics'
 import {
+  fetchAttentionClientCounts,
   fetchAttentionRecordsPage,
   fetchBackfillStatus,
   fetchBenchmarkResults,
@@ -40,6 +41,7 @@ import type {
   AttentionRecordsPage,
   AttentionsAnalytics,
   BenchmarkResultsPage,
+  ClientCaseCount,
   DailyTrendAnalytics,
   DemandAnalytics,
   DemandBucketCount,
@@ -438,6 +440,7 @@ export const getAttentionRecordsPage = createServerFn({ method: 'GET' })
         agentes: data.agentes,
         dateFrom,
         dateTo,
+        cliente: data.cliente,
         page: data.page,
         pageSize: data.pageSize
       }),
@@ -456,6 +459,31 @@ export const getAttentionRecordsPage = createServerFn({ method: 'GET' })
       ),
       availablePlans
     }
+  })
+
+// Lista de clientes de /tendencias-historicas: quien tuvo casos en el rango (con el mismo filtro
+// de agentes que el resto de la pagina, para que la suma de la lista cuadre con "Casos
+// diarios"). Nombre, telefono y conteo vienen agregados del backend; el plan se cruza aca con el
+// reporte de contactos por telefono, igual que getAttentionRecordsPage hace con cada atencion
+// -- por eso un cliente sin telefono (o que no esta en contactos) queda con plan ''.
+export const getClientCaseCounts = createServerFn({ method: 'GET' })
+  .validator(dateAndAgentesFilterSchema)
+  .handler(async ({ data }): Promise<ClientCaseCount[]> => {
+    // Mismo atajo que getAttentionRecordsPage: "ningun agente" es una seleccion valida con 0
+    // resultados, no hace falta pegarle al backend para saberlo.
+    if (data.agentes !== 'all' && data.agentes.length === 0) return []
+
+    const { dateFrom, dateTo } = toHistoryDateRange(data.date, data.dateEnd)
+    const [clients, contactsRows] = await Promise.all([
+      fetchAttentionClientCounts({ agentes: data.agentes, dateFrom, dateTo }),
+      getCachedContactsRows()
+    ])
+    const contactsByPhone = buildContactsIndex(contactsRows ?? [])
+    return clients.map(client => {
+      const contactKey = normalizePhoneKey(client.phone)
+      const contact = contactKey ? contactsByPhone.get(contactKey) : undefined
+      return { ...client, plan: contact?.plan ?? '' }
+    })
   })
 
 function aggregateDemandBuckets(rows: ReportRow[] | null): DemandBucketCount[] {

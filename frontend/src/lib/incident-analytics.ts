@@ -26,6 +26,7 @@ export const INCIDENT_DETAIL_FIELD: Record<
   {
     descripcion: string
     agente: string
+    numeroCliente: string
     campana: string
     estado: string
     hora: string
@@ -37,6 +38,7 @@ export const INCIDENT_DETAIL_FIELD: Record<
   attention: {
     descripcion: 'Descripción de la incidencia',
     agente: 'Agente',
+    numeroCliente: 'Número cliente',
     campana: 'Campaña',
     estado: 'Estado',
     hora: 'Hora registro',
@@ -47,6 +49,7 @@ export const INCIDENT_DETAIL_FIELD: Record<
   outboundattention: {
     descripcion: 'Descripción de la incidencia',
     agente: 'Agente',
+    numeroCliente: 'Número cliente',
     campana: 'Campaña',
     estado: 'Estado',
     hora: 'Hora registro',
@@ -57,6 +60,7 @@ export const INCIDENT_DETAIL_FIELD: Record<
   calloutgoing: {
     descripcion: 'Descripción de la incidencia',
     agente: 'Agente',
+    numeroCliente: 'Nº Cliente',
     campana: 'Campaña',
     estado: 'Estado',
     hora: 'Hora',
@@ -129,6 +133,17 @@ function stringField(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+// El numero de cliente llega como numero JSON (entrantes/salientes/llamadas) o, en algun caso
+// suelto, como texto. Se guarda una sola vez en el registro, como texto y sin tocarlo (las
+// llamadas traen 9 digitos y las atenciones 11, con el 51 del pais): ese mismo string es el que
+// muestran la lista, el PDF y el JSON. '' cuando el caso no trae numero.
+function phoneField(value: ReportRow[string]): string {
+  if (typeof value === 'number') {
+    return Number.isInteger(value) ? String(value) : ''
+  }
+  return isEmptyIncidentValue(value) ? '' : String(value).trim()
+}
+
 function firstNonEmptyValue(row: ReportRow, fields: string[]): string | null {
   for (const field of fields) {
     const value = row[field]
@@ -168,6 +183,7 @@ export function deriveIncidentAnalytics(
         ),
         descripcion: normalizeIncidentField(row[detailField.descripcion], ''),
         agente: normalizeIncidentField(row[detailField.agente], ''),
+        telefonoCliente: phoneField(row[detailField.numeroCliente]),
         campana: normalizeIncidentField(
           row[detailField.campana],
           'Sin campaña'
@@ -208,6 +224,7 @@ export function groupIncidentsBy(
 export type IncidentTicketExport = {
   descripcion: string
   agente: string
+  telefonoCliente: string
   campana: string
   estado: string
   fecha: string
@@ -237,6 +254,7 @@ export function buildIncidentHierarchyTree(
           tickets: group.items.map(item => ({
             descripcion: item.descripcion,
             agente: item.agente,
+            telefonoCliente: item.telefonoCliente,
             campana: item.campana,
             estado: item.estado,
             fecha: item.fecha,
