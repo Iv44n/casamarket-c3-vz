@@ -221,7 +221,25 @@ export async function fetchManualIncidents(
 ): Promise<ManualIncidentList> {
   const query = new URLSearchParams({ date_from: dateFrom, date_to: dateTo })
   const response = await backendFetch(`/incidents?${query.toString()}`)
-  return response.json()
+  const payload: unknown = await response.json()
+  if (Array.isArray(payload)) {
+    return { rows: payload as ManualIncidentList['rows'], truncated: false }
+  }
+  if (
+    payload !== null &&
+    typeof payload === 'object' &&
+    'rows' in payload &&
+    Array.isArray(payload.rows)
+  ) {
+    return {
+      rows: payload.rows as ManualIncidentList['rows'],
+      truncated:
+        'truncated' in payload && typeof payload.truncated === 'boolean'
+          ? payload.truncated
+          : false
+    }
+  }
+  throw new Error('La respuesta de incidencias tiene un formato inválido.')
 }
 async function saveManualIncident(
   path: string,
