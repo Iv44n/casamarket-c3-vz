@@ -321,3 +321,16 @@ def search_clients(query: str, limit: int = MAX_RESULTS) -> list[ClientSuggestio
         unique.append(entry)
     unique.sort(key=rank)
     return [entry.suggestion for entry in unique[:limit]]
+
+
+def list_clients() -> list[ClientSuggestion]:
+    """Todos los clientes disponibles para poblar el selector inicial del formulario."""
+    unique: list[_Entry] = []
+    seen: set[str] = set()
+    for entry in (*_c3_clients.get(), *_manual_clients.get()):
+        if entry.key in seen:
+            continue
+        seen.add(entry.key)
+        unique.append(entry)
+    unique.sort(key=lambda entry: (entry.name_norm, entry.key))
+    return [entry.suggestion for entry in unique]

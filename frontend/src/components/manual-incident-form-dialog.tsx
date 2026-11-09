@@ -161,6 +161,7 @@ export function ManualIncidentFormDialog({
   const [form, setForm] = useState<ManualIncidentInput>(() =>
     incident ? formFromIncident(incident) : emptyForm()
   )
+  const [clientQuery, setClientQuery] = useState(incident?.cliente ?? '')
   const [clients, setClients] = useState<ClientSuggestion[]>([])
   const [pending, setPending] = useState(false)
 
@@ -171,9 +172,23 @@ export function ManualIncidentFormDialog({
   }, [incident, sessionUser?.username])
 
   useEffect(() => {
-    const query = form.cliente.trim()
-    if (query.length < 2 && !/\d/.test(query)) {
-      setClients([])
+    let active = true
+    searchClients({ data: '' })
+      .then(values => {
+        if (active) setClients(values)
+      })
+      .catch(err => {
+        if (active)
+          toast.error(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      active = false
+    }
+  }, [searchClients])
+
+  useEffect(() => {
+    const query = clientQuery.trim()
+    if (!query) {
       return
     }
     let active = true
@@ -191,7 +206,7 @@ export function ManualIncidentFormDialog({
       active = false
       window.clearTimeout(timer)
     }
-  }, [form.cliente, searchClients])
+  }, [clientQuery, searchClients])
 
   const optionsByCategory = useMemo(() => {
     const result = {} as Record<IncidentCategory, string[]>
@@ -224,6 +239,7 @@ export function ManualIncidentFormDialog({
       cliente: value,
       ...(selected ? { telefono: selected.phone } : {})
     }))
+    setClientQuery(value)
   }
 
   async function handleSubmit(event: React.FormEvent) {
@@ -310,6 +326,8 @@ export function ManualIncidentFormDialog({
               <Combobox
                 items={clients.map(client => client.name)}
                 value={form.cliente || null}
+                inputValue={clientQuery}
+                onInputValueChange={setClientQuery}
                 onValueChange={next =>
                   handleClientChange(typeof next === 'string' ? next : '')
                 }

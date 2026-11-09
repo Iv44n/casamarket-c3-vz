@@ -188,13 +188,9 @@ def list_agent_suggestions() -> list[str]:
 def search_client_suggestions(
     q: str = Query(default="", max_length=100),
 ) -> list[ClientSuggestionPublic]:
-    """Clientes (nombre + telefono) que coinciden con `q`, para sugerir en el formulario. Nunca
-    devuelve la lista completa: son datos personales de clientes, asi que solo hay resultados con
-    una busqueda real (2+ letras o 3+ digitos) y como mucho lookups.MAX_RESULTS.
-
-    Una `q` vacia o demasiado corta no busca nada: devuelve [] pero deja armandose el indice en
-    segundo plano. El formulario la manda al abrirse para que la primera busqueda real no espere
-    los varios segundos que tarda en cargarse desde Turso."""
+    """Clientes disponibles para el selector inicial o filtrados por texto."""
+    if not q.strip():
+        return [ClientSuggestionPublic(**vars(c)) for c in lookups.list_clients()]
     if not lookups.is_searchable(q):
         lookups.warm_in_background()
         return []
