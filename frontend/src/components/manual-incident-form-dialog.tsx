@@ -346,7 +346,12 @@ export function ManualIncidentFormDialog({
               </Combobox>
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="incident-telefono">Teléfono</Label>
+              <Label htmlFor="incident-telefono">
+                Teléfono
+                <span className="font-normal text-muted-foreground">
+                  (opcional)
+                </span>
+              </Label>
               <Input
                 id="incident-telefono"
                 inputMode="tel"

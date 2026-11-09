@@ -116,6 +116,17 @@ def test_create_accepts_an_empty_hora_and_resultado(seeded):
     assert response.status_code == 201
 
 
+def test_create_accepts_an_empty_phone(seeded):
+    headers = seeded.user_headers("rosa", "incidencias")
+
+    response = seeded.client.post(
+        "/incidents", json={**_BODY, "telefono": ""}, headers=headers
+    )
+
+    assert response.status_code == 201
+    assert response.json()["telefono"] == ""
+
+
 def test_update_and_delete_return_404_for_an_unknown_incident(seeded):
     headers = seeded.user_headers("rosa", "incidencias")
 
