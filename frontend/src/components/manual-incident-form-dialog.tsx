@@ -1,6 +1,6 @@
 import { useServerFn } from '@tanstack/react-start'
 import { SaveIcon } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '#/components/ui/button'
 import {
@@ -119,7 +119,7 @@ function CatalogCombobox({
           placeholder="Buscar..."
           showClear={!required && value !== ''}
         />
-        <ComboboxContent>
+        <ComboboxContent className="w-[min(42rem,calc(100vw-4rem))]">
           <ComboboxEmpty>Sin coincidencias en el catálogo.</ComboboxEmpty>
           <ComboboxList>
             {(item: string) => (
@@ -163,6 +163,10 @@ export function ManualIncidentFormDialog({
   )
   const [clientQuery, setClientQuery] = useState(incident?.cliente ?? '')
   const [clients, setClients] = useState<ClientSuggestion[]>([])
+  const [clientsLoading, setClientsLoading] = useState(false)
+  const [clientsError, setClientsError] = useState<string | null>(null)
+  const [clientSelectorOpen, setClientSelectorOpen] = useState(false)
+  const clientRequestId = useRef(0)
   const [pending, setPending] = useState(false)
 
   useEffect(() => {
@@ -171,42 +175,35 @@ export function ManualIncidentFormDialog({
     }
   }, [incident, sessionUser?.username])
 
-  useEffect(() => {
-    let active = true
-    searchClients({ data: '' })
-      .then(values => {
-        if (active) setClients(values)
-      })
-      .catch(err => {
-        if (active)
-          toast.error(err instanceof Error ? err.message : String(err))
-      })
-    return () => {
-      active = false
-    }
-  }, [searchClients])
+  const loadClients = useCallback(
+    async (query: string) => {
+      const requestId = ++clientRequestId.current
+      setClientsLoading(true)
+      setClientsError(null)
+      try {
+        const values = await searchClients({ data: query })
+        if (requestId === clientRequestId.current) setClients(values)
+      } catch (err) {
+        if (requestId === clientRequestId.current) {
+          setClientsError(err instanceof Error ? err.message : String(err))
+        }
+      } finally {
+        if (requestId === clientRequestId.current) setClientsLoading(false)
+      }
+    },
+    [searchClients]
+  )
 
   useEffect(() => {
     const query = clientQuery.trim()
-    if (!query) {
-      return
-    }
-    let active = true
+    if (!query || !clientSelectorOpen) return
     const timer = window.setTimeout(() => {
-      searchClients({ data: query })
-        .then(values => {
-          if (active) setClients(values)
-        })
-        .catch(err => {
-          if (active)
-            toast.error(err instanceof Error ? err.message : String(err))
-        })
+      if (clientSelectorOpen) void loadClients(query)
     }, 250)
     return () => {
-      active = false
       window.clearTimeout(timer)
     }
-  }, [clientQuery, searchClients])
+  }, [clientQuery, clientSelectorOpen, loadClients])
 
   const optionsByCategory = useMemo(() => {
     const result = {} as Record<IncidentCategory, string[]>
@@ -240,6 +237,16 @@ export function ManualIncidentFormDialog({
       ...(selected ? { telefono: selected.phone } : {})
     }))
     setClientQuery(value)
+  }
+
+  function handleClientSelectorOpenChange(open: boolean) {
+    setClientSelectorOpen(open)
+    if (open && clients.length === 0 && !clientsLoading) void loadClients('')
+  }
+
+  function handleClientQueryChange(value: string) {
+    setClientQuery(value)
+    if (!value.trim() && clientSelectorOpen) void loadClients('')
   }
 
   async function handleSubmit(event: React.FormEvent) {
@@ -327,7 +334,8 @@ export function ManualIncidentFormDialog({
                 items={clients.map(client => client.name)}
                 value={form.cliente || null}
                 inputValue={clientQuery}
-                onInputValueChange={setClientQuery}
+                onInputValueChange={handleClientQueryChange}
+                onOpenChange={handleClientSelectorOpenChange}
                 onValueChange={next =>
                   handleClientChange(typeof next === 'string' ? next : '')
                 }
@@ -340,9 +348,25 @@ export function ManualIncidentFormDialog({
                   maxLength={200}
                 />
                 <ComboboxContent>
-                  <ComboboxEmpty>
-                    Escribí al menos 2 letras o 3 números para buscar.
-                  </ComboboxEmpty>
+                  {clientsLoading && (
+                    <div className="px-3 py-2 text-sm text-muted-foreground">
+                      Cargando clientes...
+                    </div>
+                  )}
+                  {clientsError && (
+                    <button
+                      type="button"
+                      className="w-full px-3 py-2 text-left text-sm text-destructive"
+                      onClick={() => void loadClients(clientQuery.trim())}
+                    >
+                      No se pudieron cargar los clientes. Reintentar
+                    </button>
+                  )}
+                  {!clientsLoading && !clientsError && (
+                    <ComboboxEmpty>
+                      No hay clientes que coincidan con la búsqueda.
+                    </ComboboxEmpty>
+                  )}
                   <ComboboxList>
                     {(item: string) => {
                       const client = clients.find(
@@ -351,6 +375,16 @@ export function ManualIncidentFormDialog({
                       return (
                         <ComboboxItem key={item} value={item}>
                           {item}
+                          {client?.document && (
+                            <span className="text-muted-foreground">
+                              DNI: {client.document}
+                            </span>
+                          )}
+                          {client?.phone && (
+                            <span className="text-muted-foreground">
+                              Tel: {client.phone}
+                            </span>
+                          )}
                           {client?.detail && (
                             <span className="text-muted-foreground">
                               {client.detail}

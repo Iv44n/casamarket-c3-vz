@@ -100,6 +100,7 @@ class ClientSuggestionPublic(BaseModel):
     name: str
     phone: str
     detail: str
+    document: str
 
 
 def _incident_public(incident: store.ManualIncident) -> ManualIncidentPublic:

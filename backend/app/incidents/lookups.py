@@ -46,6 +46,7 @@ _PHONE_QUERY = re.compile(r"[\d\s+().-]+")
 class ClientSuggestion:
     name: str
     phone: str
+    document: str = ""
     # Razon social / empresa: ayuda a distinguir homonimos en la lista, no se guarda en la incidencia.
     detail: str = ""
 
@@ -57,6 +58,7 @@ class _Entry:
     name_norm: str
     haystack: str
     phone_digits: str
+    document_digits: str
 
 
 T = TypeVar("T")
@@ -147,6 +149,7 @@ def _build_entries(candidates: Iterable[ClientSuggestion]) -> list[_Entry]:
     for candidate in candidates:
         name_norm = _normalize(candidate.name)
         phone_digits = _digits(candidate.phone)
+        document_digits = _digits(candidate.document)
         if not name_norm and not phone_digits:
             continue
         key = _entry_key(name_norm, phone_digits)
@@ -162,6 +165,7 @@ def _build_entries(candidates: Iterable[ClientSuggestion]) -> list[_Entry]:
             name_norm=_normalize(suggestion.name),
             haystack=" ".join(texts),
             phone_digits=_digits(suggestion.phone),
+            document_digits=_digits(suggestion.document),
         )
         for key, (suggestion, texts) in merged.items()
     ]
@@ -190,7 +194,14 @@ def _load_c3_clients() -> list[_Entry]:
             ),
             "",
         )
-        candidates.append(ClientSuggestion(name, _clean_phone(contact["telefono"]), detail))
+        candidates.append(
+            ClientSuggestion(
+                name,
+                _clean_phone(contact["telefono"]),
+                detail,
+                _text(contact["documento"]),
+            )
+        )
     for client in history:
         candidates.append(ClientSuggestion(_text(client["name"]), _clean_phone(client["phone"])))
     return _build_entries(candidates)
@@ -203,7 +214,8 @@ def _load_manual_clients() -> list[_Entry]:
     finally:
         conn.close()
     return _build_entries(
-        ClientSuggestion(_text(cliente), _clean_phone(telefono)) for cliente, telefono in pairs
+        ClientSuggestion(_text(cliente), _clean_phone(telefono))
+        for cliente, telefono in pairs
     )
 
 
@@ -295,7 +307,7 @@ def search_clients(query: str, limit: int = MAX_RESULTS) -> list[ClientSuggestio
         digits = _digits(query)
 
         def match(entry: _Entry) -> bool:
-            return digits in entry.phone_digits
+            return digits in entry.phone_digits or digits in entry.document_digits
 
         def rank(entry: _Entry) -> tuple:
             return (not entry.phone_digits.startswith(digits), entry.name_norm, entry.key)

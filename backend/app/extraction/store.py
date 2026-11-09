@@ -1665,14 +1665,15 @@ def agent_case_counts(conn: DBConnection) -> dict[str, int]:
 
 def contacts_roster(conn: DBConnection) -> list[dict]:
     """Padron de contactos de la ULTIMA captura (contacts_snapshot guarda una foto completa por
-    corrida), reducido a lo unico que necesita quien consulta para identificar a un cliente:
-    nombre, apellido, razon social/empresa y telefono. El resto de columnas del padron (correo,
-    direccion, documento, plan...) no sale de aca a proposito. Los nombres viven dentro de
+    corrida), reducido a lo necesario para identificar y buscar un cliente: nombre, apellido,
+    razon social/empresa, documento y telefono. El resto de columnas del padron (correo, direccion,
+    plan...) no sale de aca a proposito. Los nombres viven dentro de
     row_json, asi que se extraen con json_extract en SQL en vez de traer cada row_json completo
     (~8k filas de ~1KB cada una). Valores crudos: la limpieza es de quien consume."""
     cursor = conn.execute(
         "SELECT json_extract(row_json, '$.Nombre'), json_extract(row_json, '$.Apellido'), "
         "json_extract(row_json, '$.\"Apodo o Razón social\"'), empresa, telefono "
+        ", doc_number "
         "FROM contacts_snapshot "
         "WHERE captured_at = (SELECT MAX(captured_at) FROM contacts_snapshot)"
     )
@@ -1683,6 +1684,7 @@ def contacts_roster(conn: DBConnection) -> list[dict]:
             "razon_social": razon_social,
             "empresa": empresa,
             "telefono": telefono,
+            "documento": documento,
         }
-        for nombre, apellido, razon_social, empresa, telefono in cursor.fetchall()
+        for nombre, apellido, razon_social, empresa, telefono, documento in cursor.fetchall()
     ]

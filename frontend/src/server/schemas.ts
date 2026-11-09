@@ -208,6 +208,7 @@ export type ClientSuggestion = {
   name: string
   phone: string
   detail: string
+  document: string
 }
 export const manualIncidentInputSchema = z.object({
   fecha: z.string().regex(ISO_DATE_REGEX),
