@@ -231,8 +231,8 @@ function IncidenciasManualesPage() {
               El catálogo de incidencias no tiene opciones activas de origen,
               tipo y ámbito, así que todavía no se puede registrar nada.{' '}
               {isAdmin
-                ? 'Importalo desde C3 en la pestaña "Catálogo".'
-                : 'Pedile a un administrador que lo importe desde C3.'}
+                ? 'Cargalo en la pestaña "Catálogo": importá los valores del historial de atenciones o agregá opciones a mano.'
+                : 'Pedile a un administrador que cargue el catálogo desde la pestaña "Catálogo".'}
             </p>
           </CardContent>
         </Card>

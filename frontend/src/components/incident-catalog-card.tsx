@@ -188,8 +188,8 @@ export function IncidentCatalogCard({
       const { added } = await doImport()
       toast.success(
         added === 0
-          ? 'El catálogo ya tenía todos los valores de C3.'
-          : `${added} valores nuevos importados desde C3.`
+          ? 'El catálogo ya tenía todos los valores del historial.'
+          : `${added} valores nuevos importados del historial.`
       )
       await onChanged()
     } catch (err) {
@@ -205,13 +205,15 @@ export function IncidentCatalogCard({
         <CardTitle>Catálogo de incidencias</CardTitle>
         <CardDescription>
           Las opciones activas son las que aparecen en el formulario. "Importar
-          desde C3" agrega los valores que ya usan las atenciones de C3 y nunca
-          reactiva una opción desactivada.
+          del historial" copia los valores de origen, tipo, ámbito y resultado
+          de las atenciones ya guardadas en la base (no se conecta a C3) y nunca
+          reactiva una opción desactivada. También podés agregar opciones a mano
+          en cada categoría.
         </CardDescription>
         <CardAction>
           <Button variant="outline" onClick={handleImport} disabled={importing}>
             <DownloadIcon data-icon="inline-start" />
-            {importing ? 'Importando...' : 'Importar desde C3'}
+            {importing ? 'Importando...' : 'Importar del historial'}
           </Button>
         </CardAction>
       </CardHeader>
