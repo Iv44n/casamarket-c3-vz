@@ -302,6 +302,7 @@ export function ManualIncidentFormDialog({
 
   function handleClientQueryChange(value: string) {
     setClientQuery(value)
+    setForm(prev => ({ ...prev, cliente: value }))
   }
 
   async function handleSubmit(event: React.FormEvent) {
