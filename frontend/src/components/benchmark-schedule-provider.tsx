@@ -36,10 +36,15 @@ const TARGET_ALREADY_PASSED_THRESHOLD_MS = 12 * 60 * 60 * 1000
 // sienta como un efecto secundario oculto de solo cargar la pagina.
 const CATCH_UP_DEBOUNCE_MS = 10_000
 
+// enabled=false: no programa ningun timer (pero sigue proveyendo el contexto, para no remontar el
+// arbol cuando cambia). __root.tsx lo apaga para el rol "incidencias" y mientras el rol todavia
+// no se conoce -- esa cuenta recibe 403 en todo lo que este timer dispara.
 export function BenchmarkScheduleProvider({
-  children
+  children,
+  enabled = true
 }: {
   children: React.ReactNode
+  enabled?: boolean
 }) {
   const router = useRouter()
   const runBenchmarks = useServerFn(triggerBenchmarkRun)
@@ -57,7 +62,7 @@ export function BenchmarkScheduleProvider({
   }, [])
 
   useEffect(() => {
-    if (!settings.enabled) return
+    if (!enabled || !settings.enabled) return
     let cancelled = false
 
     function scheduleNext() {
@@ -104,7 +109,7 @@ export function BenchmarkScheduleProvider({
       cancelled = true
       clearTimeout(timeoutRef.current)
     }
-  }, [settings, runBenchmarks, router, setSettings])
+  }, [enabled, settings, runBenchmarks, router, setSettings])
 
   return (
     <BenchmarkScheduleContext.Provider

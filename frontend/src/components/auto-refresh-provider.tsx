@@ -25,10 +25,15 @@ type AutoRefreshContextValue = {
   lastError: string | null
 }
 const AutoRefreshContext = createContext<AutoRefreshContextValue | null>(null)
+// enabled=false: no programa ningun timer (pero sigue proveyendo el contexto, para no remontar el
+// arbol cuando cambia). __root.tsx lo apaga para el rol "incidencias" y mientras el rol todavia
+// no se conoce -- esa cuenta recibe 403 en todo lo que este timer dispara.
 export function AutoRefreshProvider({
-  children
+  children,
+  enabled = true
 }: {
   children: React.ReactNode
+  enabled?: boolean
 }) {
   const router = useRouter()
   const refresh = useServerFn(triggerRefresh)
@@ -45,7 +50,7 @@ export function AutoRefreshProvider({
     saveAutoRefreshSettings(next)
   }, [])
   useEffect(() => {
-    if (!settings.enabled) return
+    if (!enabled || !settings.enabled) return
     let cancelled = false
     const delay = intervalMs(settings.value, settings.unit)
     async function tick() {
@@ -73,7 +78,7 @@ export function AutoRefreshProvider({
       cancelled = true
       clearTimeout(timeoutRef.current)
     }
-  }, [settings, refresh, router])
+  }, [enabled, settings, refresh, router])
   return (
     <AutoRefreshContext.Provider
       value={{ settings, setSettings, lastRunAt, lastError }}

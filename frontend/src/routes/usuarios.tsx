@@ -30,7 +30,13 @@ import {
 } from '#/components/ui/dialog'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
-import { Switch } from '#/components/ui/switch'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '#/components/ui/select'
 import {
   Table,
   TableBody,
@@ -39,7 +45,59 @@ import {
   TableHeader,
   TableRow
 } from '#/components/ui/table'
-import { createUser, getCurrentUser, getUsers } from '#/server/auth.functions'
+import {
+  createUser,
+  getCurrentUser,
+  getUsers,
+  updateUserRole
+} from '#/server/auth.functions'
+import {
+  type CurrentUser,
+  USER_ROLE_LABEL,
+  USER_ROLES,
+  type UserRole
+} from '#/server/schemas'
+
+const ROLE_DESCRIPTION: Record<UserRole, string> = {
+  admin: 'Todo el panel, más cuentas, configuración y catálogo.',
+  user: 'Todo el panel.',
+  incidencias: 'Solo la sección de incidencias manuales.'
+}
+
+function RoleSelect({
+  id,
+  value,
+  onChange,
+  disabled = false
+}: {
+  id?: string
+  value: UserRole
+  onChange: (role: UserRole) => void
+  disabled?: boolean
+}) {
+  return (
+    <Select
+      value={value}
+      onValueChange={next => {
+        if (next) onChange(next as UserRole)
+      }}
+      disabled={disabled}
+    >
+      <SelectTrigger id={id} className="min-w-44 justify-between">
+        <SelectValue>
+          {(selected: UserRole) => USER_ROLE_LABEL[selected]}
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        {USER_ROLES.map(role => (
+          <SelectItem key={role} value={role}>
+            {USER_ROLE_LABEL[role]}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
 
 export const Route = createFileRoute('/usuarios')({
   ssr: 'data-only',
@@ -54,12 +112,14 @@ export const Route = createFileRoute('/usuarios')({
 function UsuariosPage() {
   const { currentUser, users: initialUsers } = Route.useLoaderData()
   const doCreateUser = useServerFn(createUser)
+  const doUpdateUserRole = useServerFn(updateUserRole)
   const fetchUsers = useServerFn(getUsers)
   const [users, setUsers] = useState(initialUsers)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [isAdmin, setIsAdmin] = useState(false)
+  const [role, setRole] = useState<UserRole>('user')
+  const [roleUpdating, setRoleUpdating] = useState<number | null>(null)
   const [showPassword, setShowPassword] = useState(false)
   const [pending, setPending] = useState(false)
 
@@ -74,7 +134,7 @@ function UsuariosPage() {
   function resetForm() {
     setUsername('')
     setPassword('')
-    setIsAdmin(false)
+    setRole('user')
     setShowPassword(false)
   }
 
@@ -83,7 +143,7 @@ function UsuariosPage() {
     setPending(true)
     try {
       const result = await doCreateUser({
-        data: { username, password, isAdmin }
+        data: { username, password, role }
       })
       if (result.status === 'duplicate') {
         toast.error(`El usuario "${username}" ya existe.`)
@@ -101,6 +161,28 @@ function UsuariosPage() {
       toast.error(err instanceof Error ? err.message : String(err))
     } finally {
       setPending(false)
+    }
+  }
+
+  async function handleRoleChange(user: CurrentUser, nextRole: UserRole) {
+    if (nextRole === user.role) return
+    setRoleUpdating(user.id)
+    try {
+      const result = await doUpdateUserRole({
+        data: { userId: user.id, role: nextRole }
+      })
+      if (result.status === 'error') {
+        toast.error(result.message)
+        return
+      }
+      toast.success(
+        `"${user.username}" ahora es ${USER_ROLE_LABEL[nextRole].toLowerCase()}.`
+      )
+      await refetchUsers()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRoleUpdating(null)
     }
   }
 
@@ -185,13 +267,12 @@ function UsuariosPage() {
                   </Button>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Switch
-                  id="new-is-admin"
-                  checked={isAdmin}
-                  onCheckedChange={setIsAdmin}
-                />
-                <Label htmlFor="new-is-admin">Es administrador</Label>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="new-role">Rol</Label>
+                <RoleSelect id="new-role" value={role} onChange={setRole} />
+                <p className="text-xs text-muted-foreground">
+                  {ROLE_DESCRIPTION[role]}
+                </p>
               </div>
               <DialogFooter>
                 <DialogClose
@@ -242,9 +323,18 @@ function UsuariosPage() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={user.is_admin ? 'default' : 'secondary'}>
-                      {user.is_admin ? 'Admin' : 'Usuario'}
-                    </Badge>
+                    {user.id === currentUser.id ? (
+                      // El backend rechaza cambiar el rol propio (evita quedarse afuera).
+                      <Badge variant="default">
+                        {USER_ROLE_LABEL[user.role]}
+                      </Badge>
+                    ) : (
+                      <RoleSelect
+                        value={user.role}
+                        onChange={next => handleRoleChange(user, next)}
+                        disabled={roleUpdating === user.id}
+                      />
+                    )}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     {new Date(user.created_at).toLocaleString()}

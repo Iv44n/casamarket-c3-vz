@@ -9,10 +9,17 @@ import {
   authenticateWithBackend,
   createUserOnBackend,
   fetchCurrentUser,
+  fetchSessionUser,
   fetchUsers,
-  SESSION_COOKIE_NAME
+  forgetSessionUser,
+  SESSION_COOKIE_NAME,
+  updateUserRoleOnBackend
 } from './backend.server'
-import { createUserRequestSchema, loginRequestSchema } from './schemas'
+import {
+  createUserRequestSchema,
+  loginRequestSchema,
+  updateUserRoleRequestSchema
+} from './schemas'
 
 const SESSION_COOKIE_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
 
@@ -33,6 +40,7 @@ export const login = createServerFn({ method: 'POST' })
   })
 
 export const logout = createServerFn({ method: 'POST' }).handler(async () => {
+  forgetSessionUser(getCookie(SESSION_COOKIE_NAME))
   deleteCookie(SESSION_COOKIE_NAME, { path: '/' })
   throw redirect({ to: '/login' })
 })
@@ -40,11 +48,11 @@ export const logout = createServerFn({ method: 'POST' }).handler(async () => {
 // Gate usado desde __root.tsx's beforeLoad -- corre siempre del lado del servidor
 // (via RPC) sin importar si el beforeLoad se dispara en SSR o en una navegacion
 // client-side, a diferencia de leer la cookie directo en el propio beforeLoad.
+// Devuelve el usuario de la sesion (con su rol, para decidir que secciones se ven) --
+// cacheado por token en backend.server.ts's fetchSessionUser, asi que no cuesta un
+// /auth/me por navegacion.
 export const requireSession = createServerFn({ method: 'GET' }).handler(
-  async () => {
-    const token = getCookie(SESSION_COOKIE_NAME)
-    if (!token) throw redirect({ to: '/login' })
-  }
+  async () => fetchSessionUser()
 )
 
 export const getCurrentUser = createServerFn({ method: 'GET' }).handler(
@@ -54,8 +62,12 @@ export const getCurrentUser = createServerFn({ method: 'GET' }).handler(
 export const createUser = createServerFn({ method: 'POST' })
   .validator(createUserRequestSchema)
   .handler(async ({ data }) =>
-    createUserOnBackend(data.username, data.password, data.isAdmin)
+    createUserOnBackend(data.username, data.password, data.role)
   )
+
+export const updateUserRole = createServerFn({ method: 'POST' })
+  .validator(updateUserRoleRequestSchema)
+  .handler(async ({ data }) => updateUserRoleOnBackend(data.userId, data.role))
 
 export const getUsers = createServerFn({ method: 'GET' }).handler(async () =>
   fetchUsers()
