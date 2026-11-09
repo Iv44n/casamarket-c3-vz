@@ -34,6 +34,7 @@ def minimal_pdf_bytes(text: str) -> bytes:
 import pytest
 
 from app.auth import dependencies as auth_dependencies
+from app.incidents import lookups
 
 
 @pytest.fixture(autouse=True)
@@ -42,5 +43,7 @@ def clean_role_cache():
     # con ids que arrancan en 1, asi que un rol cacheado por un test no debe filtrarse al
     # siguiente.
     auth_dependencies.clear_role_cache()
+    lookups.reset_caches()
     yield
     auth_dependencies.clear_role_cache()
+    lookups.reset_caches()

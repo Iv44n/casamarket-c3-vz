@@ -381,3 +381,24 @@ def delete_incident(conn: DBConnection, incident_id: int, username: str, now: st
     )
     conn.commit()
     return True
+
+
+# --- Valores ya registrados a mano (para sugerir en el formulario) --------------------------
+
+
+def distinct_clients(conn: DBConnection) -> list[tuple[str, str]]:
+    """Pares (cliente, telefono) distintos de las incidencias no borradas, sin los vacios."""
+    cursor = conn.execute(
+        "SELECT DISTINCT cliente, telefono FROM manual_incident "
+        "WHERE deleted_at IS NULL AND (cliente != '' OR telefono != '')"
+    )
+    return [(cliente, telefono) for cliente, telefono in cursor.fetchall()]
+
+
+def agent_counts(conn: DBConnection) -> dict[str, int]:
+    """Agentes escritos a mano en incidencias no borradas, con cuantas incidencias tiene cada uno."""
+    cursor = conn.execute(
+        "SELECT agente, COUNT(*) FROM manual_incident "
+        "WHERE deleted_at IS NULL AND agente != '' GROUP BY agente"
+    )
+    return {agente: cases for agente, cases in cursor.fetchall()}

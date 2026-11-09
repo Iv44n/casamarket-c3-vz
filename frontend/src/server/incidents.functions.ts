@@ -3,7 +3,9 @@ import {
   addCatalogOptionOnBackend,
   createManualIncidentOnBackend,
   deleteManualIncidentOnBackend,
+  fetchIncidentAgentSuggestions,
   fetchIncidentCatalog,
+  fetchIncidentClientSuggestions,
   fetchManualIncidents,
   importCatalogFromC3OnBackend,
   setCatalogOptionActiveOnBackend,
@@ -43,6 +45,14 @@ export const deleteManualIncident = createServerFn({ method: 'POST' })
 export const getIncidentCatalog = createServerFn({ method: 'GET' }).handler(
   async () => fetchIncidentCatalog()
 )
+export const getIncidentAgentSuggestions = createServerFn({
+  method: 'GET'
+}).handler(async () => fetchIncidentAgentSuggestions())
+export const getIncidentClientSuggestions = createServerFn({
+  method: 'GET'
+})
+  .validator((query: string) => query)
+  .handler(async ({ data }) => fetchIncidentClientSuggestions(data))
 
 export const addCatalogOption = createServerFn({ method: 'POST' })
   .validator(catalogOptionCreateSchema)

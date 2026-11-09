@@ -1,6 +1,6 @@
 import { useServerFn } from '@tanstack/react-start'
 import { SaveIcon } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '#/components/ui/button'
 import {
@@ -26,9 +26,12 @@ import { Textarea } from '#/components/ui/textarea'
 import { INCIDENT_CATEGORY_LABEL } from '#/lib/incident-analytics'
 import {
   createManualIncident,
+  getIncidentAgentSuggestions,
+  getIncidentClientSuggestions,
   updateManualIncident
 } from '#/server/incidents.functions'
 import {
+  type ClientSuggestion,
   type IncidentCatalogOption,
   type IncidentCategory,
   MANUAL_INCIDENT_CATEGORY_ORDER,
@@ -53,6 +56,7 @@ const REQUIRED_CATEGORIES: ReadonlySet<IncidentCategory> = new Set([
   'tipo',
   'ambito'
 ])
+const LAST_AGENT_STORAGE_KEY = 'c3-panel:last-manual-incident-agent'
 
 function emptyForm(): ManualIncidentInput {
   return {
@@ -154,10 +158,58 @@ export function ManualIncidentFormDialog({
 }) {
   const doCreate = useServerFn(createManualIncident)
   const doUpdate = useServerFn(updateManualIncident)
+  const fetchAgents = useServerFn(getIncidentAgentSuggestions)
+  const searchClients = useServerFn(getIncidentClientSuggestions)
   const [form, setForm] = useState<ManualIncidentInput>(() =>
     incident ? formFromIncident(incident) : emptyForm()
   )
+  const [agents, setAgents] = useState<string[]>([])
+  const [clients, setClients] = useState<ClientSuggestion[]>([])
   const [pending, setPending] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    fetchAgents()
+      .then(values => {
+        if (active) setAgents(values)
+      })
+      .catch(err => {
+        if (active)
+          toast.error(err instanceof Error ? err.message : String(err))
+      })
+    if (!incident) {
+      const savedAgent = window.localStorage.getItem(LAST_AGENT_STORAGE_KEY)
+      if (savedAgent) {
+        setForm(prev => ({ ...prev, agente: savedAgent }))
+      }
+    }
+    return () => {
+      active = false
+    }
+  }, [fetchAgents, incident])
+
+  useEffect(() => {
+    const query = form.cliente.trim()
+    if (query.length < 2 && !/\d/.test(query)) {
+      setClients([])
+      return
+    }
+    let active = true
+    const timer = window.setTimeout(() => {
+      searchClients({ data: query })
+        .then(values => {
+          if (active) setClients(values)
+        })
+        .catch(err => {
+          if (active)
+            toast.error(err instanceof Error ? err.message : String(err))
+        })
+    }, 250)
+    return () => {
+      active = false
+      window.clearTimeout(timer)
+    }
+  }, [form.cliente, searchClients])
 
   const optionsByCategory = useMemo(() => {
     const result = {} as Record<IncidentCategory, string[]>
@@ -177,6 +229,24 @@ export function ManualIncidentFormDialog({
     value: ManualIncidentInput[K]
   ) {
     setForm(prev => ({ ...prev, [key]: value }))
+  }
+
+  function handleClientChange(value: string) {
+    const selected = clients.find(
+      client =>
+        client.name.trim().toLocaleLowerCase() ===
+        value.trim().toLocaleLowerCase()
+    )
+    setForm(prev => ({
+      ...prev,
+      cliente: value,
+      ...(selected ? { telefono: selected.phone } : {})
+    }))
+  }
+
+  function handleAgentChange(value: string) {
+    setField('agente', value)
+    if (value.trim()) window.localStorage.setItem(LAST_AGENT_STORAGE_KEY, value)
   }
 
   async function handleSubmit(event: React.FormEvent) {
@@ -265,9 +335,20 @@ export function ManualIncidentFormDialog({
                 placeholder="Nombre o empresa"
                 autoComplete="off"
                 maxLength={200}
+                list="incident-client-suggestions"
                 value={form.cliente}
-                onChange={e => setField('cliente', e.target.value)}
+                onChange={e => handleClientChange(e.target.value)}
               />
+              <datalist id="incident-client-suggestions">
+                {clients.map(client => (
+                  <option
+                    key={`${client.name}-${client.phone}`}
+                    value={client.name}
+                  >
+                    {client.detail}
+                  </option>
+                ))}
+              </datalist>
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="incident-telefono">Teléfono</Label>
@@ -287,9 +368,15 @@ export function ManualIncidentFormDialog({
                 placeholder="Quién atendió"
                 autoComplete="off"
                 maxLength={120}
+                list="incident-agent-suggestions"
                 value={form.agente}
-                onChange={e => setField('agente', e.target.value)}
+                onChange={e => handleAgentChange(e.target.value)}
               />
+              <datalist id="incident-agent-suggestions">
+                {agents.map(agent => (
+                  <option key={agent} value={agent} />
+                ))}
+              </datalist>
             </div>
             {MANUAL_INCIDENT_CATEGORY_ORDER.map(category => (
               <CatalogCombobox

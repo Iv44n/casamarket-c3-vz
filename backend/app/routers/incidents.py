@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..auth.dependencies import CurrentUser, require_admin, require_incidents_access
 from ..extraction import store as extraction_store
-from ..incidents import store
+from ..incidents import lookups, store
 
 # Accesible para los 3 roles (admin, user, incidencias) -- es la UNICA parte de la API que el
 # rol "incidencias" puede usar (ver auth/dependencies.py). El catalogo se edita solo con admin.
@@ -96,6 +96,12 @@ class CatalogImportResult(BaseModel):
     added: int
 
 
+class ClientSuggestionPublic(BaseModel):
+    name: str
+    phone: str
+    detail: str
+
+
 def _incident_public(incident: store.ManualIncident) -> ManualIncidentPublic:
     return ManualIncidentPublic(**incident.__dict__)
 
@@ -131,6 +137,7 @@ def create_incident(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
         conn.close()
+    lookups.invalidate_manual()
     return _incident_public(incident)
 
 
@@ -152,6 +159,7 @@ def update_incident(
         conn.close()
     if incident is None:
         raise HTTPException(status_code=404, detail="La incidencia no existe")
+    lookups.invalidate_manual()
     return _incident_public(incident)
 
 
@@ -166,6 +174,31 @@ def delete_incident(
         conn.close()
     if not deleted:
         raise HTTPException(status_code=404, detail="La incidencia no existe")
+    lookups.invalidate_manual()
+
+
+@router.get("/lookups/agents")
+def list_agent_suggestions() -> list[str]:
+    """Agentes conocidos (historial de C3 + los escritos a mano), para sugerir en el formulario.
+    Son nombres de empleados, no datos de clientes: se devuelve la lista completa (~40)."""
+    return lookups.list_agents()
+
+
+@router.get("/lookups/clients")
+def search_client_suggestions(
+    q: str = Query(default="", max_length=100),
+) -> list[ClientSuggestionPublic]:
+    """Clientes (nombre + telefono) que coinciden con `q`, para sugerir en el formulario. Nunca
+    devuelve la lista completa: son datos personales de clientes, asi que solo hay resultados con
+    una busqueda real (2+ letras o 3+ digitos) y como mucho lookups.MAX_RESULTS.
+
+    Una `q` vacia o demasiado corta no busca nada: devuelve [] pero deja armandose el indice en
+    segundo plano. El formulario la manda al abrirse para que la primera busqueda real no espere
+    los varios segundos que tarda en cargarse desde Turso."""
+    if not lookups.is_searchable(q):
+        lookups.warm_in_background()
+        return []
+    return [ClientSuggestionPublic(**vars(c)) for c in lookups.search_clients(q)]
 
 
 @router.get("/catalog")

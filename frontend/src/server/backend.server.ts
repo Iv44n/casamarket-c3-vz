@@ -11,6 +11,7 @@ import type {
   BenchmarkRunStatus,
   CatalogOptionMutationResult,
   ClientCaseCount,
+  ClientSuggestion,
   ContactsSyncStatus,
   CreateUserResult,
   CurrentUser,
@@ -263,6 +264,17 @@ export async function deleteManualIncidentOnBackend(
 }
 export async function fetchIncidentCatalog(): Promise<IncidentCatalogOption[]> {
   const response = await backendFetch('/incidents/catalog')
+  return response.json()
+}
+export async function fetchIncidentAgentSuggestions(): Promise<string[]> {
+  const response = await backendFetch('/incidents/lookups/agents')
+  return response.json()
+}
+export async function fetchIncidentClientSuggestions(
+  query: string
+): Promise<ClientSuggestion[]> {
+  const params = new URLSearchParams({ q: query })
+  const response = await backendFetch(`/incidents/lookups/clients?${params}`)
   return response.json()
 }
 export async function addCatalogOptionOnBackend(

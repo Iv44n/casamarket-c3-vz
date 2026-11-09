@@ -204,6 +204,11 @@ export type IncidentCatalogOption = {
   source: 'c3' | 'manual'
   created_at: string
 }
+export type ClientSuggestion = {
+  name: string
+  phone: string
+  detail: string
+}
 export const manualIncidentInputSchema = z.object({
   fecha: z.string().regex(ISO_DATE_REGEX),
   hora: z.string().regex(/^(([01]\d|2[0-3]):[0-5]\d)?$/),
