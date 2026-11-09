@@ -5,6 +5,7 @@ import {
   BarChartHorizontalIcon,
   GaugeIcon,
   LogOutIcon,
+  NotebookPenIcon,
   TableIcon,
   TrendingUpIcon,
   UsersIcon
@@ -28,6 +29,8 @@ import {
   TooltipContent,
   TooltipTrigger
 } from '#/components/ui/tooltip'
+import { useSessionUser } from '#/hooks/use-session-user'
+import { canAccessPath, homePathFor } from '#/lib/access'
 import { logout } from '#/server/auth.functions'
 
 const NAV_ITEMS = [
@@ -43,18 +46,34 @@ const NAV_ITEMS = [
     icon: TrendingUpIcon
   },
   { to: '/benchmarks' as const, label: 'Benchmarks', icon: GaugeIcon },
+  {
+    to: '/incidencias-manuales' as const,
+    label: 'Incidencias manuales',
+    icon: NotebookPenIcon
+  },
   { to: '/usuarios' as const, label: 'Usuarios', icon: UsersIcon },
   { to: '/status' as const, label: 'Extraction status', icon: ActivityIcon }
 ] as const
 export function AppSidebar() {
   const pathname = useRouterState({ select: state => state.location.pathname })
   const doLogout = useServerFn(logout)
+  const sessionUser = useSessionUser()
+  // Sin sesion resuelta todavia (primer render, SSR) no se muestra ningun item: mejor un
+  // instante vacio que mostrarle al rol "incidencias" secciones a las que no puede entrar.
+  const navItems = sessionUser
+    ? NAV_ITEMS.filter(item => canAccessPath(sessionUser.role, item.to))
+    : []
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" render={<Link to="/" />}>
+            <SidebarMenuButton
+              size="lg"
+              render={
+                <Link to={sessionUser ? homePathFor(sessionUser.role) : '/'} />
+              }
+            >
               <span className="font-semibold">C3 Panel</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -64,7 +83,7 @@ export function AppSidebar() {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {NAV_ITEMS.map(item => (
+              {navItems.map(item => (
                 <SidebarMenuItem key={item.to}>
                   <SidebarMenuButton
                     render={<Link to={item.to} />}

@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AtencionesRouteImport } from './routes/atenciones'
 import { Route as BenchmarksRouteImport } from './routes/benchmarks'
+import { Route as IncidenciasManualesRouteImport } from './routes/incidencias-manuales'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as StatusRouteImport } from './routes/status'
 import { Route as TendenciasHistoricasRouteImport } from './routes/tendencias-historicas'
@@ -32,6 +33,11 @@ const AtencionesRoute = AtencionesRouteImport.update({
 const BenchmarksRoute = BenchmarksRouteImport.update({
   id: '/benchmarks',
   path: '/benchmarks',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const IncidenciasManualesRoute = IncidenciasManualesRouteImport.update({
+  id: '/incidencias-manuales',
+  path: '/incidencias-manuales',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -69,6 +75,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/atenciones': typeof AtencionesRoute
   '/benchmarks': typeof BenchmarksRoute
+  '/incidencias-manuales': typeof IncidenciasManualesRoute
   '/login': typeof LoginRoute
   '/status': typeof StatusRoute
   '/tendencias-historicas': typeof TendenciasHistoricasRoute
@@ -80,6 +87,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/atenciones': typeof AtencionesRoute
   '/benchmarks': typeof BenchmarksRoute
+  '/incidencias-manuales': typeof IncidenciasManualesRoute
   '/login': typeof LoginRoute
   '/status': typeof StatusRoute
   '/tendencias-historicas': typeof TendenciasHistoricasRoute
@@ -92,6 +100,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/atenciones': typeof AtencionesRoute
   '/benchmarks': typeof BenchmarksRoute
+  '/incidencias-manuales': typeof IncidenciasManualesRoute
   '/login': typeof LoginRoute
   '/status': typeof StatusRoute
   '/tendencias-historicas': typeof TendenciasHistoricasRoute
@@ -105,6 +114,7 @@ export interface FileRouteTypes {
     | '/'
     | '/atenciones'
     | '/benchmarks'
+    | '/incidencias-manuales'
     | '/login'
     | '/status'
     | '/tendencias-historicas'
@@ -116,6 +126,7 @@ export interface FileRouteTypes {
     | '/'
     | '/atenciones'
     | '/benchmarks'
+    | '/incidencias-manuales'
     | '/login'
     | '/status'
     | '/tendencias-historicas'
@@ -127,6 +138,7 @@ export interface FileRouteTypes {
     | '/'
     | '/atenciones'
     | '/benchmarks'
+    | '/incidencias-manuales'
     | '/login'
     | '/status'
     | '/tendencias-historicas'
@@ -139,6 +151,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AtencionesRoute: typeof AtencionesRoute
   BenchmarksRoute: typeof BenchmarksRoute
+  IncidenciasManualesRoute: typeof IncidenciasManualesRoute
   LoginRoute: typeof LoginRoute
   StatusRoute: typeof StatusRoute
   TendenciasHistoricasRoute: typeof TendenciasHistoricasRoute
@@ -168,6 +181,13 @@ declare module '@tanstack/react-router' {
       path: '/benchmarks'
       fullPath: '/benchmarks'
       preLoaderRoute: typeof BenchmarksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/incidencias-manuales': {
+      id: '/incidencias-manuales'
+      path: '/incidencias-manuales'
+      fullPath: '/incidencias-manuales'
+      preLoaderRoute: typeof IncidenciasManualesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
@@ -219,6 +239,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AtencionesRoute: AtencionesRoute,
   BenchmarksRoute: BenchmarksRoute,
+  IncidenciasManualesRoute: IncidenciasManualesRoute,
   LoginRoute: LoginRoute,
   StatusRoute: StatusRoute,
   TendenciasHistoricasRoute: TendenciasHistoricasRoute,

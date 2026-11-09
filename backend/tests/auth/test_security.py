@@ -20,7 +20,7 @@ def test_verify_password_fails_for_a_wrong_password():
 
 def test_create_access_token_then_decode_returns_the_same_claims():
     token, expires_at = security.create_access_token(
-        user_id=1, username="ana", is_admin=True, secret="test-secret-that-is-long-enough-1234"
+        user_id=1, username="ana", role="admin", secret="test-secret-that-is-long-enough-1234"
     )
 
     payload = security.decode_access_token(token, "test-secret-that-is-long-enough-1234")
@@ -32,7 +32,7 @@ def test_create_access_token_then_decode_returns_the_same_claims():
 
 
 def test_decode_access_token_raises_for_a_token_signed_with_a_different_secret():
-    token, _ = security.create_access_token(1, "ana", False, "test-secret-that-is-long-enough-1234")
+    token, _ = security.create_access_token(1, "ana", "user", "test-secret-that-is-long-enough-1234")
 
     with pytest.raises(jwt.PyJWTError):
         security.decode_access_token(token, "a-different-secret-that-is-long-enough-5678")
@@ -64,3 +64,31 @@ def test_decode_access_token_raises_for_a_token_missing_issuer_and_audience():
 
     with pytest.raises(jwt.PyJWTError):
         security.decode_access_token(token, "test-secret-that-is-long-enough-1234")
+
+
+def test_access_token_carries_the_role_claim():
+    secret = "test-secret-that-is-long-enough-1234"
+    token, _ = security.create_access_token(7, "rosa", "incidencias", secret)
+
+    payload = security.decode_access_token(token, secret)
+
+    assert payload.role == "incidencias"
+    assert payload.is_admin is False
+
+
+def test_decoding_a_token_issued_before_the_role_claim_derives_it_from_is_admin():
+    secret = "test-secret-that-is-long-enough-1234"
+    legacy = jwt.encode(
+        {
+            "user_id": 1,
+            "username": "boss",
+            "is_admin": True,
+            "exp": datetime.now(timezone.utc) + timedelta(days=1),
+            "iss": "c3-panel-backend",
+            "aud": "c3-panel-frontend",
+        },
+        secret,
+        algorithm="HS256",
+    )
+
+    assert security.decode_access_token(legacy, secret).role == "admin"

@@ -25,11 +25,15 @@ def verify_password(password: str, password_hash: str) -> bool:
 class TokenPayload:
     user_id: int
     username: str
-    is_admin: bool
+    role: str
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
 
 
 def create_access_token(
-    user_id: int, username: str, is_admin: bool, secret: str
+    user_id: int, username: str, role: str, secret: str
 ) -> tuple[str, datetime]:
     expires_at = datetime.now(timezone.utc) + _TOKEN_LIFETIME
     # "user_id", no el claim reservado "sub" -- PyJWT valida que "sub" sea un string (RFC 7519),
@@ -38,7 +42,10 @@ def create_access_token(
         {
             "user_id": user_id,
             "username": username,
-            "is_admin": is_admin,
+            "role": role,
+            # is_admin se sigue emitiendo (derivado de role) solo por compatibilidad con
+            # cualquier lector viejo del token -- la fuente de verdad es "role".
+            "is_admin": role == "admin",
             "exp": expires_at,
             "iss": _ISSUER,
             "aud": _AUDIENCE,
@@ -57,6 +64,8 @@ def decode_access_token(token: str, secret: str) -> TokenPayload:
     payload = jwt.decode(
         token, secret, algorithms=[_ALGORITHM], issuer=_ISSUER, audience=_AUDIENCE
     )
-    return TokenPayload(
-        user_id=payload["user_id"], username=payload["username"], is_admin=payload["is_admin"]
-    )
+    # Tokens emitidos antes de que existiera el claim "role" (hasta 14 dias de vida) solo
+    # traen is_admin -- se deriva de ahi. Igual el rol que de verdad decide el acceso se
+    # re-lee de la DB (dependencies.py's _resolve_role), esto es solo el valor inicial.
+    role = payload.get("role") or ("admin" if payload.get("is_admin") else "user")
+    return TokenPayload(user_id=payload["user_id"], username=payload["username"], role=role)

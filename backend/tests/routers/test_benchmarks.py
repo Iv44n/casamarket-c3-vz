@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.auth import store as auth_store
-from app.auth.dependencies import CurrentUser, get_current_user, require_admin
+from app.auth.dependencies import CurrentUser, get_current_user, require_admin, require_full_access
 from app.benchmarks import settings as llm_settings
 from app.benchmarks import state
 from app.extraction import store
@@ -29,6 +29,9 @@ _DONE = BenchmarkRunStatus(
 @pytest.fixture
 def client(tmp_path, monkeypatch: pytest.MonkeyPatch):
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(1, "test", True)
+    # require_full_access re-lee el rol de la DB (auth/dependencies.py) -- el gating por rol
+    # se prueba en tests/routers/test_role_gating.py, no aca.
+    app.dependency_overrides[require_full_access] = lambda: CurrentUser(1, "test", True)
     app.dependency_overrides[require_admin] = lambda: CurrentUser(1, "test", True)
     # main.py's lifespan hook toca auth_store.get_connection() (bootstrap admin) en cada
     # arranque -- sin esto, "with TestClient(app)" pega contra la Turso real en cada test.

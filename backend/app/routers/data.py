@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ..auth.dependencies import get_current_user
+from ..auth.dependencies import require_full_access
 from ..extraction import parsing, store
 from ..schemas import ClientCaseCount, DailyCount
 
-router = APIRouter(prefix="/data", tags=["data"], dependencies=[Depends(get_current_user)])
+router = APIRouter(prefix="/data", tags=["data"], dependencies=[Depends(require_full_access)])
 
 ISO_DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 

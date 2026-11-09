@@ -2,6 +2,7 @@ import { TanStackDevtools } from '@tanstack/react-devtools'
 import {
   createRootRoute,
   HeadContent,
+  redirect,
   Scripts,
   useRouterState
 } from '@tanstack/react-router'
@@ -18,13 +19,24 @@ import {
   SidebarTrigger
 } from '#/components/ui/sidebar'
 import { TooltipProvider } from '#/components/ui/tooltip'
+import { useSessionUser } from '#/hooks/use-session-user'
+import { canAccessPath, hasFullAccess, homePathFor } from '#/lib/access'
 import { cn } from '#/lib/utils'
 import { requireSession } from '#/server/auth.functions'
+import type { SessionUser } from '#/server/schemas'
 import appCss from '../styles.css?url'
 export const Route = createRootRoute({
-  beforeLoad: async ({ location }) => {
-    if (location.pathname === '/login') return
-    await requireSession()
+  beforeLoad: async ({
+    location
+  }): Promise<{ sessionUser: SessionUser | null }> => {
+    if (location.pathname === '/login') return { sessionUser: null }
+    const sessionUser = await requireSession()
+    // El rol "incidencias" solo ve /incidencias-manuales: cualquier otra URL (incluida "/")
+    // lo manda ahi. Ver lib/access.ts -- el backend igual le responde 403 a todo lo demas.
+    if (!canAccessPath(sessionUser.role, location.pathname)) {
+      throw redirect({ to: homePathFor(sessionUser.role) })
+    }
+    return { sessionUser }
   },
   head: () => ({
     meta: [
@@ -50,6 +62,10 @@ export const Route = createRootRoute({
 })
 function RootDocument({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({ select: state => state.location.pathname })
+  const sessionUser = useSessionUser()
+  // Los timers (POST /extraction/refresh, corridas de benchmarks) arrancan solo cuando se sabe
+  // que la cuenta puede usarlos -- al rol "incidencias" le responderian 403 cada 5 minutos.
+  const timersEnabled = sessionUser !== null && hasFullAccess(sessionUser.role)
   const isWallboard = pathname === '/atenciones'
   const isFullWidth = pathname === '/benchmarks'
   const isAuthPage = pathname === '/login'
@@ -66,8 +82,8 @@ function RootDocument({ children }: { children: React.ReactNode }) {
               <Toaster />
             </>
           ) : (
-            <AutoRefreshProvider>
-              <BenchmarkScheduleProvider>
+            <AutoRefreshProvider enabled={timersEnabled}>
+              <BenchmarkScheduleProvider enabled={timersEnabled}>
                 <TooltipProvider>
                   <SidebarProvider>
                     <AppSidebar />

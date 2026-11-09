@@ -4,14 +4,14 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from ..auth.dependencies import CurrentUser, get_current_user, require_admin
+from ..auth.dependencies import CurrentUser, require_admin, require_full_access
 from ..benchmarks import settings as llm_settings
 from ..benchmarks import state
 from ..extraction import store
 from ..schemas import BenchmarkCaseResult, BenchmarkRunRecord, BenchmarkRunStatus
 
 router = APIRouter(
-    prefix="/benchmarks", tags=["benchmarks"], dependencies=[Depends(get_current_user)]
+    prefix="/benchmarks", tags=["benchmarks"], dependencies=[Depends(require_full_access)]
 )
 
 ISO_DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"

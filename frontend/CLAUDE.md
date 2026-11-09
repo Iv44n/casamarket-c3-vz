@@ -24,6 +24,11 @@ bun run build         # client + SSR + Nitro server bundle -> .output/
 bun run start         # bun run .output/server/index.mjs
 ```
 
+**`bun run generate-routes` gotcha** (seen 2026-11-09): the standalone `tsr generate` CLI rewrites
+`src/routeTree.gen.ts` *without* the trailing `declare module '@tanstack/react-start' { interface
+Register {...} }` block that the Vite plugin writes. Typecheck still passes, so it's easy to miss --
+restore that block (or let `bun run dev`/`build` regenerate the file) before committing.
+
 ## Setup
 
 Copy `.env.example` to `.env` and set `C3_API_URL` (defaults to `http://127.0.0.1:8000`, the
@@ -119,6 +124,13 @@ it, this custom provider is the established pattern here and in RCTM_WEB). Toggl
 `components/site-header.tsx` on every page. `<html suppressHydrationWarning>` in `__root.tsx` is
 required -- the provider sets the `dark`/`light` class client-side only, so the very first paint
 always mismatches the server-rendered shell by design.
+
+**`shadcn add` gotcha (hit 2026-11-09 adding `combobox`/`textarea`)**: the CLI resolved the
+`utils` alias wrong and wrote `import { cn } from "cn"` into the new files -- and then *installed an
+unrelated npm package literally named `cn`*. Fixed by hand to `from "#/lib/utils.ts"` (what every
+other ui file uses) and `bun remove cn`. After any `shadcn add`, grep the new files for `from "cn"`
+and check `package.json` for surprise dependencies. Also: without `-o` the CLI stops on an
+interactive "overwrite button.tsx?" prompt -- pipe `yes n |` to keep existing files.
 
 **Biome excludes `src/components/ui`** (and `src/styles.css`) from lint/format, same as RCTM_WEB --
 vendored shadcn output isn't this project's code style to enforce. If `shadcn add` regenerates a
@@ -372,6 +384,36 @@ interval for as long as the app is open in a tab.
   persists and reschedules). One `shadcn` gotcha hit here: Base UI's `<Select.Value>` shows the raw
   `value` unless given a formatter function as `children` -- unlike Radix, it does not automatically
   mirror the matching `<SelectItem>`'s rendered label.
+
+**Roles and section access** (`lib/access.ts`, `routes/__root.tsx`, `hooks/use-session-user.ts`):
+accounts have a `role` (`admin` | `user` | `incidencias`, see `backend/CLAUDE.md`'s "Roles").
+`incidencias` may only see `/incidencias-manuales`. `lib/access.ts` (`canAccessPath`/`homePathFor`/
+`hasFullAccess`) is the single source of that rule: `__root.tsx`'s `beforeLoad` redirects any other
+URL (including `/`) to the role's home, and `app-sidebar.tsx` filters its items with the same
+function. This is UX only -- the backend returns `403` to that role on everything else, and that's
+the real barrier (server functions are browser-callable RPC, so hiding UI protects nothing).
+`requireSession` now returns the `SessionUser` (`{id, username, role}`) from `/auth/me`, cached per
+token for 60s in `backend.server.ts`'s `fetchSessionUser` (root `beforeLoad` runs on every
+navigation; uncached, each click would cost a Turso round-trip on the backend). `updateUserRole`
+clears that cache wholesale. The shell/sidebar read the session via `useSessionUser()`
+(`useRouterState` on the root match's context, `null` until `beforeLoad` resolves -- the shell also
+renders in SSR before it runs). **`AutoRefreshProvider`/`BenchmarkScheduleProvider` take an
+`enabled` prop** and `__root.tsx` only enables them for full-access roles: otherwise an
+`incidencias` user's open tab would fire `POST /extraction/refresh` every 5 minutes, get `403`, and
+toast errors. Verified with a fake backend: as `incidencias`, zero refresh/benchmark calls with the
+interval set to 3s; as `admin`, the same timer does fire.
+
+**`/incidencias-manuales`** (`routes/incidencias-manuales.tsx`, `components/
+manual-incident-form-dialog.tsx`, `components/incident-catalog-card.tsx`, server fns in
+`server/incidents.functions.ts`): incidents registered by hand (not from C3). Tabs: Registro
+(table + edit/delete, client-side pagination over the loaded date range), Resumen (reuses
+`IncidentHierarchy` by mapping each row to `IncidentRecord`), Catálogo (admin only: add/
+deactivate options, "Importar desde C3"). Only `date`/`dateEnd` are `loaderDeps`; mutations call
+`router.invalidate()`. Category fields use the shadcn `combobox` (search; ~90 ámbitos in real
+data) fed by active catalog options -- when editing, the incident's current value is offered even
+if since deactivated (the backend accepts that case). The form dialog seeds its state once on
+mount; the page bumps its `key` on every open. Date filter follows the app rule (defaults to today,
+never "all").
 
 **Deployment target** (`vite.config.ts`): `nitro({ preset: 'bun' })`. Nitro is the "deploy
 anywhere" adapter Start's own docs recommend when you don't want to commit to one hosting vendor's

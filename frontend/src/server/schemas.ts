@@ -105,21 +105,45 @@ export const loginRequestSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1)
 })
+// Roles de cuenta -- espejo de backend/app/auth/store.py's ROLES. "admin" y "user" ven todo el
+// panel; "incidencias" solo la seccion /incidencias-manuales (ver lib/access.ts). El backend es
+// el que de verdad bloquea (403); esto es solo para no mostrar pantallas que van a fallar.
+export const USER_ROLES = ['admin', 'user', 'incidencias'] as const
+export type UserRole = (typeof USER_ROLES)[number]
+export const USER_ROLE_LABEL: Record<UserRole, string> = {
+  admin: 'Administrador',
+  user: 'Usuario',
+  incidencias: 'Solo incidencias'
+}
 export type CurrentUser = {
   id: number
   username: string
+  role: UserRole
   is_admin: boolean
   created_at: string
+}
+// Lo minimo que __root.tsx necesita en cada navegacion (ver auth.functions.ts's requireSession).
+export type SessionUser = {
+  id: number
+  username: string
+  role: UserRole
 }
 export const createUserRequestSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1),
-  isAdmin: z.boolean().default(false)
+  role: z.enum(USER_ROLES).default('user')
 })
 export type CreateUserResult =
   | { status: 'created'; user: CurrentUser }
   | { status: 'duplicate' }
   | { status: 'forbidden' }
+export const updateUserRoleRequestSchema = z.object({
+  userId: z.number().int(),
+  role: z.enum(USER_ROLES)
+})
+export type UpdateUserRoleResult =
+  | { status: 'updated'; user: CurrentUser }
+  | { status: 'error'; message: string }
 export const backfillRequestSchema = z.object({
   date: z.string().regex(ISO_DATE_REGEX)
 })
@@ -135,6 +159,97 @@ export const INCIDENT_CATEGORIES = [
   'resultado'
 ] as const
 export type IncidentCategory = (typeof INCIDENT_CATEGORIES)[number]
+// --- Incidencias manuales (backend/app/routers/incidents.py) -----------------------------------
+// Orden del formulario y de la escalera en /incidencias-manuales -- a diferencia de las de C3, no
+// hay un orden "dominante" que inferir de las filas (ver pickDominantCategoryOrder).
+export const MANUAL_INCIDENT_CATEGORY_ORDER = [
+  'origen',
+  'tipo',
+  'ambito',
+  'resultado'
+] as const satisfies readonly IncidentCategory[]
+export type ManualIncident = {
+  id: number
+  fecha: string
+  hora: string
+  cliente: string
+  telefono: string
+  agente: string
+  origen: string
+  tipo: string
+  ambito: string
+  resultado: string
+  descripcion: string
+  created_by: string
+  created_at: string
+  updated_by: string | null
+  updated_at: string | null
+}
+export type ManualIncidentList = {
+  rows: ManualIncident[]
+  truncated: boolean
+}
+export type IncidentCatalogOption = {
+  id: number
+  category: IncidentCategory
+  value: string
+  active: boolean
+  source: 'c3' | 'manual'
+  created_at: string
+}
+export const manualIncidentInputSchema = z.object({
+  fecha: z.string().regex(ISO_DATE_REGEX),
+  hora: z.string().regex(/^(([01]\d|2[0-3]):[0-5]\d)?$/),
+  cliente: z.string().trim().max(200),
+  telefono: z.string().trim().max(40),
+  agente: z.string().trim().max(120),
+  origen: z.string().min(1),
+  tipo: z.string().min(1),
+  ambito: z.string().min(1),
+  resultado: z.string(),
+  descripcion: z.string().trim().min(1).max(5000)
+})
+export type ManualIncidentInput = z.infer<typeof manualIncidentInputSchema>
+export const manualIncidentUpdateSchema = manualIncidentInputSchema.extend({
+  id: z.number().int()
+})
+export const manualIncidentIdSchema = z.object({ id: z.number().int() })
+export const manualIncidentsRangeSchema = z.object({
+  dateFrom: z.string().regex(ISO_DATE_REGEX),
+  dateTo: z.string().regex(ISO_DATE_REGEX)
+})
+// Resultado de alta/edicion: 'invalid' trae el `detail` del backend (valor fuera del catalogo,
+// etc) para mostrarlo tal cual en vez de un "responded 422" crudo.
+export type ManualIncidentMutationResult =
+  | { status: 'saved'; incident: ManualIncident }
+  | { status: 'invalid'; message: string }
+  | { status: 'not_found' }
+export const catalogOptionCreateSchema = z.object({
+  category: z.enum(INCIDENT_CATEGORIES),
+  value: z.string().trim().min(1).max(200)
+})
+export const catalogOptionUpdateSchema = z.object({
+  id: z.number().int(),
+  active: z.boolean()
+})
+export type CatalogOptionMutationResult =
+  | { status: 'saved'; option: IncidentCatalogOption }
+  | { status: 'error'; message: string }
+export const MANUAL_INCIDENT_VIEWS = [
+  'registro',
+  'resumen',
+  'catalogo'
+] as const
+export type ManualIncidentView = (typeof MANUAL_INCIDENT_VIEWS)[number]
+export const manualIncidentsSearchSchema = z.object({
+  date: dateFilterValue.default(todayIsoDate),
+  dateEnd: dateEndValue,
+  view: z.enum(MANUAL_INCIDENT_VIEWS).default('registro'),
+  category: z.enum(INCIDENT_CATEGORIES).default('origen'),
+  page: z.number().int().min(1).default(1)
+})
+export type ManualIncidentsSearch = z.infer<typeof manualIncidentsSearchSchema>
+
 export const ATENCIONES_VIEWS = ['resumen', 'incidencias', 'demoras'] as const
 export type AtencionesView = (typeof ATENCIONES_VIEWS)[number]
 export const attentionsSearchSchema = z.object({

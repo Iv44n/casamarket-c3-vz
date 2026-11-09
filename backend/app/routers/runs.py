@@ -4,7 +4,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..auth.dependencies import get_current_user
+from ..auth.dependencies import require_full_access
 from ..extraction import state
 from ..schemas import (
     BackfillRunSummary,
@@ -15,7 +15,7 @@ from ..schemas import (
 )
 
 router = APIRouter(
-    prefix="/extraction", tags=["extraction"], dependencies=[Depends(get_current_user)]
+    prefix="/extraction", tags=["extraction"], dependencies=[Depends(require_full_access)]
 )
 
 

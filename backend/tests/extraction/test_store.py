@@ -1973,3 +1973,50 @@ def test_list_benchmark_runs_orders_most_recent_first_and_respects_limit():
     assert len(runs) == 2
     assert runs[0]["started_at"] == "2026-08-22T00:00:00"
     assert runs[1]["started_at"] == "2026-08-21T00:00:00"
+
+
+def test_distinct_incident_values_merges_the_three_source_tables_and_drops_placeholders():
+    conn = _conn()
+    store.upsert_report_rows(
+        conn,
+        "attention",
+        [
+            {
+                "ID atención": "1",
+                "Origen de incidencia": "ADMIN WEB",
+                "Tipo de incidencia": "CONSULTAS",
+                "Ámbito de incidencia": " VENTAS ",
+                "Resultado de la atención": "RESUELTO",
+            },
+            {
+                "ID atención": "2",
+                "Origen de incidencia": "N.A",
+                "Tipo de incidencia": "",
+                "Ámbito de incidencia": "-",
+                "Resultado de la atención": None,
+            },
+            {"ID atención": "3", "Origen de incidencia": "NO APLICA"},
+        ],
+        "2026-11-09T00:00:00",
+    )
+    store.upsert_report_rows(
+        conn,
+        "outboundattention",
+        [{"ID atención": "9", "Origen de incidencia": "ADMIN WEB", "Ámbito de incidencia": "CAJA"}],
+        "2026-11-09T00:00:00",
+    )
+    store.upsert_report_rows(
+        conn,
+        "calloutgoing",
+        [{"Linkedid": "L1", "Origen de incidencia": "POS WEB", "Tipo de incidencia": 7}],
+        "2026-11-09T00:00:00",
+    )
+
+    values = store.distinct_incident_values(conn)
+
+    assert values == {
+        "origen": ["ADMIN WEB", "NO APLICA", "POS WEB"],
+        "tipo": ["CONSULTAS"],
+        "ambito": ["CAJA", "VENTAS"],
+        "resultado": ["RESUELTO"],
+    }

@@ -9,6 +9,7 @@ import type {
   BenchmarkDirection,
   BenchmarkRunRecord,
   BenchmarkRunStatus,
+  CatalogOptionMutationResult,
   ClientCaseCount,
   ContactsSyncStatus,
   CreateUserResult,
@@ -16,9 +17,17 @@ import type {
   DailyCaseCount,
   ExtractionStatus,
   HistoricalBackfillStatus,
+  IncidentCatalogOption,
+  IncidentCategory,
   LlmSettings,
+  ManualIncidentInput,
+  ManualIncidentList,
+  ManualIncidentMutationResult,
   ReportRow,
-  ReportRowsPage
+  ReportRowsPage,
+  SessionUser,
+  UpdateUserRoleResult,
+  UserRole
 } from './schemas'
 
 const BASE_URL = process.env.C3_API_URL ?? 'http://127.0.0.1:8000'
@@ -80,6 +89,64 @@ export async function fetchCurrentUser(): Promise<CurrentUser> {
   const response = await backendFetch('/auth/me')
   return response.json()
 }
+
+// `detail` de un error de FastAPI, legible: un string (HTTPException) o la lista de errores de
+// validacion de pydantic (422 por body invalido).
+async function readErrorDetail(response: Response): Promise<string> {
+  try {
+    const body: { detail?: unknown } = await response.json()
+    if (typeof body.detail === 'string') return body.detail
+    if (Array.isArray(body.detail)) {
+      return body.detail
+        .map((item: { loc?: unknown[]; msg?: string }) =>
+          [item.loc?.slice(1).join('.'), item.msg].filter(Boolean).join(': ')
+        )
+        .join('; ')
+    }
+  } catch {
+    // cuerpo no-JSON: cae al mensaje generico de abajo
+  }
+  return `El backend respondio ${response.status}`
+}
+
+// Usuario de la sesion para __root.tsx's beforeLoad, que corre en CADA navegacion -- sin cache,
+// cada click pagaria un /auth/me (un round-trip a Turso del lado del backend, ~0.4s). Cache por
+// token (no por usuario: es lo unico que este server conoce antes de preguntar), con TTL corto
+// para que un cambio de rol se refleje en la UI a lo sumo un minuto despues; el backend aplica
+// ese cambio en el acto de todas formas (auth/dependencies.py), esto solo decide que se muestra.
+const SESSION_USER_CACHE_TTL_MS = 60_000
+const _sessionUserCache = new Map<
+  string,
+  { promise: Promise<SessionUser>; expiresAt: number }
+>()
+
+export async function fetchSessionUser(): Promise<SessionUser> {
+  const token = getCookie(SESSION_COOKIE_NAME)
+  if (!token) throw redirect({ to: '/login' })
+  const now = Date.now()
+  const cached = _sessionUserCache.get(token)
+  if (cached && cached.expiresAt > now) return cached.promise
+
+  for (const [key, entry] of _sessionUserCache) {
+    if (entry.expiresAt <= now) _sessionUserCache.delete(key)
+  }
+  const promise = (async () => {
+    const user = await fetchCurrentUser()
+    return { id: user.id, username: user.username, role: user.role }
+  })()
+  _sessionUserCache.set(token, {
+    promise,
+    expiresAt: now + SESSION_USER_CACHE_TTL_MS
+  })
+  promise.catch(() => {
+    const entry = _sessionUserCache.get(token)
+    if (entry?.promise === promise) _sessionUserCache.delete(token)
+  })
+  return promise
+}
+export function forgetSessionUser(token: string | undefined): void {
+  if (token) _sessionUserCache.delete(token)
+}
 export async function fetchUsers(): Promise<CurrentUser[]> {
   const response = await backendFetch('/auth/users')
   return response.json()
@@ -87,20 +154,139 @@ export async function fetchUsers(): Promise<CurrentUser[]> {
 export async function createUserOnBackend(
   username: string,
   password: string,
-  isAdmin: boolean
+  role: UserRole
 ): Promise<CreateUserResult> {
   const response = await backendFetch(
     '/auth/users',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password, is_admin: isAdmin })
+      body: JSON.stringify({ username, password, role })
     },
     { allowedStatuses: [403, 409] }
   )
   if (response.status === 409) return { status: 'duplicate' }
   if (response.status === 403) return { status: 'forbidden' }
   return { status: 'created', user: await response.json() }
+}
+export async function updateUserRoleOnBackend(
+  userId: number,
+  role: UserRole
+): Promise<UpdateUserRoleResult> {
+  const response = await backendFetch(
+    `/auth/users/${userId}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role })
+    },
+    { allowedStatuses: [400, 403, 409] }
+  )
+  if (!response.ok) {
+    return { status: 'error', message: await readErrorDetail(response) }
+  }
+  // La sesion cacheada de esa cuenta (keyed por SU token, que aca no conocemos) quedaria con el
+  // rol viejo hasta el TTL -- vaciar todo es barato (un /auth/me por usuario activo).
+  _sessionUserCache.clear()
+  return { status: 'updated', user: await response.json() }
+}
+
+// --- Incidencias manuales ---------------------------------------------------------------------
+
+export async function fetchManualIncidents(
+  dateFrom: string,
+  dateTo: string
+): Promise<ManualIncidentList> {
+  const query = new URLSearchParams({ date_from: dateFrom, date_to: dateTo })
+  const response = await backendFetch(`/incidents?${query.toString()}`)
+  return response.json()
+}
+async function saveManualIncident(
+  path: string,
+  method: 'POST' | 'PUT',
+  input: ManualIncidentInput
+): Promise<ManualIncidentMutationResult> {
+  const response = await backendFetch(
+    path,
+    {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input)
+    },
+    { allowedStatuses: [422] }
+  )
+  if (response.status === 404) return { status: 'not_found' }
+  if (response.status === 422) {
+    return { status: 'invalid', message: await readErrorDetail(response) }
+  }
+  return { status: 'saved', incident: await response.json() }
+}
+export function createManualIncidentOnBackend(
+  input: ManualIncidentInput
+): Promise<ManualIncidentMutationResult> {
+  return saveManualIncident('/incidents', 'POST', input)
+}
+export function updateManualIncidentOnBackend(
+  id: number,
+  input: ManualIncidentInput
+): Promise<ManualIncidentMutationResult> {
+  return saveManualIncident(`/incidents/${id}`, 'PUT', input)
+}
+// true si se borro, false si ya no existia (otro usuario la borro antes) -- ambos dejan la
+// lista en el mismo estado, el caller solo decide el texto del toast.
+export async function deleteManualIncidentOnBackend(
+  id: number
+): Promise<boolean> {
+  const response = await backendFetch(`/incidents/${id}`, { method: 'DELETE' })
+  return response.status !== 404
+}
+export async function fetchIncidentCatalog(): Promise<IncidentCatalogOption[]> {
+  const response = await backendFetch('/incidents/catalog')
+  return response.json()
+}
+export async function addCatalogOptionOnBackend(
+  category: IncidentCategory,
+  value: string
+): Promise<CatalogOptionMutationResult> {
+  const response = await backendFetch(
+    '/incidents/catalog',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category, value })
+    },
+    { allowedStatuses: [403, 409, 422] }
+  )
+  if (!response.ok) {
+    return { status: 'error', message: await readErrorDetail(response) }
+  }
+  return { status: 'saved', option: await response.json() }
+}
+export async function setCatalogOptionActiveOnBackend(
+  id: number,
+  active: boolean
+): Promise<CatalogOptionMutationResult> {
+  const response = await backendFetch(
+    `/incidents/catalog/${id}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active })
+    },
+    { allowedStatuses: [403] }
+  )
+  if (!response.ok) {
+    return { status: 'error', message: await readErrorDetail(response) }
+  }
+  return { status: 'saved', option: await response.json() }
+}
+export async function importCatalogFromC3OnBackend(): Promise<{
+  added: number
+}> {
+  const response = await backendFetch('/incidents/catalog/import-c3', {
+    method: 'POST'
+  })
+  return response.json()
 }
 const _reportRowsCache = new Map<
   string,
