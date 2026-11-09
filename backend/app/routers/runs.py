@@ -4,6 +4,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from .. import config
 from ..auth.dependencies import require_full_access
 from ..extraction import state
 from ..schemas import (
@@ -19,6 +20,14 @@ router = APIRouter(
 )
 
 
+def _ensure_c3_enabled() -> None:
+    if not config.c3_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="La conexion con C3 esta deshabilitada porque el servicio ya no esta disponible.",
+        )
+
+
 class BackfillRequest(BaseModel):
     date: date
 
@@ -30,6 +39,7 @@ class HistoricalBackfillRequest(BaseModel):
 
 @router.post("/refresh")
 def refresh() -> RunSummary:
+    _ensure_c3_enabled()
     try:
         return state.run_extraction()
     except state.AlreadyRunningError as exc:
@@ -48,6 +58,7 @@ def status() -> RunSummary | NoRunsYet:
 
 @router.post("/backfill")
 def backfill(request: BackfillRequest) -> BackfillRunSummary:
+    _ensure_c3_enabled()
     try:
         return state.run_backfill(request.date)
     except state.AlreadyRunningError as exc:
@@ -66,6 +77,7 @@ def backfill_status() -> BackfillRunSummary | NoRunsYet:
 
 @router.post("/contacts/sync", status_code=202)
 def contacts_sync() -> ContactsSyncStatus:
+    _ensure_c3_enabled()
     try:
         return state.start_contacts_sync()
     except state.AlreadyRunningError as exc:
@@ -81,6 +93,7 @@ def contacts_sync_status() -> ContactsSyncStatus:
 def historical_backfill(
     request: HistoricalBackfillRequest | None = None,
 ) -> HistoricalBackfillStatus:
+    _ensure_c3_enabled()
     date_init = request.date_init if request else None
     date_end = request.date_end if request else None
     if date_init is not None and date_end is not None and date_init > date_end:

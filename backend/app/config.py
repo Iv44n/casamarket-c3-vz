@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from dotenv import dotenv_values
 
 _CREDENTIAL_KEYS = ("C3_USERNAME", "C3_PASSWORD", "C3_BASE_URL")
+_C3_ENABLED_KEY = "C3_ENABLED"
 
 BASE_URL = "https://casamarket.c3.pe"
 LOGIN_PATH = "/user/login"
@@ -109,6 +110,14 @@ def load_credentials(env_path: Path | None = None) -> Credentials:
 
     base_url = values.get("C3_BASE_URL") or BASE_URL
     return Credentials(base_url=base_url, username=username, password=password)
+
+
+def c3_enabled(env_path: Path | None = None) -> bool:
+    """C3 queda apagado por defecto porque el acceso externo ya no esta disponible."""
+    path = env_path or PROJECT_ROOT / ".env"
+    values = dict(dotenv_values(path))
+    values.update({k: v for k, v in os.environ.items() if k == _C3_ENABLED_KEY})
+    return values.get(_C3_ENABLED_KEY, "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)

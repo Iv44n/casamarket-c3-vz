@@ -82,7 +82,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
               <Toaster />
             </>
           ) : (
-            <AutoRefreshProvider enabled={timersEnabled}>
+            <AutoRefreshProvider enabled={false}>
               <BenchmarkScheduleProvider enabled={timersEnabled}>
                 <TooltipProvider>
                   <SidebarProvider>

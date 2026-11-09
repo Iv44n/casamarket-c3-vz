@@ -48,6 +48,10 @@ import type {
   ContactsSyncStatus,
   HistoricalBackfillStatus
 } from '#/server/schemas'
+
+const C3_DISABLED_MESSAGE =
+  'C3 esta deshabilitado porque el servicio ya no esta disponible.'
+
 export const Route = createFileRoute('/status')({
   ssr: 'data-only',
   loader: async () => ({
@@ -99,7 +103,7 @@ function StatusPage() {
               ? `Ultima corrida: ${status.finished_at}`
               : 'Sin corridas todavia'}
           </CardTitle>
-          <Button onClick={handleRefresh} disabled={pending}>
+          <Button onClick={handleRefresh} disabled title={C3_DISABLED_MESSAGE}>
             <RefreshCwIcon
               data-icon="inline-start"
               className={cn(pending && 'animate-spin')}
@@ -169,6 +173,7 @@ function BackfillCard({
                 <Button
                   variant="outline"
                   className="w-40 justify-start font-normal"
+                  disabled
                 />
               }
             >
@@ -189,7 +194,8 @@ function BackfillCard({
           </Popover>
           <Button
             onClick={handleBackfill}
-            disabled={pending}
+            disabled
+            title={C3_DISABLED_MESSAGE}
             variant="secondary"
           >
             <RefreshCwIcon
@@ -260,7 +266,12 @@ function ContactsSyncCard({
             unico que C3 rechaza.
           </CardDescription>
         </div>
-        <Button onClick={handleSync} disabled={isRunning} variant="secondary">
+        <Button
+          onClick={handleSync}
+          disabled
+          title={C3_DISABLED_MESSAGE}
+          variant="secondary"
+        >
           <RefreshCwIcon
             data-icon="inline-start"
             className={cn(isRunning && 'animate-spin')}
@@ -365,9 +376,7 @@ function HistoricalBackfillCard({
         </div>
         <div className="flex items-center gap-2">
           <Popover>
-            <PopoverTrigger
-              render={<Button variant="outline" disabled={isRunning} />}
-            >
+            <PopoverTrigger render={<Button variant="outline" disabled />}>
               <CalendarIcon data-icon="inline-start" />
               {hasCustomRange && range?.from && range?.to
                 ? `${toIsoDateLocal(range.from)} — ${toIsoDateLocal(range.to)}`
@@ -386,7 +395,8 @@ function HistoricalBackfillCard({
           </Popover>
           <Button
             onClick={handleStart}
-            disabled={isRunning}
+            disabled
+            title={C3_DISABLED_MESSAGE}
             variant="secondary"
           >
             <RefreshCwIcon
@@ -447,6 +457,7 @@ function AutoRefreshSettingsCard() {
             id="auto-refresh-enabled"
             checked={draftEnabled}
             onCheckedChange={setDraftEnabled}
+            disabled
           />
           <Label htmlFor="auto-refresh-enabled">Activado</Label>
         </div>
@@ -479,13 +490,14 @@ function AutoRefreshSettingsCard() {
             </SelectContent>
           </Select>
 
-          <Button onClick={handleSave}>Guardar</Button>
+          <Button onClick={handleSave} disabled>
+            Guardar
+          </Button>
         </div>
 
         <p className="text-xs text-muted-foreground">
-          {settings.enabled
-            ? `Activo: cada ${settings.value} ${UNIT_LABEL[settings.unit]}.`
-            : 'Desactivado.'}{' '}
+          C3 esta deshabilitado; el auto-refresh no ejecutara conexiones
+          externas.{' '}
           {lastRunAt &&
             `Ultimo auto-refresh: ${lastRunAt.toLocaleTimeString()}.`}
         </p>
