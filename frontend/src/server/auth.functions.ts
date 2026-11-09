@@ -8,17 +8,19 @@ import {
 import {
   authenticateWithBackend,
   createUserOnBackend,
+  deleteUserOnBackend,
   fetchCurrentUser,
   fetchSessionUser,
   fetchUsers,
   forgetSessionUser,
   SESSION_COOKIE_NAME,
-  updateUserRoleOnBackend
+  updateUserOnBackend
 } from './backend.server'
 import {
   createUserRequestSchema,
+  deleteUserRequestSchema,
   loginRequestSchema,
-  updateUserRoleRequestSchema
+  updateUserRequestSchema
 } from './schemas'
 
 const SESSION_COOKIE_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
@@ -65,9 +67,15 @@ export const createUser = createServerFn({ method: 'POST' })
     createUserOnBackend(data.username, data.password, data.role)
   )
 
-export const updateUserRole = createServerFn({ method: 'POST' })
-  .validator(updateUserRoleRequestSchema)
-  .handler(async ({ data }) => updateUserRoleOnBackend(data.userId, data.role))
+export const updateUser = createServerFn({ method: 'POST' })
+  .validator(updateUserRequestSchema)
+  .handler(async ({ data: { userId, ...changes } }) =>
+    updateUserOnBackend(userId, changes)
+  )
+
+export const deleteUser = createServerFn({ method: 'POST' })
+  .validator(deleteUserRequestSchema)
+  .handler(async ({ data }) => deleteUserOnBackend(data.userId))
 
 export const getUsers = createServerFn({ method: 'GET' }).handler(async () =>
   fetchUsers()

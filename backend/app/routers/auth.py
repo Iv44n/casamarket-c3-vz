@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import config
 from ..auth import rate_limit, security, store
@@ -45,7 +45,10 @@ class CreateUserRequest(BaseModel):
 
 
 class UpdateUserRequest(BaseModel):
-    role: Role
+    # Todos opcionales: solo se cambia lo que venga. password en claro, se hashea aca.
+    username: str | None = Field(default=None, min_length=1, max_length=120)
+    password: str | None = Field(default=None, min_length=1)
+    role: Role | None = None
 
 
 def _to_public(user: store.UserRecord) -> UserPublic:
@@ -139,23 +142,68 @@ def create_user(
 def update_user(
     user_id: int, request: UpdateUserRequest, admin: CurrentUser = Depends(require_admin)
 ) -> UserPublic:
-    if user_id == admin.id:
-        # Evita que un admin se quite su propio acceso por accidente -- otro admin puede
-        # cambiarle el rol si de verdad hace falta.
-        raise HTTPException(status_code=400, detail="No se puede cambiar el rol de la propia cuenta")
+    if request.username is None and request.password is None and request.role is None:
+        raise HTTPException(status_code=400, detail="No hay cambios para guardar")
 
     conn = store.get_connection()
     try:
+        if user_id == admin.id:
+            # En la propia cuenta solo la contraseña: quitarse el rol admin dejaria a esta
+            # persona afuera, y renombrarse invalidaria su propio token a mitad de sesion.
+            own = store.get_user_by_id(conn, user_id)
+            renaming = (
+                request.username is not None
+                and own is not None
+                and store.normalize_username(request.username) != own.username
+            )
+            changing_role = request.role is not None and own is not None and request.role != own.role
+            if renaming or changing_role:
+                raise HTTPException(
+                    status_code=400,
+                    detail="En la propia cuenta solo se puede cambiar la contraseña",
+                )
+        password_hash = (
+            security.hash_password(request.password) if request.password is not None else None
+        )
         try:
-            user = store.update_user_role(conn, user_id, request.role)
-        except store.LastAdminError as exc:
+            user = store.update_user(
+                conn,
+                user_id,
+                username=request.username,
+                password_hash=password_hash,
+                role=request.role,
+            )
+        except (store.UsernameTakenError, store.LastAdminError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
         conn.close()
 
     if user is None:
         raise HTTPException(status_code=404, detail="El usuario no existe")
-    # Que el cambio aplique en el proximo request de esa cuenta, no recien cuando venza el TTL
-    # de la cache de roles (ver dependencies.py).
+    # Que un cambio de rol (o un rename, que invalida el token viejo) aplique en el proximo
+    # request de esa cuenta, no recien cuando venza el TTL de la cache de roles.
     invalidate_cached_role(user_id)
     return _to_public(user)
+
+
+@router.delete("/users/{user_id}", status_code=204)
+def delete_user(user_id: int, admin: CurrentUser = Depends(require_admin)) -> None:
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="No se puede eliminar la propia cuenta")
+
+    conn = store.get_connection()
+    try:
+        try:
+            deleted = store.delete_user(conn, user_id)
+        except store.LastAdminError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="El usuario no existe")
+    # Su token sigue firmado y vigente, pero el proximo request ya no encuentra la cuenta y
+    # responde 401 (dependencies._resolve_role) -- sin esperar el TTL de la cache.
+    invalidate_cached_role(user_id)

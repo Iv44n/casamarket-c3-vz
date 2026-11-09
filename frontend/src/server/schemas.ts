@@ -137,12 +137,19 @@ export type CreateUserResult =
   | { status: 'created'; user: CurrentUser }
   | { status: 'duplicate' }
   | { status: 'forbidden' }
-export const updateUserRoleRequestSchema = z.object({
+// Edicion parcial: solo se manda lo que cambio (el backend rechaza un PATCH vacio).
+export const updateUserRequestSchema = z.object({
   userId: z.number().int(),
-  role: z.enum(USER_ROLES)
+  username: z.string().trim().min(1).max(120).optional(),
+  password: z.string().min(1).optional(),
+  role: z.enum(USER_ROLES).optional()
 })
-export type UpdateUserRoleResult =
+export type UpdateUserResult =
   | { status: 'updated'; user: CurrentUser }
+  | { status: 'error'; message: string }
+export const deleteUserRequestSchema = z.object({ userId: z.number().int() })
+export type DeleteUserResult =
+  | { status: 'deleted' }
   | { status: 'error'; message: string }
 export const backfillRequestSchema = z.object({
   date: z.string().regex(ISO_DATE_REGEX)

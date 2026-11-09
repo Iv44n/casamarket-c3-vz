@@ -3,7 +3,10 @@ import { useServerFn } from '@tanstack/react-start'
 import {
   EyeIcon,
   EyeOffIcon,
+  PencilIcon,
+  SaveIcon,
   ShieldAlertIcon,
+  Trash2Icon,
   UserPlusIcon
 } from 'lucide-react'
 import { useCallback, useState } from 'react'
@@ -46,10 +49,16 @@ import {
   TableRow
 } from '#/components/ui/table'
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger
+} from '#/components/ui/tooltip'
+import {
   createUser,
+  deleteUser,
   getCurrentUser,
   getUsers,
-  updateUserRole
+  updateUser
 } from '#/server/auth.functions'
 import {
   type CurrentUser,
@@ -83,7 +92,7 @@ function RoleSelect({
       }}
       disabled={disabled}
     >
-      <SelectTrigger id={id} className="min-w-44 justify-between">
+      <SelectTrigger id={id} className="w-full justify-between">
         <SelectValue>
           {(selected: UserRole) => USER_ROLE_LABEL[selected]}
         </SelectValue>
@@ -96,6 +105,164 @@ function RoleSelect({
         ))}
       </SelectContent>
     </Select>
+  )
+}
+
+function PasswordInput({
+  id,
+  value,
+  onChange,
+  required = false,
+  placeholder
+}: {
+  id: string
+  value: string
+  onChange: (value: string) => void
+  required?: boolean
+  placeholder?: string
+}) {
+  const [show, setShow] = useState(false)
+  return (
+    <div className="relative">
+      <Input
+        id={id}
+        type={show ? 'text' : 'password'}
+        autoComplete="new-password"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="pr-10"
+        placeholder={placeholder}
+        required={required}
+      />
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className="absolute top-1/2 right-1 -translate-y-1/2"
+        onClick={() => setShow(v => !v)}
+        aria-label={show ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+      >
+        {show ? <EyeOffIcon /> : <EyeIcon />}
+      </Button>
+    </div>
+  )
+}
+
+// Edicion de una cuenta. Solo se manda lo que cambio. En la propia cuenta solo la contraseña:
+// el backend rechaza cambiarse el rol (quedaria afuera) o el usuario (invalidaria su propio
+// token a mitad de sesion). Se monta de nuevo en cada apertura (`key` en el caller), asi el form
+// arranca siempre con los datos actuales de esa cuenta.
+function EditUserDialog({
+  user,
+  isSelf,
+  open,
+  onOpenChange,
+  onSaved
+}: {
+  user: CurrentUser
+  isSelf: boolean
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onSaved: () => Promise<void>
+}) {
+  const doUpdate = useServerFn(updateUser)
+  const [username, setUsername] = useState(user.username)
+  const [password, setPassword] = useState('')
+  const [role, setRole] = useState<UserRole>(user.role)
+  const [pending, setPending] = useState(false)
+  const renaming = username.trim().toLowerCase() !== user.username
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault()
+    const changes: { username?: string; password?: string; role?: UserRole } =
+      {}
+    if (!isSelf && renaming) changes.username = username.trim()
+    if (password) changes.password = password
+    if (!isSelf && role !== user.role) changes.role = role
+    if (Object.keys(changes).length === 0) {
+      toast.info('No hay cambios para guardar.')
+      return
+    }
+    setPending(true)
+    try {
+      const result = await doUpdate({ data: { userId: user.id, ...changes } })
+      if (result.status === 'error') {
+        toast.error(result.message)
+        return
+      }
+      toast.success(`Cuenta "${result.user.username}" actualizada.`)
+      onOpenChange(false)
+      await onSaved()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Editar usuario</DialogTitle>
+          <DialogDescription>
+            {isSelf
+              ? 'En tu propia cuenta solo podés cambiar la contraseña.'
+              : 'Dejá la contraseña vacía para no cambiarla.'}
+          </DialogDescription>
+        </DialogHeader>
+        <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="edit-username">Usuario</Label>
+            <Input
+              id="edit-username"
+              autoComplete="off"
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+              disabled={isSelf}
+              maxLength={120}
+              required
+            />
+            {renaming && (
+              <p className="text-xs text-muted-foreground">
+                Al cambiar el usuario, esa persona tendrá que volver a iniciar
+                sesión con el nombre nuevo.
+              </p>
+            )}
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="edit-password">Nueva contraseña</Label>
+            <PasswordInput
+              id="edit-password"
+              value={password}
+              onChange={setPassword}
+              placeholder="Sin cambios"
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="edit-role">Rol</Label>
+            <RoleSelect
+              id="edit-role"
+              value={role}
+              onChange={setRole}
+              disabled={isSelf}
+            />
+            <p className="text-xs text-muted-foreground">
+              {ROLE_DESCRIPTION[role]}
+            </p>
+          </div>
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="outline" />}>
+              Cancelar
+            </DialogClose>
+            <Button type="submit" disabled={pending}>
+              <SaveIcon data-icon="inline-start" />
+              {pending ? 'Guardando...' : 'Guardar'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -112,16 +279,19 @@ export const Route = createFileRoute('/usuarios')({
 function UsuariosPage() {
   const { currentUser, users: initialUsers } = Route.useLoaderData()
   const doCreateUser = useServerFn(createUser)
-  const doUpdateUserRole = useServerFn(updateUserRole)
+  const doDeleteUser = useServerFn(deleteUser)
   const fetchUsers = useServerFn(getUsers)
   const [users, setUsers] = useState(initialUsers)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState<UserRole>('user')
-  const [roleUpdating, setRoleUpdating] = useState<number | null>(null)
-  const [showPassword, setShowPassword] = useState(false)
   const [pending, setPending] = useState(false)
+  const [editing, setEditing] = useState<CurrentUser | undefined>()
+  const [editOpen, setEditOpen] = useState(false)
+  const [editKey, setEditKey] = useState(0)
+  const [deleting, setDeleting] = useState<CurrentUser | undefined>()
+  const [deletePending, setDeletePending] = useState(false)
 
   const refetchUsers = useCallback(async () => {
     try {
@@ -135,7 +305,12 @@ function UsuariosPage() {
     setUsername('')
     setPassword('')
     setRole('user')
-    setShowPassword(false)
+  }
+
+  function openEdit(user: CurrentUser) {
+    setEditing(user)
+    setEditKey(key => key + 1)
+    setEditOpen(true)
   }
 
   async function handleSubmit(event: React.FormEvent) {
@@ -164,25 +339,22 @@ function UsuariosPage() {
     }
   }
 
-  async function handleRoleChange(user: CurrentUser, nextRole: UserRole) {
-    if (nextRole === user.role) return
-    setRoleUpdating(user.id)
+  async function handleConfirmDelete() {
+    if (!deleting) return
+    setDeletePending(true)
     try {
-      const result = await doUpdateUserRole({
-        data: { userId: user.id, role: nextRole }
-      })
+      const result = await doDeleteUser({ data: { userId: deleting.id } })
       if (result.status === 'error') {
         toast.error(result.message)
         return
       }
-      toast.success(
-        `"${user.username}" ahora es ${USER_ROLE_LABEL[nextRole].toLowerCase()}.`
-      )
+      toast.success(`Cuenta "${deleting.username}" eliminada.`)
+      setDeleting(undefined)
       await refetchUsers()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
     } finally {
-      setRoleUpdating(null)
+      setDeletePending(false)
     }
   }
 
@@ -208,8 +380,8 @@ function UsuariosPage() {
         <div>
           <h1 className="text-2xl font-bold">Usuarios</h1>
           <p className="mt-2 max-w-lg text-sm text-muted-foreground">
-            Creá una cuenta para que alguien más pueda acceder al panel. No hay
-            auto-registro -- las cuentas se crean solo desde acá.
+            Creá, editá o eliminá las cuentas que acceden al panel. No hay
+            auto-registro -- las cuentas se gestionan solo desde acá.
           </p>
         </div>
         <Dialog
@@ -238,34 +410,18 @@ function UsuariosPage() {
                   autoComplete="off"
                   value={username}
                   onChange={e => setUsername(e.target.value)}
+                  maxLength={120}
                   required
                 />
               </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="new-password">Contraseña</Label>
-                <div className="relative">
-                  <Input
-                    id="new-password"
-                    type={showPassword ? 'text' : 'password'}
-                    autoComplete="new-password"
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    className="pr-10"
-                    required
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    className="absolute top-1/2 right-1 -translate-y-1/2"
-                    onClick={() => setShowPassword(v => !v)}
-                    aria-label={
-                      showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'
-                    }
-                  >
-                    {showPassword ? <EyeOffIcon /> : <EyeIcon />}
-                  </Button>
-                </div>
+                <PasswordInput
+                  id="new-password"
+                  value={password}
+                  onChange={setPassword}
+                  required
+                />
               </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="new-role">Rol</Label>
@@ -302,49 +458,130 @@ function UsuariosPage() {
                 <TableHead>Usuario</TableHead>
                 <TableHead>Rol</TableHead>
                 <TableHead>Creado</TableHead>
+                <TableHead className="text-right">
+                  <span className="sr-only">Acciones</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {users.map(user => (
-                <TableRow key={user.id}>
-                  <TableCell>
-                    <div className="flex items-center gap-2.5">
-                      <Avatar size="sm">
-                        <AvatarFallback>
-                          {user.username.charAt(0).toUpperCase()}
-                        </AvatarFallback>
-                      </Avatar>
-                      <span className="font-medium">{user.username}</span>
-                      {user.username === currentUser.username && (
-                        <span className="text-xs text-muted-foreground">
-                          (vos)
-                        </span>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    {user.id === currentUser.id ? (
-                      // El backend rechaza cambiar el rol propio (evita quedarse afuera).
-                      <Badge variant="default">
+              {users.map(user => {
+                const isSelf = user.id === currentUser.id
+                return (
+                  <TableRow key={user.id}>
+                    <TableCell>
+                      <div className="flex items-center gap-2.5">
+                        <Avatar size="sm">
+                          <AvatarFallback>
+                            {user.username.charAt(0).toUpperCase()}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span className="font-medium">{user.username}</span>
+                        {isSelf && (
+                          <span className="text-xs text-muted-foreground">
+                            (vos)
+                          </span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          user.role === 'admin' ? 'default' : 'secondary'
+                        }
+                      >
                         {USER_ROLE_LABEL[user.role]}
                       </Badge>
-                    ) : (
-                      <RoleSelect
-                        value={user.role}
-                        onChange={next => handleRoleChange(user, next)}
-                        disabled={roleUpdating === user.id}
-                      />
-                    )}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {new Date(user.created_at).toLocaleString()}
-                  </TableCell>
-                </TableRow>
-              ))}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {new Date(user.created_at).toLocaleString()}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex justify-end gap-1">
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                aria-label={`Editar ${user.username}`}
+                                onClick={() => openEdit(user)}
+                              />
+                            }
+                          >
+                            <PencilIcon />
+                          </TooltipTrigger>
+                          <TooltipContent>Editar</TooltipContent>
+                        </Tooltip>
+                        {!isSelf && (
+                          // Eliminarse a uno mismo lo rechaza el backend (quedaria afuera).
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <Button
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  aria-label={`Eliminar ${user.username}`}
+                                  onClick={() => setDeleting(user)}
+                                />
+                              }
+                            >
+                              <Trash2Icon />
+                            </TooltipTrigger>
+                            <TooltipContent>Eliminar</TooltipContent>
+                          </Tooltip>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
             </TableBody>
           </Table>
         </CardContent>
       </Card>
+
+      {editing && (
+        <EditUserDialog
+          key={editKey}
+          user={editing}
+          isSelf={editing.id === currentUser.id}
+          open={editOpen}
+          onOpenChange={setEditOpen}
+          onSaved={refetchUsers}
+        />
+      )}
+
+      <Dialog
+        open={deleting !== undefined}
+        onOpenChange={open => {
+          if (!open) setDeleting(undefined)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              ¿Eliminar la cuenta "{deleting?.username}"?
+            </DialogTitle>
+            <DialogDescription>
+              La persona pierde el acceso de inmediato y no se puede deshacer.
+              Las incidencias que haya registrado se conservan.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="outline" />}>
+              Cancelar
+            </DialogClose>
+            <Button
+              variant="destructive"
+              onClick={handleConfirmDelete}
+              disabled={deletePending}
+            >
+              <Trash2Icon data-icon="inline-start" />
+              {deletePending ? 'Eliminando...' : 'Eliminar'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

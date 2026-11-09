@@ -394,8 +394,9 @@ function. This is UX only -- the backend returns `403` to that role on everythin
 the real barrier (server functions are browser-callable RPC, so hiding UI protects nothing).
 `requireSession` now returns the `SessionUser` (`{id, username, role}`) from `/auth/me`, cached per
 token for 60s in `backend.server.ts`'s `fetchSessionUser` (root `beforeLoad` runs on every
-navigation; uncached, each click would cost a Turso round-trip on the backend). `updateUserRole`
-clears that cache wholesale. The shell/sidebar read the session via `useSessionUser()`
+navigation; uncached, each click would cost a Turso round-trip on the backend). `updateUser`/
+`deleteUser` (`/usuarios`: edit dialog for username/new password/role, delete with confirmation;
+own row can only change its password and has no delete button) clear that cache wholesale. The shell/sidebar read the session via `useSessionUser()`
 (`useRouterState` on the root match's context, `null` until `beforeLoad` resolves -- the shell also
 renders in SSR before it runs). **`AutoRefreshProvider`/`BenchmarkScheduleProvider` take an
 `enabled` prop** and `__root.tsx` only enables them for full-access roles: otherwise an
@@ -408,7 +409,9 @@ manual-incident-form-dialog.tsx`, `components/incident-catalog-card.tsx`, server
 `server/incidents.functions.ts`): incidents registered by hand (not from C3). Tabs: Registro
 (table + edit/delete, client-side pagination over the loaded date range), Resumen (reuses
 `IncidentHierarchy` by mapping each row to `IncidentRecord`), Catálogo (admin only: add/
-deactivate options, "Importar desde C3"). Only `date`/`dateEnd` are `loaderDeps`; mutations call
+deactivate options, "Importar del historial" -- reads the attention history already stored in
+Turso via `POST /incidents/catalog/import-c3`, it does NOT contact C3; renamed from "Importar desde
+C3" after that label made users think C3 access was required, which the team no longer has). Only `date`/`dateEnd` are `loaderDeps`; mutations call
 `router.invalidate()`. Category fields use the shadcn `combobox` (search; ~90 ámbitos in real
 data) fed by active catalog options -- when editing, the incident's current value is offered even
 if since deactivated (the backend accepts that case). The form dialog seeds its state once on

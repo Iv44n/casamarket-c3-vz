@@ -168,3 +168,104 @@ def test_create_user_rejects_an_unknown_role(api):
     )
 
     assert response.status_code == 422
+
+
+def test_patch_user_can_rename_and_reset_password(api):
+    admin_headers = api.user_headers("boss", "admin")
+    luis = api.create_user("luis", "user")
+    old_headers = api.headers_for(luis)
+
+    response = api.client.patch(
+        f"/auth/users/{luis.id}",
+        json={"username": "Luis.Gomez", "password": "nueva-clave"},
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["username"] == "luis.gomez"
+    login = api.client.post(
+        "/auth/login", json={"username": "luis.gomez", "password": "nueva-clave"}
+    )
+    assert login.status_code == 200
+    # El token emitido con el username viejo deja de servir: tiene que volver a entrar.
+    assert api.client.get("/extraction/status", headers=old_headers).status_code == 401
+
+
+def test_patch_user_rename_to_an_existing_username_returns_409(api):
+    admin_headers = api.user_headers("boss", "admin")
+    api.create_user("luis", "user")
+    ana = api.create_user("ana", "user")
+
+    response = api.client.patch(
+        f"/auth/users/{ana.id}", json={"username": "luis"}, headers=admin_headers
+    )
+
+    assert response.status_code == 409
+
+
+def test_patch_user_with_no_changes_returns_400(api):
+    admin_headers = api.user_headers("boss", "admin")
+    ana = api.create_user("ana", "user")
+
+    response = api.client.patch(f"/auth/users/{ana.id}", json={}, headers=admin_headers)
+
+    assert response.status_code == 400
+
+
+def test_admin_can_change_only_the_password_of_their_own_account(api):
+    boss = api.create_user("boss", "admin")
+    headers = api.headers_for(boss)
+
+    renamed = api.client.patch(
+        f"/auth/users/{boss.id}", json={"username": "otro"}, headers=headers
+    )
+    password = api.client.patch(
+        f"/auth/users/{boss.id}", json={"password": "nueva", "username": "BOSS"}, headers=headers
+    )
+
+    assert renamed.status_code == 400
+    assert password.status_code == 200
+    assert (
+        api.client.post("/auth/login", json={"username": "boss", "password": "nueva"}).status_code
+        == 200
+    )
+
+
+def test_delete_user_revokes_access_on_the_next_request(api):
+    admin_headers = api.user_headers("boss", "admin")
+    luis = api.create_user("luis", "user")
+    luis_headers = api.headers_for(luis)
+    assert api.client.get("/extraction/status", headers=luis_headers).status_code == 200
+
+    response = api.client.delete(f"/auth/users/{luis.id}", headers=admin_headers)
+
+    assert response.status_code == 204
+    assert api.client.get("/extraction/status", headers=luis_headers).status_code == 401
+    assert [u["username"] for u in api.client.get("/auth/users", headers=admin_headers).json()] == [
+        "boss"
+    ]
+
+
+def test_delete_user_rejects_your_own_account(api):
+    boss = api.create_user("boss", "admin")
+
+    response = api.client.delete(f"/auth/users/{boss.id}", headers=api.headers_for(boss))
+
+    assert response.status_code == 400
+
+
+def test_delete_user_returns_404_for_an_unknown_user(api):
+    response = api.client.delete("/auth/users/999", headers=api.user_headers("boss", "admin"))
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize("role", ["user", "incidencias"])
+def test_delete_user_requires_admin(api, role: str):
+    target = api.create_user("luis", "user")
+
+    response = api.client.delete(
+        f"/auth/users/{target.id}", headers=api.user_headers("ana", role)
+    )
+
+    assert response.status_code == 403

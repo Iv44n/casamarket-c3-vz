@@ -161,31 +161,81 @@ def test_migration_backfills_role_from_is_admin_on_a_pre_existing_users_table():
     ]
 
 
-def test_update_user_role_changes_role_and_keeps_is_admin_in_sync():
+def test_update_user_changes_role_and_keeps_is_admin_in_sync():
     conn = _conn()
     store.create_user(conn, "boss", "h", role="admin", created_at="2026-11-09T00:00:00")
     ana = store.create_user(conn, "ana", "h", role="user", created_at="2026-11-09T00:00:00")
 
-    promoted = store.update_user_role(conn, ana.id, "admin")
+    promoted = store.update_user(conn, ana.id, role="admin")
     assert promoted is not None and promoted.role == "admin"
     assert conn.execute("SELECT is_admin FROM users WHERE id = ?", (ana.id,)).fetchone()[0] == 1
 
-    restricted = store.update_user_role(conn, ana.id, "incidencias")
+    restricted = store.update_user(conn, ana.id, role="incidencias")
     assert restricted is not None and restricted.role == "incidencias"
     assert conn.execute("SELECT is_admin FROM users WHERE id = ?", (ana.id,)).fetchone()[0] == 0
 
 
-def test_update_user_role_refuses_to_remove_the_last_admin():
+def test_update_user_renames_normalizing_and_changes_password():
+    conn = _conn()
+    ana = store.create_user(conn, "ana", "old-hash", role="user", created_at="2026-11-09T00:00:00")
+
+    updated = store.update_user(conn, ana.id, username="  Ana.Perez ", password_hash="new-hash")
+
+    assert updated is not None
+    assert updated.username == "ana.perez"
+    assert updated.password_hash == "new-hash"
+    assert updated.role == "user"
+    assert store.get_user_by_username(conn, "ana") is None
+
+
+def test_update_user_rejects_a_username_owned_by_another_account():
+    conn = _conn()
+    store.create_user(conn, "luis", "h", role="user", created_at="2026-11-09T00:00:00")
+    ana = store.create_user(conn, "ana", "h", role="user", created_at="2026-11-09T00:00:00")
+
+    with pytest.raises(store.UsernameTakenError):
+        store.update_user(conn, ana.id, username="LUIS")
+
+
+def test_update_user_keeping_the_same_username_with_other_casing_is_not_a_conflict():
+    conn = _conn()
+    ana = store.create_user(conn, "ana", "h", role="user", created_at="2026-11-09T00:00:00")
+
+    assert store.update_user(conn, ana.id, username="ANA").username == "ana"
+
+
+def test_update_user_refuses_to_remove_the_last_admin():
     conn = _conn()
     boss = store.create_user(conn, "boss", "h", role="admin", created_at="2026-11-09T00:00:00")
 
     with pytest.raises(store.LastAdminError):
-        store.update_user_role(conn, boss.id, "user")
+        store.update_user(conn, boss.id, role="user")
 
     assert store.get_user_by_id(conn, boss.id).role == "admin"
 
 
-def test_update_user_role_returns_none_for_an_unknown_user():
+def test_update_user_returns_none_for_an_unknown_user():
     conn = _conn()
 
-    assert store.update_user_role(conn, 999, "user") is None
+    assert store.update_user(conn, 999, role="user") is None
+
+
+def test_delete_user_removes_the_account():
+    conn = _conn()
+    store.create_user(conn, "boss", "h", role="admin", created_at="2026-11-09T00:00:00")
+    ana = store.create_user(conn, "ana", "h", role="user", created_at="2026-11-09T00:00:00")
+
+    assert store.delete_user(conn, ana.id) is True
+
+    assert store.get_user_by_id(conn, ana.id) is None
+    assert store.delete_user(conn, ana.id) is False
+
+
+def test_delete_user_refuses_to_delete_the_last_admin_but_allows_one_of_two():
+    conn = _conn()
+    boss = store.create_user(conn, "boss", "h", role="admin", created_at="2026-11-09T00:00:00")
+    second = store.create_user(conn, "jefa", "h", role="admin", created_at="2026-11-09T00:00:00")
+
+    assert store.delete_user(conn, second.id) is True
+    with pytest.raises(store.LastAdminError):
+        store.delete_user(conn, boss.id)

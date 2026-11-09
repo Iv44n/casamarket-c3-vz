@@ -160,25 +160,70 @@ def count_admins(conn: DBConnection) -> int:
     return cursor.fetchone()[0]
 
 
-def update_user_role(conn: DBConnection, user_id: int, role: str) -> UserRecord | None:
-    """None si el usuario no existe. LastAdminError si el cambio dejaria el sistema sin ningun
-    admin (nadie podria volver a crear cuentas ni cambiar roles). Mismo check-then-write que
-    create_user -- ventana TOCTOU chica, aceptable para una operacion admin-only de bajo volumen."""
-    _validate_role(role)
+def update_user(
+    conn: DBConnection,
+    user_id: int,
+    *,
+    username: str | None = None,
+    password_hash: str | None = None,
+    role: str | None = None,
+) -> UserRecord | None:
+    """Edita los campos que vengan (None = no tocar). None si el usuario no existe.
+    UsernameTakenError si el username nuevo ya es de otra cuenta; LastAdminError si el cambio
+    dejaria el sistema sin ningun admin (nadie podria volver a gestionar cuentas). Mismo
+    check-then-write que create_user -- ventana TOCTOU chica, aceptable para una operacion
+    admin-only de bajo volumen.
+
+    Ojo: renombrar invalida en la practica los tokens ya emitidos de esa cuenta (el claim
+    username deja de coincidir, ver dependencies._resolve_role) -- la persona tiene que volver a
+    iniciar sesion. Cambiar la contraseña NO invalida tokens (son stateless, ver CLAUDE.md)."""
     current = get_user_by_id(conn, user_id)
     if current is None:
         return None
-    if current.role == role:
-        return current
-    if current.role == ROLE_ADMIN and count_admins(conn) <= 1:
-        raise LastAdminError("No se puede quitar el rol admin a la unica cuenta admin")
 
-    conn.execute(
-        "UPDATE users SET role = ?, is_admin = ? WHERE id = ?",
-        (role, int(role == ROLE_ADMIN), user_id),
-    )
-    conn.commit()
+    assignments: list[str] = []
+    params: list[object] = []
+    if username is not None:
+        normalized = normalize_username(username)
+        if not normalized:
+            raise ValueError("El usuario no puede estar vacio")
+        if normalized != current.username:
+            other = get_user_by_username(conn, normalized)
+            if other is not None and other.id != user_id:
+                raise UsernameTakenError(f"El usuario {username!r} ya existe")
+            assignments.append("username = ?")
+            params.append(normalized)
+    if password_hash is not None:
+        assignments.append("password_hash = ?")
+        params.append(password_hash)
+    if role is not None:
+        _validate_role(role)
+        if role != current.role:
+            if current.role == ROLE_ADMIN and count_admins(conn) <= 1:
+                raise LastAdminError("No se puede quitar el rol admin a la unica cuenta admin")
+            assignments.extend(["role = ?", "is_admin = ?"])
+            params.extend([role, int(role == ROLE_ADMIN)])
+
+    if assignments:
+        conn.execute(
+            f"UPDATE users SET {', '.join(assignments)} WHERE id = ?", (*params, user_id)
+        )
+        conn.commit()
     return get_user_by_id(conn, user_id)
+
+
+def delete_user(conn: DBConnection, user_id: int) -> bool:
+    """Borrado fisico de la cuenta (no hay nada que la referencie por FK: las incidencias
+    manuales guardan created_by como texto, asi que su autoria se conserva). False si no existe;
+    LastAdminError si es la unica cuenta admin."""
+    current = get_user_by_id(conn, user_id)
+    if current is None:
+        return False
+    if current.role == ROLE_ADMIN and count_admins(conn) <= 1:
+        raise LastAdminError("No se puede eliminar la unica cuenta admin")
+    conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    conn.commit()
+    return True
 
 
 def list_users(conn: DBConnection) -> list[UserRecord]:

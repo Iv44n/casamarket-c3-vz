@@ -15,6 +15,7 @@ import type {
   CreateUserResult,
   CurrentUser,
   DailyCaseCount,
+  DeleteUserResult,
   ExtractionStatus,
   HistoricalBackfillStatus,
   IncidentCatalogOption,
@@ -26,7 +27,7 @@ import type {
   ReportRow,
   ReportRowsPage,
   SessionUser,
-  UpdateUserRoleResult,
+  UpdateUserResult,
   UserRole
 } from './schemas'
 
@@ -169,26 +170,46 @@ export async function createUserOnBackend(
   if (response.status === 403) return { status: 'forbidden' }
   return { status: 'created', user: await response.json() }
 }
-export async function updateUserRoleOnBackend(
+export async function updateUserOnBackend(
   userId: number,
-  role: UserRole
-): Promise<UpdateUserRoleResult> {
+  changes: { username?: string; password?: string; role?: UserRole }
+): Promise<UpdateUserResult> {
   const response = await backendFetch(
     `/auth/users/${userId}`,
     {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role })
+      body: JSON.stringify(changes)
     },
-    { allowedStatuses: [400, 403, 409] }
+    { allowedStatuses: [400, 403, 409, 422] }
   )
+  if (response.status === 404) {
+    return { status: 'error', message: 'El usuario ya no existe.' }
+  }
   if (!response.ok) {
     return { status: 'error', message: await readErrorDetail(response) }
   }
   // La sesion cacheada de esa cuenta (keyed por SU token, que aca no conocemos) quedaria con el
-  // rol viejo hasta el TTL -- vaciar todo es barato (un /auth/me por usuario activo).
+  // rol/username viejo hasta el TTL -- vaciar todo es barato (un /auth/me por usuario activo).
   _sessionUserCache.clear()
   return { status: 'updated', user: await response.json() }
+}
+export async function deleteUserOnBackend(
+  userId: number
+): Promise<DeleteUserResult> {
+  const response = await backendFetch(
+    `/auth/users/${userId}`,
+    { method: 'DELETE' },
+    { allowedStatuses: [400, 403, 409] }
+  )
+  if (response.status === 404) {
+    return { status: 'error', message: 'El usuario ya no existe.' }
+  }
+  if (!response.ok) {
+    return { status: 'error', message: await readErrorDetail(response) }
+  }
+  _sessionUserCache.clear()
+  return { status: 'deleted' }
 }
 
 // --- Incidencias manuales ---------------------------------------------------------------------

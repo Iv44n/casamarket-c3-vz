@@ -46,8 +46,12 @@ these re-read the account's **current** role from Turso instead of trusting the 
 (a token lives 14 days; a `user` demoted to `incidencias` must not keep full access that long), via
 an in-memory per-`user_id` cache with a **60s TTL** (`_role_cache`, plain dict + lock -- same
 single-process assumption as `extraction/state.py`/`rate_limit.py`). `PATCH /auth/users/{id}`
-(admin-only: change a role; `400` on your own account, `409` if it would leave zero admins)
-calls `invalidate_cached_role()`, so a role change applies on that account's very next request.
+(admin-only, partial: `username`/`password`/`role`; on your own account only the password, else
+`400`; `409` for a taken username or if it would leave zero admins) and `DELETE /auth/users/{id}`
+(hard delete; `400` on yourself, `409` for the last admin) both call `invalidate_cached_role()`,
+so a role change or deletion applies on that account's very next request (`403`/`401`). Renaming
+also logs that person out in practice (the token's username claim stops matching, see below);
+changing a password does **not** revoke already-issued tokens (stateless JWT, see the gap note).
 `_resolve_role` also compares the username, not just the id: the dev Turso `users` table has been
 seen to get recreated (AUTOINCREMENT back to 1), and an old token's `user_id` must not inherit
 whoever owns that id now. The `role` column was added by an additive migration
@@ -223,7 +227,8 @@ app/
                        manual_incident, incident_catalog_option). Values are stored as text (not
                        FKs) so deactivating a catalog option never rewrites history; deletes are
                        logical (deleted_at/deleted_by) because any `incidencias` account can delete
-                       anyone's incidents. The catalog is seeded from C3 via
+                       anyone's incidents. The catalog is seeded from the C3 history ALREADY in
+                       Turso (no live C3 access needed -- the team lost it in Nov 2026) via
                        extraction/store.py's distinct_incident_values() (UNION over attention/
                        outboundattention/calloutgoing row_json, drops NULL/''/'-'/'N.A') with
                        INSERT OR IGNORE -- idempotent, never re-activates an option an admin
@@ -262,7 +267,7 @@ app/
     data.py              GET /data/{report_name} -- parsed rows from the latest download, plus
                          GET /data/{report_name}/history -- every downloaded day's rows concatenated
     auth.py               POST /auth/login (public), GET /auth/me, GET/POST /auth/users and
-                          PATCH /auth/users/{id} (admin-only) -- the only router NOT given a
+                          PATCH/DELETE /auth/users/{id} (admin-only) -- the only router NOT given a
                           router-level auth dependency, since /login has to stay reachable
                           without a token yet
     incidents.py           /incidents CRUD (all 3 roles) + /incidents/catalog (read: all roles;
