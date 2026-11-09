@@ -347,7 +347,7 @@ export function ManualIncidentFormDialog({
                   showClear={form.cliente !== ''}
                   maxLength={200}
                 />
-                <ComboboxContent>
+                <ComboboxContent className="w-[min(60rem,calc(100vw-2rem))]">
                   {clientsLoading && (
                     <div className="px-3 py-2 text-sm text-muted-foreground">
                       Cargando clientes...
