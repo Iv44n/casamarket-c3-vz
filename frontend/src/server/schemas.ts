@@ -210,6 +210,12 @@ export type ClientSuggestion = {
   detail: string
   document: string
 }
+export type ClientSuggestionsPage = {
+  rows: ClientSuggestion[]
+  page: number
+  page_size: number
+  has_more: boolean
+}
 export const manualIncidentInputSchema = z.object({
   fecha: z.string().regex(ISO_DATE_REGEX),
   hora: z.string().regex(/^(([01]\d|2[0-3]):[0-5]\d)?$/),

@@ -51,8 +51,10 @@ export const getIncidentAgentSuggestions = createServerFn({
 export const getIncidentClientSuggestions = createServerFn({
   method: 'GET'
 })
-  .validator((query: string) => query)
-  .handler(async ({ data }) => fetchIncidentClientSuggestions(data))
+  .validator((data: { query: string; page: number; pageSize: number }) => data)
+  .handler(async ({ data }) =>
+    fetchIncidentClientSuggestions(data.query, data.page, data.pageSize)
+  )
 
 export const addCatalogOption = createServerFn({ method: 'POST' })
   .validator(catalogOptionCreateSchema)

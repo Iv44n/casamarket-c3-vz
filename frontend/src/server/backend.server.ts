@@ -11,7 +11,7 @@ import type {
   BenchmarkRunStatus,
   CatalogOptionMutationResult,
   ClientCaseCount,
-  ClientSuggestion,
+  ClientSuggestionsPage,
   ContactsSyncStatus,
   CreateUserResult,
   CurrentUser,
@@ -271,9 +271,15 @@ export async function fetchIncidentAgentSuggestions(): Promise<string[]> {
   return response.json()
 }
 export async function fetchIncidentClientSuggestions(
-  query: string
-): Promise<ClientSuggestion[]> {
-  const params = new URLSearchParams({ q: query })
+  query: string,
+  page: number,
+  pageSize: number
+): Promise<ClientSuggestionsPage> {
+  const params = new URLSearchParams({
+    q: query,
+    page: String(page),
+    page_size: String(pageSize)
+  })
   const response = await backendFetch(`/incidents/lookups/clients?${params}`)
   return response.json()
 }

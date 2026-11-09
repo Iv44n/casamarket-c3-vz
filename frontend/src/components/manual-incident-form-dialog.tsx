@@ -164,9 +164,14 @@ export function ManualIncidentFormDialog({
   const [clientQuery, setClientQuery] = useState(incident?.cliente ?? '')
   const [clients, setClients] = useState<ClientSuggestion[]>([])
   const [clientsLoading, setClientsLoading] = useState(false)
+  const [clientsLoadingMore, setClientsLoadingMore] = useState(false)
   const [clientsError, setClientsError] = useState<string | null>(null)
   const [clientSelectorOpen, setClientSelectorOpen] = useState(false)
+  const [clientPage, setClientPage] = useState(0)
+  const [clientHasMore, setClientHasMore] = useState(true)
   const clientRequestId = useRef(0)
+  const clientListRef = useRef<HTMLDivElement>(null)
+  const clientSentinelRef = useRef<HTMLDivElement>(null)
   const [pending, setPending] = useState(false)
 
   useEffect(() => {
@@ -176,34 +181,86 @@ export function ManualIncidentFormDialog({
   }, [incident, sessionUser?.username])
 
   const loadClients = useCallback(
-    async (query: string) => {
-      const requestId = ++clientRequestId.current
-      setClientsLoading(true)
+    async (query: string, page: number, append: boolean) => {
+      const requestId = append
+        ? clientRequestId.current
+        : ++clientRequestId.current
+      if (append) {
+        setClientsLoadingMore(true)
+      } else {
+        setClientsLoading(true)
+        setClientsLoadingMore(false)
+      }
       setClientsError(null)
       try {
-        const values = await searchClients({ data: query })
-        if (requestId === clientRequestId.current) setClients(values)
+        const result = await searchClients({
+          data: { query, page, pageSize: 50 }
+        })
+        if (requestId !== clientRequestId.current) return
+        setClients(current =>
+          append ? [...current, ...result.rows] : result.rows
+        )
+        setClientPage(result.page)
+        setClientHasMore(result.has_more)
       } catch (err) {
         if (requestId === clientRequestId.current) {
           setClientsError(err instanceof Error ? err.message : String(err))
         }
       } finally {
-        if (requestId === clientRequestId.current) setClientsLoading(false)
+        if (requestId === clientRequestId.current) {
+          setClientsLoading(false)
+          setClientsLoadingMore(false)
+        }
       }
     },
     [searchClients]
   )
 
   useEffect(() => {
+    if (!clientSelectorOpen) return
+    clientRequestId.current += 1
     const query = clientQuery.trim()
-    if (!query || !clientSelectorOpen) return
+    setClients([])
+    setClientPage(0)
+    setClientHasMore(true)
     const timer = window.setTimeout(() => {
-      if (clientSelectorOpen) void loadClients(query)
+      void loadClients(query, 1, false)
     }, 250)
     return () => {
       window.clearTimeout(timer)
     }
   }, [clientQuery, clientSelectorOpen, loadClients])
+
+  useEffect(() => {
+    const sentinel = clientSentinelRef.current
+    const root = clientListRef.current
+    if (!clientSelectorOpen || !sentinel || !root || !clientHasMore) return
+    const observer = new IntersectionObserver(
+      entries => {
+        if (
+          entries[0]?.isIntersecting &&
+          !clientsLoading &&
+          !clientsLoadingMore &&
+          !clientsError &&
+          clientPage > 0
+        ) {
+          void loadClients(clientQuery.trim(), clientPage + 1, true)
+        }
+      },
+      { root, rootMargin: '0px 0px 160px', threshold: 0.1 }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [
+    clientHasMore,
+    clientPage,
+    clientQuery,
+    clientSelectorOpen,
+    clientsError,
+    clientsLoading,
+    clientsLoadingMore,
+    loadClients
+  ])
 
   const optionsByCategory = useMemo(() => {
     const result = {} as Record<IncidentCategory, string[]>
@@ -241,12 +298,10 @@ export function ManualIncidentFormDialog({
 
   function handleClientSelectorOpenChange(open: boolean) {
     setClientSelectorOpen(open)
-    if (open && clients.length === 0 && !clientsLoading) void loadClients('')
   }
 
   function handleClientQueryChange(value: string) {
     setClientQuery(value)
-    if (!value.trim() && clientSelectorOpen) void loadClients('')
   }
 
   async function handleSubmit(event: React.FormEvent) {
@@ -332,6 +387,7 @@ export function ManualIncidentFormDialog({
               <Label htmlFor="incident-cliente">Cliente</Label>
               <Combobox
                 items={clients.map(client => client.name)}
+                filter={null}
                 value={form.cliente || null}
                 inputValue={clientQuery}
                 onInputValueChange={handleClientQueryChange}
@@ -357,43 +413,50 @@ export function ManualIncidentFormDialog({
                     <button
                       type="button"
                       className="w-full px-3 py-2 text-left text-sm text-destructive"
-                      onClick={() => void loadClients(clientQuery.trim())}
+                      onClick={() =>
+                        void loadClients(clientQuery.trim(), 1, false)
+                      }
                     >
                       No se pudieron cargar los clientes. Reintentar
                     </button>
                   )}
-                  {!clientsLoading && !clientsError && (
+                  {!clientsLoading && !clientsError && clients.length === 0 && (
                     <ComboboxEmpty>
                       No hay clientes que coincidan con la búsqueda.
                     </ComboboxEmpty>
                   )}
-                  <ComboboxList>
-                    {(item: string) => {
-                      const client = clients.find(
-                        option => option.name === item
-                      )
-                      return (
-                        <ComboboxItem key={item} value={item}>
-                          {item}
-                          {client?.document && (
-                            <span className="text-muted-foreground">
-                              DNI: {client.document}
-                            </span>
-                          )}
-                          {client?.phone && (
-                            <span className="text-muted-foreground">
-                              Tel: {client.phone}
-                            </span>
-                          )}
-                          {client?.detail && (
-                            <span className="text-muted-foreground">
-                              {client.detail}
-                            </span>
-                          )}
-                        </ComboboxItem>
-                      )
-                    }}
+                  <ComboboxList ref={clientListRef}>
+                    {clients.map(client => (
+                      <ComboboxItem key={client.name} value={client.name}>
+                        {client.name}
+                        {client.document && (
+                          <span className="text-muted-foreground">
+                            DNI: {client.document}
+                          </span>
+                        )}
+                        {client.phone && (
+                          <span className="text-muted-foreground">
+                            Tel: {client.phone}
+                          </span>
+                        )}
+                        {client.detail && (
+                          <span className="text-muted-foreground">
+                            {client.detail}
+                          </span>
+                        )}
+                      </ComboboxItem>
+                    ))}
+                    <div
+                      ref={clientSentinelRef}
+                      aria-hidden="true"
+                      className="h-px"
+                    />
                   </ComboboxList>
+                  {clientsLoadingMore && (
+                    <div className="px-3 py-2 text-sm text-muted-foreground">
+                      Cargando más clientes...
+                    </div>
+                  )}
                 </ComboboxContent>
               </Combobox>
             </div>

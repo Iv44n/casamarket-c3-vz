@@ -103,6 +103,13 @@ class ClientSuggestionPublic(BaseModel):
     document: str
 
 
+class ClientSuggestionsPage(BaseModel):
+    rows: list[ClientSuggestionPublic]
+    page: int
+    page_size: int
+    has_more: bool
+
+
 def _incident_public(incident: store.ManualIncident) -> ManualIncidentPublic:
     return ManualIncidentPublic(**incident.__dict__)
 
@@ -188,14 +195,21 @@ def list_agent_suggestions() -> list[str]:
 @router.get("/lookups/clients")
 def search_client_suggestions(
     q: str = Query(default="", max_length=100),
-) -> list[ClientSuggestionPublic]:
-    """Clientes disponibles para el selector inicial o filtrados por texto."""
-    if not q.strip():
-        return [ClientSuggestionPublic(**vars(c)) for c in lookups.list_clients()]
-    if not lookups.is_searchable(q):
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+) -> ClientSuggestionsPage:
+    """Clientes paginados disponibles para el selector inicial o filtrados por texto."""
+    if q.strip() and not lookups.is_searchable(q):
         lookups.warm_in_background()
-        return []
-    return [ClientSuggestionPublic(**vars(c)) for c in lookups.search_clients(q)]
+        rows, has_more = [], False
+    else:
+        rows, has_more = lookups.client_page(q, page, page_size)
+    return ClientSuggestionsPage(
+        rows=[ClientSuggestionPublic(**vars(c)) for c in rows],
+        page=page,
+        page_size=page_size,
+        has_more=has_more,
+    )
 
 
 @router.get("/catalog")

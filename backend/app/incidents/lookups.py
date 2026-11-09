@@ -196,10 +196,10 @@ def _load_c3_clients() -> list[_Entry]:
         )
         candidates.append(
             ClientSuggestion(
-                name,
-                _clean_phone(contact["telefono"]),
-                detail,
-                _text(contact["documento"]),
+                name=name,
+                phone=_clean_phone(contact["telefono"]),
+                document=_text(contact["documento"]),
+                detail=detail,
             )
         )
     for client in history:
@@ -293,15 +293,17 @@ def _search_mode(query: str) -> str | None:
     return "name" if len(_normalize(stripped)) >= MIN_QUERY_CHARS else None
 
 
-def search_clients(query: str, limit: int = MAX_RESULTS) -> list[ClientSuggestion]:
+def client_page(
+    query: str, page: int, page_size: int
+) -> tuple[list[ClientSuggestion], bool]:
     """Clientes que coinciden con `query`, como mucho `limit`. Una consulta solo de digitos
     (telefono, con o sin espacios/guiones/+) busca por telefono; cualquier otra busca por nombre,
     razon social o alias, exigiendo que aparezcan TODAS las palabras. Primero los que empiezan con
     lo escrito. Mismo cliente en varias fuentes se devuelve una sola vez (gana el padron/historial
     de C3 sobre lo escrito a mano)."""
     mode = _search_mode(query)
-    if mode is None:
-        return []
+    if query.strip() and mode is None:
+        return [], False
 
     if mode == "phone":
         digits = _digits(query)
@@ -312,7 +314,7 @@ def search_clients(query: str, limit: int = MAX_RESULTS) -> list[ClientSuggestio
         def rank(entry: _Entry) -> tuple:
             return (not entry.phone_digits.startswith(digits), entry.name_norm, entry.key)
 
-    else:
+    elif mode == "name":
         needle = _normalize(query)
         tokens = needle.split()
 
@@ -321,6 +323,13 @@ def search_clients(query: str, limit: int = MAX_RESULTS) -> list[ClientSuggestio
 
         def rank(entry: _Entry) -> tuple:
             return (not entry.name_norm.startswith(needle), entry.name_norm, entry.key)
+
+    else:
+        def match(entry: _Entry) -> bool:
+            return True
+
+        def rank(entry: _Entry) -> tuple:
+            return (entry.name_norm, entry.key)
 
     # Se deduplica ANTES de ordenar y con C3 primero: si el mismo cliente coincide en las dos
     # fuentes gana el dato de C3, sin importar como queden ordenados despues.
@@ -332,17 +341,14 @@ def search_clients(query: str, limit: int = MAX_RESULTS) -> list[ClientSuggestio
         seen.add(entry.key)
         unique.append(entry)
     unique.sort(key=rank)
-    return [entry.suggestion for entry in unique[:limit]]
+    start = (page - 1) * page_size
+    selected = unique[start : start + page_size]
+    return [entry.suggestion for entry in selected], start + page_size < len(unique)
+
+
+def search_clients(query: str, limit: int = MAX_RESULTS) -> list[ClientSuggestion]:
+    return client_page(query, 1, limit)[0]
 
 
 def list_clients() -> list[ClientSuggestion]:
-    """Todos los clientes disponibles para poblar el selector inicial del formulario."""
-    unique: list[_Entry] = []
-    seen: set[str] = set()
-    for entry in (*_c3_clients.get(), *_manual_clients.get()):
-        if entry.key in seen:
-            continue
-        seen.add(entry.key)
-        unique.append(entry)
-    unique.sort(key=lambda entry: (entry.name_norm, entry.key))
-    return [entry.suggestion for entry in unique]
+    return client_page("", 1, MAX_RESULTS)[0]
