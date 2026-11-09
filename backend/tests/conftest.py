@@ -29,3 +29,18 @@ def minimal_pdf_bytes(text: str) -> bytes:
         b"startxref\n" + str(xref_offset).encode() + b"\n%%EOF"
     )
     return pdf
+
+
+import pytest
+
+from app.auth import dependencies as auth_dependencies
+
+
+@pytest.fixture(autouse=True)
+def clean_role_cache():
+    # Cache de roles en memoria de proceso (auth/dependencies.py) -- cada test arma su propia DB
+    # con ids que arrancan en 1, asi que un rol cacheado por un test no debe filtrarse al
+    # siguiente.
+    auth_dependencies.clear_role_cache()
+    yield
+    auth_dependencies.clear_role_cache()

@@ -1597,3 +1597,43 @@ def list_benchmark_runs(conn: DBConnection, limit: int = 50) -> list[dict]:
             }
         )
     return runs
+
+
+# Clasificacion de incidencias tal como viene en cada fila de C3 (row_json) -- mismos headers que
+# frontend/src/lib/incident-analytics.ts's INCIDENT_FIELD. La usa incidents/store.py para sembrar
+# el catalogo de incidencias manuales con los valores que C3 ya usa (POST
+# /incidents/catalog/import-c3); vive aca porque estas tablas son de este modulo.
+INCIDENT_CATEGORY_HEADERS: dict[str, str] = {
+    "origen": "Origen de incidencia",
+    "tipo": "Tipo de incidencia",
+    "ambito": "Ámbito de incidencia",
+    "resultado": "Resultado de la atención",
+}
+_INCIDENT_SOURCE_TABLES = ("attention", "outboundattention", "calloutgoing")
+# Placeholders de C3 para "sin valor" (verificado contra la Turso real el 2026-11-09: NULL, ''
+# y 'N.A' aparecen en las 4 categorias). 'NO APLICA' NO esta aca a proposito: es una opcion real
+# del formulario de C3, se importa y un admin puede desactivarla si no la quiere.
+_EMPTY_INCIDENT_VALUES = frozenset({"", "-", "n.a"})
+
+
+def distinct_incident_values(conn: DBConnection) -> dict[str, list[str]]:
+    """Valores distintos de cada categoria de incidencia en las 3 tablas fuente, sin
+    placeholders vacios, ordenados. Un solo round-trip (UNION de 4 categorias x 3 tablas) --
+    turso_serverless paga ~0.4s por execute()."""
+    selects: list[str] = []
+    params: list[str] = []
+    for category, header in INCIDENT_CATEGORY_HEADERS.items():
+        for table in _INCIDENT_SOURCE_TABLES:
+            selects.append(f"SELECT ? AS category, json_extract(row_json, ?) AS value FROM {table}")
+            params.extend([category, f'$."{header}"'])
+    cursor = conn.execute(" UNION ".join(selects), tuple(params))
+
+    values: dict[str, set[str]] = {category: set() for category in INCIDENT_CATEGORY_HEADERS}
+    for category, value in cursor.fetchall():
+        if not isinstance(value, str):
+            continue
+        cleaned = value.strip()
+        if cleaned.lower() in _EMPTY_INCIDENT_VALUES:
+            continue
+        values[category].add(cleaned)
+    return {category: sorted(found) for category, found in values.items()}

@@ -15,7 +15,7 @@ def _conn() -> sqlite3.Connection:
 def test_create_user_then_get_by_username_returns_the_same_user():
     conn = _conn()
 
-    created = store.create_user(conn, "ana", "hash123", is_admin=True, created_at="2026-08-27T00:00:00")
+    created = store.create_user(conn, "ana", "hash123", role="admin", created_at="2026-08-27T00:00:00")
 
     fetched = store.get_user_by_username(conn, "ana")
     assert fetched == created
@@ -30,7 +30,7 @@ def test_get_user_by_username_returns_none_when_not_found():
 
 def test_get_user_by_username_is_case_insensitive():
     conn = _conn()
-    store.create_user(conn, "Ana", "hash123", is_admin=False, created_at="2026-08-27T00:00:00")
+    store.create_user(conn, "Ana", "hash123", role="user", created_at="2026-08-27T00:00:00")
 
     assert store.get_user_by_username(conn, "ANA") is not None
     assert store.get_user_by_username(conn, "ana") is not None
@@ -38,34 +38,34 @@ def test_get_user_by_username_is_case_insensitive():
 
 def test_create_user_raises_username_taken_error_for_a_duplicate():
     conn = _conn()
-    store.create_user(conn, "ana", "hash123", is_admin=False, created_at="2026-08-27T00:00:00")
+    store.create_user(conn, "ana", "hash123", role="user", created_at="2026-08-27T00:00:00")
 
     with pytest.raises(store.UsernameTakenError):
-        store.create_user(conn, "ana", "hash456", is_admin=False, created_at="2026-08-27T00:00:00")
+        store.create_user(conn, "ana", "hash456", role="user", created_at="2026-08-27T00:00:00")
 
 
 def test_create_user_raises_username_taken_error_for_different_casing():
     conn = _conn()
-    store.create_user(conn, "Ana", "hash123", is_admin=False, created_at="2026-08-27T00:00:00")
+    store.create_user(conn, "Ana", "hash123", role="user", created_at="2026-08-27T00:00:00")
 
     with pytest.raises(store.UsernameTakenError):
-        store.create_user(conn, "ana", "hash456", is_admin=False, created_at="2026-08-27T00:00:00")
+        store.create_user(conn, "ana", "hash456", role="user", created_at="2026-08-27T00:00:00")
 
 
 def test_count_users_reflects_the_number_of_created_accounts():
     conn = _conn()
     assert store.count_users(conn) == 0
 
-    store.create_user(conn, "ana", "hash123", is_admin=False, created_at="2026-08-27T00:00:00")
-    store.create_user(conn, "luis", "hash456", is_admin=False, created_at="2026-08-27T00:00:00")
+    store.create_user(conn, "ana", "hash123", role="user", created_at="2026-08-27T00:00:00")
+    store.create_user(conn, "luis", "hash456", role="user", created_at="2026-08-27T00:00:00")
 
     assert store.count_users(conn) == 2
 
 
 def test_list_users_returns_every_account_ordered_by_id():
     conn = _conn()
-    store.create_user(conn, "luis", "hash456", is_admin=False, created_at="2026-08-27T00:00:00")
-    store.create_user(conn, "ana", "hash123", is_admin=True, created_at="2026-08-27T00:00:01")
+    store.create_user(conn, "luis", "hash456", role="user", created_at="2026-08-27T00:00:00")
+    store.create_user(conn, "ana", "hash123", role="admin", created_at="2026-08-27T00:00:01")
 
     users = store.list_users(conn)
 
@@ -96,7 +96,7 @@ def test_seed_bootstrap_admin_creates_the_account_when_table_is_empty():
 
 def test_seed_bootstrap_admin_is_a_noop_when_a_user_already_exists():
     conn = _conn()
-    store.create_user(conn, "ana", "hash123", is_admin=False, created_at="2026-08-27T00:00:00")
+    store.create_user(conn, "ana", "hash123", role="user", created_at="2026-08-27T00:00:00")
     auth_config = AuthConfig(
         jwt_secret="shh", bootstrap_username="admin", bootstrap_password="s3cret"
     )
@@ -115,3 +115,77 @@ def test_seed_bootstrap_admin_is_a_noop_when_bootstrap_env_vars_are_missing():
 
     assert seeded is None
     assert store.count_users(conn) == 0
+
+
+def test_create_user_with_the_incidents_role_is_not_admin():
+    conn = _conn()
+
+    user = store.create_user(conn, "rosa", "hash", role="incidencias", created_at="2026-11-09T00:00:00")
+
+    assert user.role == "incidencias"
+    assert user.is_admin is False
+    # is_admin se sigue escribiendo en sincronia con role (compatibilidad con codigo viejo).
+    assert conn.execute("SELECT is_admin FROM users WHERE id = ?", (user.id,)).fetchone()[0] == 0
+
+
+def test_create_user_rejects_an_unknown_role():
+    conn = _conn()
+
+    with pytest.raises(ValueError):
+        store.create_user(conn, "rosa", "hash", role="superuser", created_at="2026-11-09T00:00:00")
+
+
+def test_migration_backfills_role_from_is_admin_on_a_pre_existing_users_table():
+    conn = sqlite3.connect(":memory:")
+    # Shape de la tabla antes de que existiera `role` (Turso en vivo).
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            is_admin INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        INSERT INTO users (username, password_hash, is_admin, created_at)
+            VALUES ('boss', 'h', 1, '2026-08-27T00:00:00'), ('ana', 'h', 0, '2026-08-27T00:00:00');
+        """
+    )
+
+    store._init_schema(conn)
+    store._init_schema(conn)  # idempotente: la segunda corrida no toca nada
+
+    assert [(u.username, u.role) for u in store.list_users(conn)] == [
+        ("boss", "admin"),
+        ("ana", "user"),
+    ]
+
+
+def test_update_user_role_changes_role_and_keeps_is_admin_in_sync():
+    conn = _conn()
+    store.create_user(conn, "boss", "h", role="admin", created_at="2026-11-09T00:00:00")
+    ana = store.create_user(conn, "ana", "h", role="user", created_at="2026-11-09T00:00:00")
+
+    promoted = store.update_user_role(conn, ana.id, "admin")
+    assert promoted is not None and promoted.role == "admin"
+    assert conn.execute("SELECT is_admin FROM users WHERE id = ?", (ana.id,)).fetchone()[0] == 1
+
+    restricted = store.update_user_role(conn, ana.id, "incidencias")
+    assert restricted is not None and restricted.role == "incidencias"
+    assert conn.execute("SELECT is_admin FROM users WHERE id = ?", (ana.id,)).fetchone()[0] == 0
+
+
+def test_update_user_role_refuses_to_remove_the_last_admin():
+    conn = _conn()
+    boss = store.create_user(conn, "boss", "h", role="admin", created_at="2026-11-09T00:00:00")
+
+    with pytest.raises(store.LastAdminError):
+        store.update_user_role(conn, boss.id, "user")
+
+    assert store.get_user_by_id(conn, boss.id).role == "admin"
+
+
+def test_update_user_role_returns_none_for_an_unknown_user():
+    conn = _conn()
+
+    assert store.update_user_role(conn, 999, "user") is None

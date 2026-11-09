@@ -48,8 +48,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         yield c
 
 
-def _bearer(user_id: int, username: str, is_admin: bool) -> dict:
-    token, _ = security.create_access_token(user_id, username, is_admin, _AUTH_CONFIG.jwt_secret)
+def _bearer(user_id: int, username: str, is_admin: bool, role: str | None = None) -> dict:
+    role = role or ("admin" if is_admin else "user")
+    token, _ = security.create_access_token(user_id, username, role, _AUTH_CONFIG.jwt_secret)
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -60,7 +61,7 @@ def _admin_bearer(username: str = "admin") -> dict:
         store.get_connection(),
         username,
         security.hash_password("s3cret"),
-        is_admin=True,
+        role="admin",
         created_at="2026-08-27T00:00:00",
     )
     return _bearer(user.id, user.username, True)
@@ -68,7 +69,7 @@ def _admin_bearer(username: str = "admin") -> dict:
 
 def test_login_with_correct_credentials_returns_a_decodable_token(client: TestClient):
     store.create_user(
-        store.get_connection(), "ana", security.hash_password("s3cret"), False, "2026-08-27T00:00:00"
+        store.get_connection(), "ana", security.hash_password("s3cret"), "user", "2026-08-27T00:00:00"
     )
 
     response = client.post("/auth/login", json={"username": "ana", "password": "s3cret"})
@@ -83,7 +84,7 @@ def test_login_with_correct_credentials_returns_a_decodable_token(client: TestCl
 
 def test_login_with_wrong_password_returns_401(client: TestClient):
     store.create_user(
-        store.get_connection(), "ana", security.hash_password("s3cret"), False, "2026-08-27T00:00:00"
+        store.get_connection(), "ana", security.hash_password("s3cret"), "user", "2026-08-27T00:00:00"
     )
 
     response = client.post("/auth/login", json={"username": "ana", "password": "wrong"})
@@ -95,7 +96,7 @@ def test_login_with_unknown_username_returns_401_with_the_same_message_as_wrong_
     client: TestClient,
 ):
     store.create_user(
-        store.get_connection(), "ana", security.hash_password("s3cret"), False, "2026-08-27T00:00:00"
+        store.get_connection(), "ana", security.hash_password("s3cret"), "user", "2026-08-27T00:00:00"
     )
     wrong_password_response = client.post(
         "/auth/login", json={"username": "ana", "password": "wrong"}
@@ -111,7 +112,7 @@ def test_login_with_unknown_username_returns_401_with_the_same_message_as_wrong_
 
 def test_login_returns_429_after_too_many_failed_attempts(client: TestClient):
     store.create_user(
-        store.get_connection(), "ana", security.hash_password("s3cret"), False, "2026-08-27T00:00:00"
+        store.get_connection(), "ana", security.hash_password("s3cret"), "user", "2026-08-27T00:00:00"
     )
 
     for _ in range(rate_limit._MAX_ATTEMPTS):
@@ -125,10 +126,10 @@ def test_login_returns_429_after_too_many_failed_attempts(client: TestClient):
 
 def test_login_rate_limit_is_per_username_not_global(client: TestClient):
     store.create_user(
-        store.get_connection(), "ana", security.hash_password("s3cret"), False, "2026-08-27T00:00:00"
+        store.get_connection(), "ana", security.hash_password("s3cret"), "user", "2026-08-27T00:00:00"
     )
     store.create_user(
-        store.get_connection(), "luis", security.hash_password("s3cret"), False, "2026-08-27T00:00:00"
+        store.get_connection(), "luis", security.hash_password("s3cret"), "user", "2026-08-27T00:00:00"
     )
     for _ in range(rate_limit._MAX_ATTEMPTS):
         client.post("/auth/login", json={"username": "ana", "password": "wrong"})
@@ -140,7 +141,7 @@ def test_login_rate_limit_is_per_username_not_global(client: TestClient):
 
 def test_login_success_clears_the_failed_attempt_counter(client: TestClient):
     store.create_user(
-        store.get_connection(), "ana", security.hash_password("s3cret"), False, "2026-08-27T00:00:00"
+        store.get_connection(), "ana", security.hash_password("s3cret"), "user", "2026-08-27T00:00:00"
     )
     for _ in range(rate_limit._MAX_ATTEMPTS - 1):
         client.post("/auth/login", json={"username": "ana", "password": "wrong"})
@@ -170,7 +171,11 @@ def test_protected_endpoint_with_a_valid_bearer_token_succeeds(
     # que sin esto el test peor caso se cuelga (o tarda decenas de segundos) contra la Turso
     # real en vez de nunca tocar la red.
     monkeypatch.setattr(state, "last_run", lambda: None)
-    headers = _bearer(1, "ana", False)
+    # require_full_access re-lee el rol de la DB -- la cuenta tiene que existir de verdad.
+    user = store.create_user(
+        store.get_connection(), "ana", security.hash_password("s3cret"), "user", "2026-08-27T00:00:00"
+    )
+    headers = _bearer(user.id, "ana", False)
 
     response = client.get("/extraction/status", headers=headers)
 
@@ -179,7 +184,7 @@ def test_protected_endpoint_with_a_valid_bearer_token_succeeds(
 
 def test_me_returns_the_current_user(client: TestClient):
     store.create_user(
-        store.get_connection(), "ana", security.hash_password("s3cret"), True, "2026-08-27T00:00:00"
+        store.get_connection(), "ana", security.hash_password("s3cret"), "admin", "2026-08-27T00:00:00"
     )
     headers = _bearer(1, "ana", True)
 
@@ -199,7 +204,7 @@ def test_require_admin_rejects_a_forged_claim_for_a_non_admin_account(client: Te
         store.get_connection(),
         "ana",
         security.hash_password("s3cret"),
-        is_admin=False,
+        role="user",
         created_at="2026-08-27T00:00:00",
     )
     headers = _bearer(1, "ana", True)

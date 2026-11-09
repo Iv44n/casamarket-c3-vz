@@ -30,10 +30,34 @@ still what actually protects the token) but rejects a valid-elsewhere JWT outrig
 were ever reused in another context.
 
 `get_current_user` itself stays fully stateless (trusts the JWT's claims, no Turso round-trip) --
-but `require_admin` (gating `POST`/`GET /auth/users` only) does re-verify `is_admin` against the DB
-on every call, rather than trusting the token's `is_admin` claim blindly. This closes the window
-where demoting an admin wouldn't take effect until their existing token expired (up to 14 days) --
-the extra DB round-trip only affects those two low-traffic admin endpoints, not the rest of the API.
+but `require_admin` (gating the admin-only endpoints: `/auth/users*`, `PUT /benchmarks/settings`,
+the `/incidents/catalog` writes) does re-verify `is_admin` against the DB on every call (no cache),
+rather than trusting the token's claim blindly. This closes the window where demoting an admin
+wouldn't take effect until their existing token expired (up to 14 days) -- the extra DB round-trip
+only affects those low-traffic admin endpoints; the rest of the API uses the cached role check below.
+
+**Roles** (`users.role`: `admin` | `user` | `incidencias`, `app/auth/store.py`'s `ROLES`): `admin`
+and `user` see the whole panel; `incidencias` can ONLY use `/incidents/*` (the manual-incidents
+section, see below) and gets `403` everywhere else. `runs.router`/`data.router`/
+`benchmarks.router` are gated with `Depends(require_full_access)` (roles `admin`/`user`) and
+`incidents.router` with `Depends(require_incidents_access)` (all 3) -- both in
+`app/auth/dependencies.py`, both built on top of `get_current_user`. Unlike `get_current_user`,
+these re-read the account's **current** role from Turso instead of trusting the JWT's `role` claim
+(a token lives 14 days; a `user` demoted to `incidencias` must not keep full access that long), via
+an in-memory per-`user_id` cache with a **60s TTL** (`_role_cache`, plain dict + lock -- same
+single-process assumption as `extraction/state.py`/`rate_limit.py`). `PATCH /auth/users/{id}`
+(admin-only: change a role; `400` on your own account, `409` if it would leave zero admins)
+calls `invalidate_cached_role()`, so a role change applies on that account's very next request.
+`_resolve_role` also compares the username, not just the id: the dev Turso `users` table has been
+seen to get recreated (AUTOINCREMENT back to 1), and an old token's `user_id` must not inherit
+whoever owns that id now. The `role` column was added by an additive migration
+(`_migrate_role_column`: `ALTER TABLE ADD COLUMN role ... DEFAULT 'user'` + backfill `admin` from
+`is_admin`); `is_admin` is still written in sync (`is_admin = role == 'admin'`) so a rollback to
+older code keeps working, and old tokens without a `role` claim derive it from `is_admin`
+(`security.decode_access_token`). Router tests that override `get_current_user` must also
+override `require_full_access` (it hits the DB); real-token role gating is tested in
+`tests/routers/test_role_gating.py` (shared `api` fixture in `tests/routers/conftest.py`), and
+`tests/conftest.py` clears the role cache between tests.
 
 `POST /auth/login` rate-limits failed attempts per (normalized) username -- `app/auth/rate_limit.py`,
 in-memory (module-level dict + lock, same "single process, no `--workers`" architecture as
@@ -72,12 +96,13 @@ domain (no cross-site cookie issue, since the browser only ever talks to the fro
 it as `Authorization: Bearer <token>` on every backend call from that one choke point; a 401 from
 the backend clears the cookie and redirects to `/login`.
 
-**Known remaining gap**: a regular (non-admin) user's token stays valid for the full 14 days even
-if their account is deleted/deactivated in the meantime -- `get_current_user` doesn't hit the DB
-(see above). Only the admin-gated endpoints re-verify. Closing this fully would mean either a
-short-lived token + refresh flow, or a revocation list/session table -- neither implemented, since
-this is a small internal tool and the blast radius of a stale non-admin token is "can still view
-reports for a few more days," not privilege escalation.
+**Known remaining gap** (narrowed by the role cache above): `get_current_user` alone still
+doesn't hit the DB, but every router except `/auth` now goes through `require_full_access`/
+`require_incidents_access`, so a deleted account gets `401` (and a demoted one `403`) within the
+60s role-cache TTL. What's left is `GET /auth/me` (re-reads the account itself, so also fine) and
+the fact that the token itself is never revoked -- closing that fully would mean a short-lived
+token + refresh flow or a revocation list/session table, neither implemented (small internal
+tool).
 
 **Benchmarks' LLM provider config is admin-configurable, not env-based**: `LLM_PROVIDER`/
 `MINIMAX_API_KEY`/`MINIMAX_MODEL`/`MINIMAX_BASE_URL` used to be `.env` vars (`config.py`'s
@@ -180,17 +205,31 @@ app/
 
   auth/               identity/access control for this API itself -- distinct domain from c3/'s
                        "knowledge of the external C3 system" and extraction/'s "C3 report data".
-                       Grows when auth gets MORE FEATURES (password reset, roles beyond the current
-                       admin/non-admin bit) -- additive here, doesn't change what c3/, extraction/,
-                       or routers/ know.
+                       Grows when auth gets MORE FEATURES (password reset, more roles -- see
+                       "Roles" above for the current 3) -- additive here, doesn't change what c3/,
+                       extraction/, or routers/ know.
     store.py             `users` table + its own Turso get_connection() -- self-contained, mirrors
                           extraction/store.py's exact lazy-schema-init pattern rather than extending
                           that module (same physical Turso DB, unrelated domain/table)
     security.py           bcrypt hashing + JWT encode/decode, print-free like c3/ and extraction/
                            (returns values or raises, HTTP layer decides what to do)
-    dependencies.py        get_current_user/require_admin -- the only Depends() in this codebase;
-                            wired onto runs.router/data.router/benchmarks.router at APIRouter(...)
-                            construction so no existing handler had to change
+    dependencies.py        get_current_user/require_admin/require_full_access/
+                            require_incidents_access + the 60s role cache (see "Roles" above);
+                            wired onto each APIRouter(...) at construction so no handler changes
+
+  incidents/          incidents registered BY HAND from the panel (not from C3) + the catalog of
+                       values to classify them (origen/tipo/ambito/resultado). Own self-contained
+                       get_connection()/schema like auth/store.py (same Turso, separate tables:
+                       manual_incident, incident_catalog_option). Values are stored as text (not
+                       FKs) so deactivating a catalog option never rewrites history; deletes are
+                       logical (deleted_at/deleted_by) because any `incidencias` account can delete
+                       anyone's incidents. The catalog is seeded from C3 via
+                       extraction/store.py's distinct_incident_values() (UNION over attention/
+                       outboundattention/calloutgoing row_json, drops NULL/''/'-'/'N.A') with
+                       INSERT OR IGNORE -- idempotent, never re-activates an option an admin
+                       disabled. The 4 categories are independent in the real data (verified
+                       2026-11-09), so the catalog is 4 flat lists, not cascading.
+    store.py
 
   c3/                 knowledge of + a client for Contact Center Cloud, the external system.
                        Grows when a NEW C3 REPORT TYPE is added (25+ are documented but not
@@ -222,9 +261,15 @@ app/
                         above; the actual API prefix (`/extraction/...`) is unchanged
     data.py              GET /data/{report_name} -- parsed rows from the latest download, plus
                          GET /data/{report_name}/history -- every downloaded day's rows concatenated
-    auth.py               POST /auth/login (public), GET /auth/me, POST /auth/users (admin-only) --
-                          the only router NOT given `dependencies=[Depends(get_current_user)]` at
-                          construction, since /login has to stay reachable without a token yet
+    auth.py               POST /auth/login (public), GET /auth/me, GET/POST /auth/users and
+                          PATCH /auth/users/{id} (admin-only) -- the only router NOT given a
+                          router-level auth dependency, since /login has to stay reachable
+                          without a token yet
+    incidents.py           /incidents CRUD (all 3 roles) + /incidents/catalog (read: all roles;
+                          POST/PATCH/import-c3: admin) -- the only router the `incidencias` role
+                          can reach. GET /incidents takes a required date range and caps at
+                          store.LIST_LIMIT rows (`truncated` flag) instead of paginating: manual
+                          volume is expected in the tens/hundreds per day
 ```
 
 `tests/` mirrors this exactly: `tests/c3/`, `tests/extraction/`, `tests/routers/`, `tests/auth/`,
