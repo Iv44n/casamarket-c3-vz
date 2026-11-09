@@ -23,10 +23,10 @@ import {
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Textarea } from '#/components/ui/textarea'
+import { useSessionUser } from '#/hooks/use-session-user'
 import { INCIDENT_CATEGORY_LABEL } from '#/lib/incident-analytics'
 import {
   createManualIncident,
-  getIncidentAgentSuggestions,
   getIncidentClientSuggestions,
   updateManualIncident
 } from '#/server/incidents.functions'
@@ -56,8 +56,6 @@ const REQUIRED_CATEGORIES: ReadonlySet<IncidentCategory> = new Set([
   'tipo',
   'ambito'
 ])
-const LAST_AGENT_STORAGE_KEY = 'c3-panel:last-manual-incident-agent'
-
 function emptyForm(): ManualIncidentInput {
   return {
     fecha: todayIsoDate(),
@@ -158,35 +156,19 @@ export function ManualIncidentFormDialog({
 }) {
   const doCreate = useServerFn(createManualIncident)
   const doUpdate = useServerFn(updateManualIncident)
-  const fetchAgents = useServerFn(getIncidentAgentSuggestions)
   const searchClients = useServerFn(getIncidentClientSuggestions)
+  const sessionUser = useSessionUser()
   const [form, setForm] = useState<ManualIncidentInput>(() =>
     incident ? formFromIncident(incident) : emptyForm()
   )
-  const [agents, setAgents] = useState<string[]>([])
   const [clients, setClients] = useState<ClientSuggestion[]>([])
   const [pending, setPending] = useState(false)
 
   useEffect(() => {
-    let active = true
-    fetchAgents()
-      .then(values => {
-        if (active) setAgents(values)
-      })
-      .catch(err => {
-        if (active)
-          toast.error(err instanceof Error ? err.message : String(err))
-      })
-    if (!incident) {
-      const savedAgent = window.localStorage.getItem(LAST_AGENT_STORAGE_KEY)
-      if (savedAgent) {
-        setForm(prev => ({ ...prev, agente: savedAgent }))
-      }
+    if (!incident && sessionUser?.username) {
+      setForm(prev => ({ ...prev, agente: sessionUser.username }))
     }
-    return () => {
-      active = false
-    }
-  }, [fetchAgents, incident])
+  }, [incident, sessionUser?.username])
 
   useEffect(() => {
     const query = form.cliente.trim()
@@ -242,11 +224,6 @@ export function ManualIncidentFormDialog({
       cliente: value,
       ...(selected ? { telefono: selected.phone } : {})
     }))
-  }
-
-  function handleAgentChange(value: string) {
-    setField('agente', value)
-    if (value.trim()) window.localStorage.setItem(LAST_AGENT_STORAGE_KEY, value)
   }
 
   async function handleSubmit(event: React.FormEvent) {
@@ -330,25 +307,43 @@ export function ManualIncidentFormDialog({
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="incident-cliente">Cliente</Label>
-              <Input
-                id="incident-cliente"
-                placeholder="Nombre o empresa"
-                autoComplete="off"
-                maxLength={200}
-                list="incident-client-suggestions"
-                value={form.cliente}
-                onChange={e => handleClientChange(e.target.value)}
-              />
-              <datalist id="incident-client-suggestions">
-                {clients.map(client => (
-                  <option
-                    key={`${client.name}-${client.phone}`}
-                    value={client.name}
-                  >
-                    {client.detail}
-                  </option>
-                ))}
-              </datalist>
+              <Combobox
+                items={clients.map(client => client.name)}
+                value={form.cliente || null}
+                onValueChange={next =>
+                  handleClientChange(typeof next === 'string' ? next : '')
+                }
+              >
+                <ComboboxInput
+                  id="incident-cliente"
+                  className="w-full"
+                  placeholder="Buscar cliente..."
+                  showClear={form.cliente !== ''}
+                  maxLength={200}
+                />
+                <ComboboxContent>
+                  <ComboboxEmpty>
+                    Escribí al menos 2 letras o 3 números para buscar.
+                  </ComboboxEmpty>
+                  <ComboboxList>
+                    {(item: string) => {
+                      const client = clients.find(
+                        option => option.name === item
+                      )
+                      return (
+                        <ComboboxItem key={item} value={item}>
+                          {item}
+                          {client?.detail && (
+                            <span className="text-muted-foreground">
+                              {client.detail}
+                            </span>
+                          )}
+                        </ComboboxItem>
+                      )
+                    }}
+                  </ComboboxList>
+                </ComboboxContent>
+              </Combobox>
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="incident-telefono">Teléfono</Label>
@@ -362,21 +357,8 @@ export function ManualIncidentFormDialog({
               />
             </div>
             <div className="flex flex-col gap-2 sm:col-span-2">
-              <Label htmlFor="incident-agente">Agente</Label>
-              <Input
-                id="incident-agente"
-                placeholder="Quién atendió"
-                autoComplete="off"
-                maxLength={120}
-                list="incident-agent-suggestions"
-                value={form.agente}
-                onChange={e => handleAgentChange(e.target.value)}
-              />
-              <datalist id="incident-agent-suggestions">
-                {agents.map(agent => (
-                  <option key={agent} value={agent} />
-                ))}
-              </datalist>
+              <Label htmlFor="incident-agente">Usuario</Label>
+              <Input id="incident-agente" readOnly value={form.agente} />
             </div>
             {MANUAL_INCIDENT_CATEGORY_ORDER.map(category => (
               <CatalogCombobox
