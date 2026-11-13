@@ -155,6 +155,12 @@ def test_export_returns_every_field_of_the_range(seeded):
     assert response.json() == [created]
 
 
+def test_export_requires_authentication(seeded):
+    assert seeded.client.get("/incidents/export", params=_range()).status_code == 401
+    bad = {"Authorization": "Bearer not-a-real-token"}
+    assert seeded.client.get("/incidents/export", params=_range(), headers=bad).status_code == 401
+
+
 def test_export_rejects_an_inverted_date_range(seeded):
     headers = seeded.user_headers("rosa", "incidencias")
 
