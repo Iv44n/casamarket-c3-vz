@@ -22,6 +22,7 @@ import type {
   IncidentCatalogOption,
   IncidentCategory,
   LlmSettings,
+  ManualIncident,
   ManualIncidentInput,
   ManualIncidentList,
   ManualIncidentMutationResult,
@@ -240,6 +241,19 @@ export async function fetchManualIncidents(
     }
   }
   throw new Error('La respuesta de incidencias tiene un formato inválido.')
+}
+// Sin el tope del listado: la exportacion tiene que traer TODAS las incidencias del rango.
+export async function fetchManualIncidentsForExport(
+  dateFrom: string,
+  dateTo: string
+): Promise<ManualIncident[]> {
+  const query = new URLSearchParams({ date_from: dateFrom, date_to: dateTo })
+  const response = await backendFetch(`/incidents/export?${query.toString()}`)
+  const payload: unknown = await response.json()
+  if (!Array.isArray(payload)) {
+    throw new Error('La respuesta de exportación tiene un formato inválido.')
+  }
+  return payload as ManualIncident[]
 }
 async function saveManualIncident(
   path: string,

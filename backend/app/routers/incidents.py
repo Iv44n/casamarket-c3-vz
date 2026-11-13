@@ -133,6 +133,23 @@ def list_incidents(
     return IncidentListResponse(rows=[_incident_public(r) for r in rows], truncated=truncated)
 
 
+@router.get("/export")
+def export_incidents(
+    date_from: str = Query(pattern=ISO_DATE_PATTERN),
+    date_to: str = Query(pattern=ISO_DATE_PATTERN),
+) -> list[ManualIncidentPublic]:
+    """Todas las incidencias del rango, sin el tope del listado (la exportacion no puede
+    omitir filas)."""
+    if date_from > date_to:
+        raise HTTPException(status_code=422, detail="date_from no puede ser posterior a date_to")
+    conn = store.get_connection()
+    try:
+        rows = store.list_incidents_for_export(conn, date_from, date_to)
+    finally:
+        conn.close()
+    return [_incident_public(r) for r in rows]
+
+
 @router.post("", status_code=201)
 def create_incident(
     request: IncidentRequest, user: CurrentUser = Depends(require_incidents_access)

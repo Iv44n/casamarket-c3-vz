@@ -164,6 +164,19 @@ def test_list_reports_truncation_past_the_limit():
     assert truncated is True
 
 
+def test_export_has_no_row_limit_and_skips_deleted():
+    conn = _conn()
+    _seed_catalog(conn)
+    for i in range(3):
+        store.create_incident(conn, _input(descripcion=f"n{i}"), "rosa", NOW)
+    gone = store.create_incident(conn, _input(descripcion="borrada"), "rosa", NOW)
+    store.delete_incident(conn, gone.id, "rosa", NOW)
+
+    rows = store.list_incidents_for_export(conn, "2026-11-09", "2026-11-09")
+
+    assert sorted(r.descripcion for r in rows) == ["n0", "n1", "n2"]
+
+
 def test_import_is_idempotent_and_never_reactivates_a_disabled_option():
     conn = _conn()
     values = {"origen": ["ADMIN WEB", "POS WEB"], "tipo": ["CONSULTAS"]}

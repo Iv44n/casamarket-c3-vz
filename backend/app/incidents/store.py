@@ -299,6 +299,20 @@ def list_incidents(
     return rows[:limit], len(rows) > limit
 
 
+def list_incidents_for_export(
+    conn: DBConnection, date_from: str, date_to: str
+) -> list[ManualIncident]:
+    """Igual que list_incidents pero SIN tope: la exportacion no puede omitir filas. Mismo
+    orden (mas recientes primero)."""
+    cursor = conn.execute(
+        f"SELECT {_INCIDENT_COLUMNS} FROM manual_incident "
+        "WHERE deleted_at IS NULL AND fecha BETWEEN ? AND ? "
+        "ORDER BY fecha DESC, hora DESC, id DESC",
+        (date_from, date_to),
+    )
+    return [_row_to_incident(row) for row in cursor.fetchall()]
+
+
 def get_incident(conn: DBConnection, incident_id: int) -> ManualIncident | None:
     cursor = conn.execute(
         f"SELECT {_INCIDENT_COLUMNS} FROM manual_incident WHERE id = ? AND deleted_at IS NULL",

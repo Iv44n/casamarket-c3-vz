@@ -7,6 +7,7 @@ import {
   fetchIncidentCatalog,
   fetchIncidentClientSuggestions,
   fetchManualIncidents,
+  fetchManualIncidentsForExport,
   importCatalogFromC3OnBackend,
   setCatalogOptionActiveOnBackend,
   updateManualIncidentOnBackend
@@ -27,6 +28,12 @@ import {
 export const getManualIncidents = createServerFn({ method: 'GET' })
   .validator(manualIncidentsRangeSchema)
   .handler(async ({ data }) => fetchManualIncidents(data.dateFrom, data.dateTo))
+
+export const exportManualIncidents = createServerFn({ method: 'GET' })
+  .validator(manualIncidentsRangeSchema)
+  .handler(async ({ data }) =>
+    fetchManualIncidentsForExport(data.dateFrom, data.dateTo)
+  )
 
 export const createManualIncident = createServerFn({ method: 'POST' })
   .validator(manualIncidentInputSchema)

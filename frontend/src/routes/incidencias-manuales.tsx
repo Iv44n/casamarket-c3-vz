@@ -3,6 +3,7 @@ import { useServerFn } from '@tanstack/react-start'
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
+  DownloadIcon,
   PencilIcon,
   PlusIcon,
   Trash2Icon,
@@ -27,6 +28,12 @@ import {
   DialogTitle
 } from '#/components/ui/dialog'
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '#/components/ui/dropdown-menu'
+import {
   Table,
   TableBody,
   TableCell,
@@ -41,13 +48,20 @@ import {
   TooltipTrigger
 } from '#/components/ui/tooltip'
 import { useSessionUser } from '#/hooks/use-session-user'
+import { downloadBlob } from '#/lib/download-file'
 import {
   INCIDENT_CATEGORY_COLOR,
   INCIDENT_CATEGORY_LABEL
 } from '#/lib/incident-analytics'
+import {
+  incidentExportFilename,
+  incidentsToCsv,
+  incidentsToJson
+} from '#/lib/incident-export'
 import { withoutScrollReset } from '#/lib/utils'
 import {
   deleteManualIncident,
+  exportManualIncidents,
   getIncidentCatalog,
   getManualIncidents
 } from '#/server/incidents.functions'
@@ -123,6 +137,8 @@ function IncidenciasManualesPage() {
   const isAdmin = sessionUser?.role === 'admin'
   const doDelete = useServerFn(deleteManualIncident)
   const fetchCatalog = useServerFn(getIncidentCatalog)
+  const fetchExport = useServerFn(exportManualIncidents)
+  const [exporting, setExporting] = useState(false)
 
   const [formOpen, setFormOpen] = useState(false)
   const [formKey, setFormKey] = useState(0)
@@ -173,6 +189,38 @@ function IncidenciasManualesPage() {
       toast.error(err instanceof Error ? err.message : String(err))
     }
   }
+  // Pide al backend TODAS las incidencias del rango (el listado de la pantalla tiene tope) y
+  // arma el archivo en el navegador.
+  async function handleExport(format: 'json' | 'csv') {
+    setExporting(true)
+    try {
+      const range = { dateFrom: date, dateTo: dateEnd ?? date }
+      const all = await fetchExport({ data: range })
+      if (all.length === 0) {
+        toast.info('No hay incidencias para exportar en este rango.')
+        return
+      }
+      const content =
+        format === 'json'
+          ? incidentsToJson(all, range, new Date().toISOString())
+          : incidentsToCsv(all)
+      const mime =
+        format === 'json'
+          ? 'application/json;charset=utf-8'
+          : 'text/csv;charset=utf-8'
+      downloadBlob(
+        new Blob([content], { type: mime }),
+        incidentExportFilename(range, format)
+      )
+      toast.success(
+        `${all.length} incidencias exportadas (${format.toUpperCase()}).`
+      )
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setExporting(false)
+    }
+  }
   async function handleConfirmDelete() {
     if (!deleting) return
     setDeletePending(true)
@@ -216,6 +264,22 @@ function IncidenciasManualesPage() {
               })
             }
           />
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={<Button variant="outline" disabled={exporting} />}
+            >
+              <DownloadIcon data-icon="inline-start" />
+              {exporting ? 'Exportando...' : 'Exportar'}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => handleExport('json')}>
+                JSON
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport('csv')}>
+                CSV
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button onClick={openCreate} disabled={!catalogIsUsable}>
             <PlusIcon data-icon="inline-start" />
             Nueva incidencia

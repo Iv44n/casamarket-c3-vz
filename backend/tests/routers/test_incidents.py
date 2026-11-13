@@ -144,6 +144,29 @@ def test_list_rejects_an_inverted_date_range(seeded):
     assert response.status_code == 422
 
 
+def test_export_returns_every_field_of_the_range(seeded):
+    headers = seeded.user_headers("rosa", "incidencias")
+    created = seeded.client.post("/incidents", json=_BODY, headers=headers).json()
+    seeded.client.post("/incidents", json={**_BODY, "fecha": "2026-11-20"}, headers=headers)
+
+    response = seeded.client.get("/incidents/export", params=_range(), headers=headers)
+
+    assert response.status_code == 200
+    assert response.json() == [created]
+
+
+def test_export_rejects_an_inverted_date_range(seeded):
+    headers = seeded.user_headers("rosa", "incidencias")
+
+    response = seeded.client.get(
+        "/incidents/export",
+        params={"date_from": "2026-11-10", "date_to": "2026-11-09"},
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+
+
 def test_list_requires_a_date_range(seeded):
     headers = seeded.user_headers("rosa", "incidencias")
 
